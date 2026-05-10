@@ -1,0 +1,169 @@
+# Streamly Project Cleanup Audit
+
+Date: 2026-05-10
+Branch: `chore/deep-project-cleanup`
+
+## Scope and Safety Rules
+
+This audit covers the full local Streamly checkout at `/Users/eminganbarov/Documents/CineFlow`.
+The cleanup intentionally removes only generated, ignored, temporary, or empty local artifacts with clear evidence that they are not part of source, release configuration, routing, tests, documentation, or build inputs.
+
+The working tree already contained unrelated uncommitted product changes before this cleanup started. Those changes were left untouched and are not treated as cleanup evidence.
+
+## Detected Stack
+
+- SwiftPM macOS application.
+- Main package manifest: `Package.swift`.
+- Product name: `Streamly`.
+- Minimum platform: macOS 13 in SwiftPM, with arm64 macOS build flags.
+- Key dependencies: `GRDB.swift`, `Sparkle`.
+- Static marketing site: `landing/`, deployed by GitHub Pages.
+- Release packaging: shell scripts under `script/`, GitHub Actions under `.github/workflows/`.
+
+## Active Key Folders
+
+- `Sources/`: Swift source targets declared in `Package.swift`.
+- `Tests/`: SwiftPM test targets declared in `Package.swift`.
+- `Configuration/`: production app plist and app icon inputs used by release scripts.
+- `Vendor/`: native libtorrent XCFramework used by `Package.swift`, release scripts, runtime bridge, and tests.
+- `Native/`: native libtorrent shim source used by `script/build_native_libtorrent_runtime.sh`.
+- `script/`: build, run, native runtime, and DMG packaging scripts.
+- `.github/workflows/`: CI, release, and Pages deployment workflows.
+- `landing/`: static GitHub Pages site and its local assets.
+- `docs/`: public/support documentation and screenshots referenced by `README.md`.
+- `DesignSystem/`: brand, token, and reference assets.
+
+## Active Entry Points
+
+- App entry point: `Sources/CineFlowApp/CineFlowApp.swift`.
+- SwiftPM manifest: `Package.swift`.
+- Build command from CI: `swift build`.
+- Test command from CI: `swift test`.
+- Local app build/run helper: `script/build_and_run.sh --verify`.
+- Release app bundle builder: `script/build_release.sh`.
+- DMG builder: `script/create_dmg.sh`.
+- Native runtime builder: `script/build_native_libtorrent_runtime.sh`.
+- Landing page entry: `landing/index.html`.
+- GitHub Pages workflow: `.github/workflows/pages.yml`.
+- Release workflow: `.github/workflows/release.yml`.
+
+## Critical Files Not To Delete
+
+- `Package.swift` and `Package.resolved`: package graph and pinned dependencies.
+- `Configuration/Streamly-Info.plist`: required by release scripts, docs, and release packaging tests.
+- `Configuration/Streamly.icns`: required by `script/build_release.sh` and release packaging tests.
+- `Vendor/CineFlowLibtorrentNative.xcframework`: required by `Package.swift`, release scripts, native runtime bridge, QA report, and tests.
+- `Native/CineFlowLibtorrentNative/**`: source for rebuilding the vendored native runtime.
+- `.github/workflows/*.yml`: CI, Pages deploy, and release automation.
+- `Sources/CineFlowLocalization/Resources/**`: SwiftPM processed localization resources.
+- `landing/assets/**`: referenced by `landing/index.html`.
+- `docs/screenshots/**` and `docs/assets/**`: referenced by `README.md` and documentation.
+- `DesignSystem/**`: brand/source-of-truth reference material.
+- `RELEASE.md`, `RELEASE_UPDATES.md`, `docs/updates.md`: release and update documentation.
+
+## Files and Folders Safely Removed
+
+- `.DS_Store`
+  - Reason: macOS metadata file.
+  - Safety evidence: ignored by `.gitignore`; no project references; not a build, test, source, or deploy input.
+- `Sources/.DS_Store`
+  - Reason: macOS metadata file.
+  - Safety evidence: ignored by `.gitignore`; no source/import references.
+- `Sources/CineFlowLocalization/.DS_Store`
+  - Reason: macOS metadata file.
+  - Safety evidence: ignored by `.gitignore`; localization resources live under `Sources/CineFlowLocalization/Resources/`.
+- `dist/.DS_Store`
+  - Reason: macOS metadata file inside generated distribution output.
+  - Safety evidence: `dist/` is ignored and release scripts recreate generated distribution output.
+- `dist/dmg/.DS_Store`
+  - Reason: macOS metadata file inside generated DMG output folder.
+  - Safety evidence: `dist/` is ignored; release scripts generate DMG outputs from source and app bundle inputs.
+- `dist/release/.DS_Store`
+  - Reason: macOS metadata file inside generated app bundle output.
+  - Safety evidence: removed with generated `dist/release/`; release scripts recreate this folder.
+- `.build/`
+  - Reason: SwiftPM/generated build cache, including duplicated debug/release output folders.
+  - Safety evidence: ignored by `.gitignore`; CI builds from source with `swift build`; `swift build` recreates it.
+- `dist/release/`
+  - Reason: generated local app bundles, including stale `CineFlow.app`/`CineFlow 2.app` alongside `Streamly.app`.
+  - Safety evidence: ignored by `.gitignore`; generated by `script/build_release.sh`; not used as source input.
+- `dist/dmg-staging/`
+  - Reason: temporary DMG staging folder.
+  - Safety evidence: ignored by `.gitignore`; generated and removed/recreated by `script/create_dmg.sh`.
+- `Vendor/CineFlowLibtorrentNative.xcframework/macos-arm64 3/`
+- `Vendor/CineFlowLibtorrentNative.xcframework/macos-arm64 4/`
+- `Vendor/CineFlowLibtorrentNative.xcframework/macos-arm64 5/`
+  - Reason: empty duplicate folders with copy-suffix names.
+  - Safety evidence: empty directories; no references; the active XCFramework slice is `Vendor/CineFlowLibtorrentNative.xcframework/macos-arm64/`.
+
+## Looks Stale But Not Deleted
+
+- `dist/dmg/CineFlow-0.1.0.dmg`
+- `dist/dmg/CineFlow-1.0.0.dmg`
+  - Reason: old pre-Streamly brand release artifacts.
+  - Decision: not deleted because `.dmg` files are release artifacts and the project has production release/update workflows.
+- `dist/dmg/Streamly-1.0.0.dmg`
+- `dist/dmg/Streamly-1.0.0.dmg.sha256`
+- `dist/dmg/Streamly-1.0.01.dmg`
+- `dist/dmg/Streamly-1.0.01.dmg.sha256`
+- `dist/dmg/Streamly-1.0.02.dmg`
+- `dist/dmg/Streamly-1.0.02.dmg.sha256`
+  - Reason: generated local release outputs.
+  - Decision: not deleted because release artifacts can be production-sensitive. They can be removed manually after confirming they are archived in GitHub Releases or no longer needed locally.
+- `qa_artifacts/2026-05-10/*.png`
+  - Reason: smoke-test screenshots.
+  - Decision: not deleted because `QA_REPORT.md` references these exact files.
+- `qa_artifacts/performance/**`
+  - Reason: local profiling exports and logs.
+  - Decision: not deleted because `PERFORMANCE_REPORT.md` references performance traces and XML/log artifacts.
+- `PERFORMANCE_REPORT.md`, `QA_REPORT.md`, `SECURITY_AUDIT.md`
+  - Reason: untracked audit/report files.
+  - Decision: not deleted because they contain current QA/security/performance evidence and references to artifacts.
+
+## Requires Manual Review
+
+- Existing dirty rename state: `Configuration/CineFlow-Info.plist` deleted and `Configuration/Streamly-Info.plist` untracked.
+  - Manual check: confirm this is the intended product rename state before committing broader product changes.
+- `dist/dmg/**`
+  - Manual check: confirm which DMGs are archived in GitHub Releases and which can be removed from local disk.
+- `qa_artifacts/**`
+  - Manual check: decide whether QA/performance evidence should remain local only, be archived elsewhere, or be regenerated on demand.
+- `.cineflow/tmdb.local.json`
+  - Manual check: local app/runtime config; ignored and not deleted to avoid losing developer data.
+- `Vendor/CineFlowLibtorrentNative.xcframework/**`
+  - Manual check: large vendored binary runtime, but currently required by package/release/runtime paths.
+
+## Dependency Checks Performed
+
+- SwiftPM manifest reviewed for products, targets, dependencies, resources, and binary target path.
+- GitHub workflows reviewed for active build/test/release/Pages commands.
+- Release scripts reviewed for required plist, icon, native runtime, generated output, and DMG paths.
+- References searched with `rg` for DMG paths, QA artifacts, screenshots, landing assets, plist names, native runtime paths, and build scripts.
+- Empty directories searched before deletion.
+- macOS metadata and temporary filename patterns searched before deletion.
+- Git status reviewed before work; pre-existing unrelated dirty files were not reverted.
+
+## .gitignore Changes
+
+Added:
+
+- `Thumbs.db`
+- `*.swp`
+- `*.swo`
+- `.codex/`
+
+These entries cover recurring local OS/editor/agent workspace artifacts and do not hide source, configs, CI/CD files, production release files, app icons, localization, migrations, or deploy inputs.
+
+The file already contained ignore rules for `.build/`, `dist/`, `.DS_Store`, `.cineflow/`, `.streamly/`, env/secret patterns, local databases, logs/traces, and `qa_artifacts/`.
+
+## Verification Results
+
+- `swift build --product Streamly`: blocked before compilation.
+  - Result: SwiftPM restored `GRDB.swift` and `Sparkle` from cache, then hung while creating the GRDB working copy because the nested `SQLiteLib` GitHub clone did not complete.
+  - Evidence: the active process was `git clone --no-checkout ... https://github.com/swiftlyfalling/SQLiteLib.git ...`.
+  - Cross-check: `git ls-remote https://github.com/swiftlyfalling/SQLiteLib.git HEAD` succeeded, but a direct `git clone --depth 1` and archive download were too slow/hung locally.
+  - Cleanup impact: no Swift source, package manifest, lock file, configuration plist, icon, CI workflow, release script, native runtime, localization, or landing asset was deleted.
+- `swift test`: blocked before test execution for the same dependency checkout reason.
+- Lint: no Swift lint script or config was found.
+- Typecheck: covered by Swift build, but blocked before compilation.
+- Preview/dev smoke-check: not run because the build did not complete.

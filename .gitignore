@@ -4,10 +4,14 @@ dist/
 *.xcarchive
 *.dSYM.zip
 .DS_Store
+Thumbs.db
+*.swp
+*.swo
 DerivedData/
 *.xcuserdata/
 *.xcuserstate
 .cineflow/
+.codex/
 Configuration/*.local.json
 sparkle_keys/
 *.ed25519
