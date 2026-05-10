@@ -103,6 +103,7 @@ See [Legal](docs/legal.md) for details.
 
 ## Links
 
+- [Landing Page](https://ganbarovemin.github.io/streamly/)
 - [Latest Release](https://github.com/GanbarovEmin/Streamly/releases/latest)
 - [Issues](https://github.com/GanbarovEmin/Streamly/issues)
 - [Changelog](CHANGELOG.md)
@@ -110,7 +111,6 @@ See [Legal](docs/legal.md) for details.
 - [Updates](docs/updates.md)
 - [Privacy](docs/privacy.md)
 - [Legal](docs/legal.md)
-- Landing page: to be added after GitHub Pages deployment.
 
 ## License
 
