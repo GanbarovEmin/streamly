@@ -70,6 +70,7 @@ public final class LibraryViewModel: ObservableObject {
     @Published public private(set) var selectedListID: String?
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var visibleItems: [MediaItem] = []
+    @Published public private(set) var summary: LibrarySummary = .empty
     @Published public var searchQuery = ""
 
     private let repository: any LibraryRepositoryProtocol
@@ -82,27 +83,16 @@ public final class LibraryViewModel: ObservableObject {
         self.repository = repository
     }
 
-    public var summary: LibrarySummary {
-        LibrarySummary(
-            favoriteCount: favorites.count,
-            movieCount: items.filter { $0.kind == .movie }.count,
-            seriesCount: items.filter { $0.kind == .series }.count,
-            listCount: lists.count,
-            watchedCount: watchedItems.count,
-            ratingCount: ratedItems.count
-        )
-    }
-
     public var isCurrentSectionEmpty: Bool {
         visibleItems.isEmpty
     }
 
     public var prefetchArtworkURLs: [URL] {
-        visibleItems.compactMap(\.bestPosterURL)
+        Array(visibleItems.lazy.compactMap(\.bestPosterURL).prefix(48))
     }
 
     public var artworkPrefetchKey: String {
-        prefetchArtworkURLs.prefix(64).map(\.absoluteString).joined(separator: "|")
+        prefetchArtworkURLs.map(\.absoluteString).joined(separator: "|")
     }
 
     public func load() async {
@@ -128,6 +118,7 @@ public final class LibraryViewModel: ObservableObject {
             }
             listItemsByID = loadedListItems
             rebuildLookupTables()
+            rebuildSummary()
             selectedListID = selectedListID ?? lists.first?.id
             rebuildVisibleItems()
             state = items.isEmpty && favorites.isEmpty && lists.isEmpty && watchedItems.isEmpty && ratedItems.isEmpty ? .empty : .loaded
@@ -135,6 +126,7 @@ public final class LibraryViewModel: ObservableObject {
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .database)
             errorMessage = cineFlowError.userMessage
             visibleItems = []
+            summary = .empty
             state = .failed(cineFlowError.userMessage)
         }
     }
@@ -271,6 +263,28 @@ public final class LibraryViewModel: ObservableObject {
                 guard watchedItem.positionSeconds > 0 else { return nil }
                 return (watchedItem.item.id, min(watchedItem.positionSeconds / 7_200, 1))
             }
+        )
+    }
+
+    private func rebuildSummary() {
+        var movieCount = 0
+        var seriesCount = 0
+        for item in items {
+            switch item.kind {
+            case .movie:
+                movieCount += 1
+            case .series:
+                seriesCount += 1
+            }
+        }
+
+        summary = LibrarySummary(
+            favoriteCount: favorites.count,
+            movieCount: movieCount,
+            seriesCount: seriesCount,
+            listCount: lists.count,
+            watchedCount: watchedItems.count,
+            ratingCount: ratedItems.count
         )
     }
 

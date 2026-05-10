@@ -61,6 +61,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
     public let uploadDate: Date?
     public let trustedUploader: Bool?
     public let rankScore: Double
+    public let preferredFileIndex: Int?
 
     public init(
         id: String,
@@ -79,6 +80,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
         sizeBytes: Int64? = nil,
         uploadDate: Date? = nil,
         trustedUploader: Bool? = nil,
+        preferredFileIndex: Int? = nil,
         rankScore: Double? = nil
     ) {
         self.id = id
@@ -97,6 +99,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
         self.sizeBytes = sizeBytes
         self.uploadDate = uploadDate
         self.trustedUploader = trustedUploader
+        self.preferredFileIndex = preferredFileIndex
         self.rankScore = rankScore ?? Self.defaultRankScore(quality: quality, seeders: seeders, trustedUploader: trustedUploader)
     }
 

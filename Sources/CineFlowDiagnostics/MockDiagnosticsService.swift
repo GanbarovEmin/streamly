@@ -7,7 +7,7 @@ public struct MockDiagnosticsService: DiagnosticsServiceProtocol {
     public func log(level: DiagnosticsLogLevel, subsystem: DiagnosticsSubsystem, message: String, metadata: [String: String]) async {}
 
     public func exportDiagnostics() async -> String {
-        "CineFlow diagnostics: mock services active; torrent/playback engines are not initialized."
+        "Streamly diagnostics: mock services active; torrent/playback engines are not initialized."
     }
 
     public func exportDiagnosticsPackage() async throws -> URL {

@@ -3,6 +3,11 @@ import XCTest
 @testable import CineFlowSources
 
 final class SourceProviderArchitectureTests: XCTestCase {
+    override func tearDown() {
+        TorrentioMockURLProtocol.reset()
+        super.tearDown()
+    }
+
     func testAggregatorQueriesEnabledSourcesAndRanksAfterAggregation() async throws {
         let archive = MockTorrentSourceProvider(
             sourceId: "archive",
@@ -86,6 +91,39 @@ final class SourceProviderArchitectureTests: XCTestCase {
         )
     }
 
+    func testTorrentioConfigurationURLBuilderSupportsSeriesEpisodeVideoIDs() throws {
+        let settings = TorrentioSettings(resultLimit: 5)
+
+        let url = try TorrentioConfigurationURLBuilder().streamURL(
+            type: .series,
+            id: "tt0944947:1:1",
+            settings: settings
+        )
+
+        XCTAssertEqual(
+            url.path,
+            "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=5/stream/series/tt0944947:1:1.json"
+        )
+    }
+
+    func testTorrentioProviderUsesSeriesStreamEndpointForEpisodeVideoIDQueries() async throws {
+        let settingsStore = InMemoryTorrentioSettingsStore(settings: TorrentioSettings(resultLimit: 3))
+        let provider = TorrentioSourceProvider(
+            settingsStore: settingsStore,
+            session: URLSession(configuration: .torrentioMock),
+            urlBuilder: TorrentioConfigurationURLBuilder(baseURL: URL(string: "https://torrentio.example")!)
+        )
+        TorrentioMockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.url?.path, "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=3/stream/series/tt0944947:1:1.json")
+            return (200, #"{"streams":[{"title":"Game of Thrones S01E01 1080p\n👤 42 💾 4.2 GB ⚙️ Rutracker","infoHash":"abcdef1234567890abcdef1234567890abcdef12","fileIdx":0}]}"#)
+        }
+
+        let releases = try await provider.search(query: "tt0944947:1:1", filters: TorrentSourceSearchFilters())
+
+        XCTAssertEqual(releases.map(\.id), ["torrentio:tt0944947:1:1:abcdef1234567890abcdef1234567890abcdef12:0"])
+        XCTAssertEqual(releases.first?.sourceName, "Rutracker")
+    }
+
     func testTorrentioStreamResponseNormalizesIntoTorrentRelease() throws {
         let json = """
         {
@@ -124,6 +162,7 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertEqual(release.audioLanguages, ["en", "ru"])
         XCTAssertEqual(release.seeders, 14)
         XCTAssertEqual(release.sizeBytes, 18_450_000_000)
+        XCTAssertEqual(release.preferredFileIndex, 0)
         XCTAssertTrue(release.magnetURI?.contains("xt=urn:btih:61065ea115b7cc3e8db9fb5ab1f6f327f08bd1c9") == true)
         XCTAssertTrue(release.magnetURI?.contains("tr=http%3A%2F%2Fbt4.t-ru.org%2Fann%3Fmagnet") == true)
         XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce") == true)
@@ -212,4 +251,52 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertFalse(String(describing: settings).contains("source-token"))
         XCTAssertFalse(String(describing: settings).contains("cookie-secret"))
     }
+}
+
+private extension URLSessionConfiguration {
+    static var torrentioMock: URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [TorrentioMockURLProtocol.self]
+        return configuration
+    }
+}
+
+private final class TorrentioMockURLProtocol: URLProtocol, @unchecked Sendable {
+    static var requestHandler: (@Sendable (URLRequest) throws -> (Int, String))?
+
+    static func reset() {
+        requestHandler = nil
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (status, body) = try requestHandler(request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }

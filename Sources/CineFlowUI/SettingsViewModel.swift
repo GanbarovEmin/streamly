@@ -296,23 +296,42 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public func saveTMDBCredentials(readAccessToken: String?, apiKey: String?) async {
-        await environment.settingsRepository.setMetadataCredential(
-            readAccessToken?.nilIfBlank,
-            forKey: MetadataCredentialKeys.tmdbReadAccessToken
-        )
-        await environment.settingsRepository.setMetadataCredential(
-            apiKey?.nilIfBlank,
-            forKey: MetadataCredentialKeys.tmdbAPIKey
-        )
-        operationMessage = "TMDB credentials saved locally."
-        await refreshTMDBCredentialSummary()
+        guard let keychainService = environment.keychainService else {
+            operationMessage = "Keychain is unavailable. TMDB credentials were not saved."
+            return
+        }
+
+        do {
+            try await saveTMDBCredential(
+                readAccessToken?.nilIfBlank,
+                accountID: TMDBCredentialAccountIDs.readAccessToken,
+                keychainService: keychainService
+            )
+            try await saveTMDBCredential(
+                apiKey?.nilIfBlank,
+                accountID: TMDBCredentialAccountIDs.apiKey,
+                keychainService: keychainService
+            )
+            await clearLegacyTMDBCredentials()
+            operationMessage = "TMDB credentials saved in Keychain."
+            await refreshTMDBCredentialSummary()
+        } catch {
+            await handleSettingsError(error, operation: "saveTMDBCredentials", category: .authentication)
+        }
     }
 
     public func clearTMDBCredentials() async {
-        await environment.settingsRepository.setMetadataCredential(nil, forKey: MetadataCredentialKeys.tmdbReadAccessToken)
-        await environment.settingsRepository.setMetadataCredential(nil, forKey: MetadataCredentialKeys.tmdbAPIKey)
-        operationMessage = "TMDB credentials cleared."
-        await refreshTMDBCredentialSummary()
+        do {
+            if let keychainService = environment.keychainService {
+                try await keychainService.deleteCredential(accountID: TMDBCredentialAccountIDs.readAccessToken)
+                try await keychainService.deleteCredential(accountID: TMDBCredentialAccountIDs.apiKey)
+            }
+            await clearLegacyTMDBCredentials()
+            operationMessage = "TMDB credentials cleared."
+            await refreshTMDBCredentialSummary()
+        } catch {
+            await handleSettingsError(error, operation: "clearTMDBCredentials", category: .authentication)
+        }
     }
 
     public func validateTMDBCredentials() async {
@@ -539,13 +558,63 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     private func refreshTMDBCredentialSummary() async {
-        let readAccessToken = await environment.settingsRepository.metadataCredential(forKey: MetadataCredentialKeys.tmdbReadAccessToken)
-        let apiKey = await environment.settingsRepository.metadataCredential(forKey: MetadataCredentialKeys.tmdbAPIKey)
+        let readAccessToken = await tmdbCredentialValue(
+            accountID: TMDBCredentialAccountIDs.readAccessToken,
+            legacyKey: MetadataCredentialKeys.tmdbReadAccessToken
+        )
+        let apiKey = await tmdbCredentialValue(
+            accountID: TMDBCredentialAccountIDs.apiKey,
+            legacyKey: MetadataCredentialKeys.tmdbAPIKey
+        )
         tmdbCredentialSummary = TMDBCredentialSummary(
             hasReadAccessToken: readAccessToken?.nilIfBlank != nil,
             hasAPIKey: apiKey?.nilIfBlank != nil,
             lastValidation: tmdbCredentialSummary.lastValidation
         )
+    }
+
+    private func saveTMDBCredential(
+        _ value: String?,
+        accountID: String,
+        keychainService: any KeychainServiceProtocol
+    ) async throws {
+        guard let value else {
+            try await keychainService.deleteCredential(accountID: accountID)
+            return
+        }
+
+        _ = try await keychainService.saveCredential(
+            KeychainCredential(
+                accountID: accountID,
+                kind: .apiToken,
+                sourceID: "tmdb",
+                token: value
+            )
+        )
+    }
+
+    private func tmdbCredentialValue(accountID: String, legacyKey: String) async -> String? {
+        if let keychainService = environment.keychainService,
+           let credential = try? await keychainService.readCredential(accountID: accountID),
+           let token = credential.token?.nilIfBlank {
+            return token
+        }
+
+        let legacyValue = await environment.settingsRepository.metadataCredential(forKey: legacyKey)
+        guard let legacyValue = legacyValue?.nilIfBlank,
+              let keychainService = environment.keychainService
+        else {
+            return nil
+        }
+
+        try? await saveTMDBCredential(legacyValue, accountID: accountID, keychainService: keychainService)
+        await environment.settingsRepository.setMetadataCredential(nil, forKey: legacyKey)
+        return legacyValue
+    }
+
+    private func clearLegacyTMDBCredentials() async {
+        await environment.settingsRepository.setMetadataCredential(nil, forKey: MetadataCredentialKeys.tmdbReadAccessToken)
+        await environment.settingsRepository.setMetadataCredential(nil, forKey: MetadataCredentialKeys.tmdbAPIKey)
     }
 
     private func refreshTorrentioSettings() async {

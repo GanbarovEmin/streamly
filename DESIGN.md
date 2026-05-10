@@ -34,7 +34,7 @@ Required UI traits:
 
 Use `DesignSystem/Brand/streamly-design-tokens.json` as the canonical token source for colors, gradient, radius, spacing, and typography.
 
-Swift implementation may continue to live in `Sources/CineFlowDesignSystem`, but new UI work should align those implementation tokens with the Streamly JSON tokens instead of extending the older CineFlow palette.
+Swift implementation may continue to live in `Sources/CineFlowDesignSystem`, but new UI work should align those implementation tokens with the Streamly JSON tokens instead of extending the older legacy palette.
 
 ## Do Not Use
 

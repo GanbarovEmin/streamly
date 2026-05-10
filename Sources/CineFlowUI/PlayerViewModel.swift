@@ -67,6 +67,7 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     public func start() async {
+        status = PlaybackStatus(media: mediaSource, state: .loading, bufferingState: .buffering(progress: 0))
         await perform {
             self.resumeProgress = try await self.progressRepository?.progress(mediaID: self.mediaSource.id, episodeID: nil)
             try await self.service.play(self.mediaSource)

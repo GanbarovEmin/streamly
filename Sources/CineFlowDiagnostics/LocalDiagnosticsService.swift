@@ -76,7 +76,8 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
         do {
             try fileManager.createDirectory(at: logsDirectory, withIntermediateDirectories: true)
             let line = try logLine(for: event)
-            let logURL = logsDirectory.appendingPathComponent("cineflow.log")
+            let logURL = logsDirectory.appendingPathComponent("streamly.log")
+            try migrateLegacyLogIfNeeded(to: logURL)
             if fileManager.fileExists(atPath: logURL.path) {
                 let handle = try FileHandle(forWritingTo: logURL)
                 try handle.seekToEnd()
@@ -94,7 +95,7 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
         do {
             return try await exportDiagnosticsPackage().path
         } catch {
-            return "CineFlow diagnostics export failed: \(error.localizedDescription)"
+            return "Streamly diagnostics export failed: \(error.localizedDescription)"
         }
     }
 
@@ -147,6 +148,22 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
         return "\(timestamp) [\(event.level.rawValue.uppercased())] \(event.subsystem.rawValue): \(event.message) \(metadataJSON)\n"
     }
 
+    private func migrateLegacyLogIfNeeded(to logURL: URL) throws {
+        let legacyLogURL = logsDirectory.appendingPathComponent("cineflow.log")
+        guard fileManager.fileExists(atPath: legacyLogURL.path) else { return }
+
+        if fileManager.fileExists(atPath: logURL.path) {
+            let legacyData = try Data(contentsOf: legacyLogURL)
+            let handle = try FileHandle(forWritingTo: logURL)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: legacyData)
+            try handle.close()
+            try fileManager.removeItem(at: legacyLogURL)
+        } else {
+            try fileManager.moveItem(at: legacyLogURL, to: logURL)
+        }
+    }
+
     private func zip(stagingURL: URL, outputURL: URL) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
@@ -162,12 +179,37 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
     public static func sanitize(_ value: String) -> String {
         var sanitized = value
         sanitized = sanitized.replacingOccurrences(
-            of: #"(?i)(password|passwd|pwd|token|access_token|refresh_token|api_key|apikey|cookie|session)=([^&\s]+)"#,
+            of: #"magnet:\?[^\s"']+"#,
+            with: "[REDACTED_MAGNET]",
+            options: .regularExpression
+        )
+        sanitized = sanitized.replacingOccurrences(
+            of: #"(?i)((?:Authorization|Proxy-Authorization)\s*[:=]\s*)(?:Bearer|Basic)?\s*[^\s,;]+"#,
+            with: "$1[REDACTED]",
+            options: .regularExpression
+        )
+        sanitized = sanitized.replacingOccurrences(
+            of: #"(?i)((?:Cookie|Set-Cookie)\s*[:=]\s*)[^\n\r]+"#,
+            with: "$1[REDACTED]",
+            options: .regularExpression
+        )
+        sanitized = sanitized.replacingOccurrences(
+            of: #"(?i)([a-z][a-z0-9+.-]*://)[^/\s:@]+(?::[^/\s@]*)?@"#,
+            with: "$1[REDACTED]@",
+            options: .regularExpression
+        )
+        sanitized = sanitized.replacingOccurrences(
+            of: #"(?i)([?&][^=\s&]*(?:password|passwd|pwd|token|access_token|refresh_token|api[_-]?key|apikey|cookie|session|secret|auth|authorization|key)[^=\s&]*=)[^&\s"']+"#,
+            with: "$1[REDACTED]",
+            options: .regularExpression
+        )
+        sanitized = sanitized.replacingOccurrences(
+            of: #"(?i)(password|passwd|pwd|token|access_token|refresh_token|api[_-]?key|apikey|cookie|session|secret|authorization)=([^&\s,;]+)"#,
             with: "$1=[REDACTED]",
             options: .regularExpression
         )
         sanitized = sanitized.replacingOccurrences(
-            of: #"(?i)("?(password|token|cookie|apiKey|api_key|session)"?\s*:\s*")([^"]+)(")"#,
+            of: #"(?i)("?(password|token|cookie|apiKey|api_key|session|secret|authorization)"?\s*:\s*")([^"]+)(")"#,
             with: "$1[REDACTED]$4",
             options: .regularExpression
         )
@@ -176,7 +218,7 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
 
     private static func sanitizedMetadata(_ metadata: [String: String]) -> [String: String] {
         Dictionary(uniqueKeysWithValues: metadata.map { key, value in
-            if key.range(of: #"(?i)(password|token|cookie|api_key|session)"#, options: .regularExpression) != nil {
+            if key.range(of: #"(?i)(password|passwd|pwd|token|cookie|api[_-]?key|apikey|session|secret|authorization|credential|private[_-]?key)"#, options: .regularExpression) != nil {
                 return (key, "[REDACTED]")
             }
             return (key, sanitize(value))

@@ -29,7 +29,7 @@ Pull requests should:
 - Follow the existing SwiftPM module boundaries.
 - Keep SwiftUI views separate from service and persistence logic.
 - Prefer protocols and service abstractions already present in the codebase.
-- Keep Streamly public copy separate from CineFlow internal target naming unless a task explicitly renames the app.
+- Keep Streamly public copy aligned with the app, package and executable product name. Treat remaining `CineFlow*` source target names as legacy implementation details until a dedicated module-graph migration renames them.
 
 ## No Secrets
 

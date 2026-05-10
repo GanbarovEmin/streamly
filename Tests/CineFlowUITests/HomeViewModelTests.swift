@@ -104,6 +104,38 @@ final class HomeViewModelTests: XCTestCase {
         XCTAssertEqual(card.progress, 0.5)
         XCTAssertEqual(card.artworkURL, posterURL)
     }
+
+    @MainActor
+    func testLargeHomeDatasetKeepsSectionsAndPrefetchBounded() async {
+        let items = (0..<1_000).map { index in
+            HomeSeedItem(
+                id: index.isMultiple(of: 3) ? "tmdb:tv:\(index)" : "tmdb:movie:\(index)",
+                title: "Fixture \(index)",
+                kind: index.isMultiple(of: 3) ? .series : .movie,
+                year: 1980 + (index % 45),
+                rating: index.isMultiple(of: 2) ? "PG-13" : "TV-MA",
+                runtime: index.isMultiple(of: 3) ? "2 seasons" : "2h 02m",
+                genre: index.isMultiple(of: 2) ? "Drama" : "Sci-Fi",
+                overview: "Fixture overview",
+                quality: index.isMultiple(of: 4) ? "2160p HDR" : "1080p",
+                popularityRank: index,
+                isFeatured: index < 50,
+                isRecentlyAdded: index.isMultiple(of: 5),
+                isRecommended: index.isMultiple(of: 7),
+                progress: index.isMultiple(of: 9) ? 0.25 : nil,
+                artworkURL: URL(string: "https://images.example.com/poster-\(index).jpg")
+            )
+        }
+        let viewModel = HomeViewModel(seedItems: items)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.state, .loaded)
+        XCTAssertEqual(viewModel.featuredItems.count, 4)
+        XCTAssertEqual(viewModel.sections.count, 6)
+        XCTAssertTrue(viewModel.sections.allSatisfy { $0.items.count <= 8 })
+        XCTAssertLessThanOrEqual(viewModel.prefetchArtworkURLs.count, 24)
+    }
 }
 
 private actor InMemoryHomeProgressRepository: PlaybackProgressRepositoryProtocol {

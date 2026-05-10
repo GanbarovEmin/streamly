@@ -3,15 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Streamly"
-INFO_PLIST="$ROOT_DIR/Configuration/CineFlow-Info.plist"
+INFO_PLIST="$ROOT_DIR/Configuration/Streamly-Info.plist"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
+NATIVE_LIBTORRENT_FRAMEWORK="$APP_BUNDLE/Contents/Frameworks/CineFlowLibtorrentNative.framework"
+MPV_PLAYBACK_SERVICE="$ROOT_DIR/Sources/CineFlowPlayback/MPVPlaybackService.swift"
+FFMPEG_RUNTIME="$APP_BUNDLE/Contents/Resources/ffmpeg"
 STAGING_DIR="$DIST_DIR/dmg-staging"
 DMG_DIR="$DIST_DIR/dmg"
 SKIP_BUILD=0
 BUILD_ARGS=()
 DMG_PATH=""
+ALLOW_MISSING_NATIVE_RUNTIME=0
+ALLOW_PLACEHOLDER_MPV_RUNTIME=0
 
 usage() {
     cat <<'USAGE'
@@ -22,6 +27,10 @@ Options:
   --build BUILD_NUMBER    Override CFBundleVersion in the staged app.
   --sign IDENTITY         Pass Developer ID identity to build_release.sh.
   --unsigned              Build without codesigning.
+  --allow-missing-native-runtime
+                         Development-only: package without native libtorrent.
+  --allow-placeholder-mpv-runtime
+                         Development-only: package while mpv bridge is placeholder.
   --skip-build            Reuse dist/release/Streamly.app.
   --output PATH           Write DMG to PATH.
   -h, --help              Show this help.
@@ -48,6 +57,16 @@ while [[ $# -gt 0 ]]; do
             ;;
         --unsigned)
             BUILD_ARGS+=("--unsigned")
+            shift
+            ;;
+        --allow-missing-native-runtime)
+            ALLOW_MISSING_NATIVE_RUNTIME=1
+            BUILD_ARGS+=("--allow-missing-native-runtime")
+            shift
+            ;;
+        --allow-placeholder-mpv-runtime)
+            ALLOW_PLACEHOLDER_MPV_RUNTIME=1
+            BUILD_ARGS+=("--allow-placeholder-mpv-runtime")
             shift
             ;;
         --skip-build)
@@ -81,6 +100,24 @@ fi
 if [[ ! -d "$APP_BUNDLE" ]]; then
     echo "Missing $APP_BUNDLE. Run script/build_release.sh first or omit --skip-build." >&2
     exit 66
+fi
+
+if [[ ! -d "$NATIVE_LIBTORRENT_FRAMEWORK" && "$ALLOW_MISSING_NATIVE_RUNTIME" != "1" ]]; then
+    echo "Refusing to create DMG without native libtorrent runtime in $APP_BUNDLE." >&2
+    echo "Use --allow-missing-native-runtime only for development QA DMGs." >&2
+    exit 72
+fi
+
+if grep -q 'PlaceholderMPVBridge' "$MPV_PLAYBACK_SERVICE" && [[ "$ALLOW_PLACEHOLDER_MPV_RUNTIME" != "1" ]]; then
+    echo "Refusing to create DMG while MPV playback bridge is placeholder." >&2
+    echo "Use --allow-placeholder-mpv-runtime only for development QA DMGs." >&2
+    exit 74
+fi
+
+if [[ ! -x "$FFMPEG_RUNTIME" ]]; then
+    echo "Refusing to create DMG without ffmpeg runtime in $APP_BUNDLE." >&2
+    echo "Expected executable: Contents/Resources/ffmpeg" >&2
+    exit 75
 fi
 
 VERSION="$(read_info_value CFBundleShortVersionString "$APP_BUNDLE/Contents/Info.plist")"

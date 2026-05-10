@@ -398,7 +398,7 @@ public struct SettingsView: View {
             SettingValueRow(title: "Current version", value: viewModel.about.version)
             SettingValueRow(title: "Current build", value: viewModel.about.build)
             SettingValueRow(title: "Release source", value: "https://github.com/GanbarovEmin/streamly/releases/latest")
-            SettingValueRow(title: "Metadata attribution", value: "Movie and TV metadata is provided by TMDB.")
+            SettingValueRow(title: "Metadata attribution", value: "Movie and TV metadata is provided by TMDB and Cinemeta/Stremio.")
             SettingValueRow(title: "Last checked", value: lastUpdateCheckedText)
             SettingValueRow(title: "Updater status", value: viewModel.settings.updates.sparkleStatus)
             SettingValueRow(title: "Update status", value: updateStatusText)

@@ -65,11 +65,15 @@ public struct TMDBMovieDetailProvider: MovieDetailProviderProtocol {
     }
 
     public func movieDetail(id: String) async throws -> MovieDetailResponse? {
-        guard let tmdbID = TMDBMediaID(id)?.numericID, TMDBMediaID(id)?.kind == .movie else {
+        let movie: Movie
+        if let tmdbID = TMDBMediaID(id), tmdbID.kind == .movie {
+            movie = try await metadataService.movieDetail(tmdbID: tmdbID.numericID)
+        } else if let imdbID = IMDbMediaID(id), imdbID.kind == .movie {
+            movie = try await metadataService.movieDetail(imdbID: imdbID.value)
+        } else {
             return nil
         }
 
-        let movie = try await metadataService.movieDetail(tmdbID: tmdbID)
         async let similarItems = try? metadataService.similar(to: id)
         async let trailerItems = try? metadataService.videos(for: id)
         async let castItems = try? metadataService.credits(for: id)
@@ -112,22 +116,35 @@ public struct TMDBMovieDetailProvider: MovieDetailProviderProtocol {
 
 public struct TMDBSeriesDetailProvider: SeriesDetailProviderProtocol {
     private let metadataService: any MetadataServiceProtocol
+    private let torrentAggregator: TorrentSearchAggregator?
 
-    public init(metadataService: any MetadataServiceProtocol) {
+    public init(
+        metadataService: any MetadataServiceProtocol,
+        torrentAggregator: TorrentSearchAggregator? = nil
+    ) {
         self.metadataService = metadataService
+        self.torrentAggregator = torrentAggregator
     }
 
     public func seriesDetail(id: String) async throws -> SeriesDetailResponse? {
-        guard let parsedID = TMDBMediaID(id), parsedID.kind == .series else {
+        let series: Series
+        let tmdbSeriesID: Int?
+        if let parsedID = TMDBMediaID(id), parsedID.kind == .series {
+            series = try await metadataService.seriesDetail(tmdbID: parsedID.numericID)
+            tmdbSeriesID = parsedID.numericID
+        } else if let imdbID = IMDbMediaID(id), imdbID.kind == .series {
+            series = try await metadataService.seriesDetail(imdbID: imdbID.value)
+            tmdbSeriesID = nil
+        } else {
             return nil
         }
 
-        let series = try await metadataService.seriesDetail(tmdbID: parsedID.numericID)
         let seasonSummaries = series.seasons.filter { $0.seasonNumber > 0 }
         var seasons: [SeriesSeason] = []
 
         for summary in seasonSummaries.prefix(3) {
-            if let detail = try? await metadataService.seasonDetail(seriesTMDBID: parsedID.numericID, seasonNumber: summary.seasonNumber) {
+            if let tmdbSeriesID,
+               let detail = try? await metadataService.seasonDetail(seriesTMDBID: tmdbSeriesID, seasonNumber: summary.seasonNumber) {
                 seasons.append(SeriesSeason(season: detail))
             } else {
                 seasons.append(SeriesSeason(season: summary))
@@ -140,11 +157,12 @@ public struct TMDBSeriesDetailProvider: SeriesDetailProviderProtocol {
         let metadata = series.metadata
         let trailers = await trailerItems ?? []
         let cast = await castItems ?? []
+        let releases = await episodeScopedReleases(for: seasons.flatMap(\.episodes).first?.id)
 
         return SeriesDetailResponse(
             series: SeriesDetail(series: series),
             seasons: seasons,
-            releases: [],
+            releases: releases,
             trailers: trailers.isEmpty ? metadata.trailerURLs.enumerated().map { index, url in
                 MovieTrailer(id: url.absoluteString, title: index == 0 ? "Official Trailer" : "Trailer \(index + 1)", source: url.host ?? "Video")
             } : trailers.map { trailer in
@@ -157,6 +175,26 @@ public struct TMDBSeriesDetailProvider: SeriesDetailProviderProtocol {
             progressByEpisodeID: [:],
             lastWatchedEpisodeID: nil
         )
+    }
+
+    public func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
+        await episodeScopedReleases(for: episodeID)
+    }
+
+    private func episodeScopedReleases(for episodeID: String?) async -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
+        guard let torrentAggregator,
+              let episodeID,
+              episodeID.range(of: #"^tt[0-9]+:[0-9]+:[0-9]+$"#, options: .regularExpression) != nil
+        else {
+            return []
+        }
+
+        do {
+            let result = try await torrentAggregator.search(query: episodeID)
+            return result.rankedReleases.map { ($0.release, .episode(episodeID)) }
+        } catch {
+            return []
+        }
     }
 }
 
@@ -181,6 +219,30 @@ private struct TMDBMediaID {
     }
 }
 
+private struct IMDbMediaID {
+    let kind: MediaKind
+    let value: String
+
+    init?(_ value: String) {
+        let parts = value.split(separator: ":").map(String.init)
+        guard parts.count == 3, parts[0] == "imdb" else {
+            return nil
+        }
+        switch parts[1] {
+        case "movie":
+            kind = .movie
+        case "series":
+            kind = .series
+        default:
+            return nil
+        }
+        guard parts[2].range(of: #"^tt[0-9]+$"#, options: .regularExpression) != nil else {
+            return nil
+        }
+        self.value = parts[2]
+    }
+}
+
 private extension HomeSeedItem {
     init(
         mediaItem: MediaItem,
@@ -195,7 +257,7 @@ private extension HomeSeedItem {
             title: mediaItem.displayTitle,
             kind: mediaItem.kind == .series ? .series : .movie,
             year: metadata?.year ?? mediaItem.releaseYear ?? 0,
-            rating: metadata?.rating.map { String(format: "TMDB %.1f", $0) } ?? "TMDB",
+            rating: metadata?.rating.map { String(format: "\(ratingProviderLabel(for: mediaItem)) %.1f", $0) } ?? ratingProviderLabel(for: mediaItem),
             runtime: runtimeLabel(minutes: metadata?.runtime, kind: mediaItem.kind),
             genre: metadata?.genres.first ?? (mediaItem.kind == .series ? "Series" : "Movie"),
             overview: metadata?.overview.nilIfBlank ?? mediaItem.overview,
@@ -281,6 +343,10 @@ private func runtimeLabel(minutes: Int?, kind: MediaKind) -> String {
         return "\(minutes)m"
     }
     return "\(minutes / 60)h \(minutes % 60)m"
+}
+
+private func ratingProviderLabel(for mediaItem: MediaItem) -> String {
+    mediaItem.id.hasPrefix("imdb:") ? "IMDb" : "TMDB"
 }
 
 private extension String {

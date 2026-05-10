@@ -20,6 +20,23 @@ final class CineFlowImagePipelineTests: XCTestCase {
         XCTAssertEqual(requestCount, 1)
     }
 
+    func testImagePipelineCoalescesConcurrentRequestsForSameURL() async throws {
+        let service = CountingImageCacheService(data: Data([0x09]), delayNanoseconds: 80_000_000)
+        let pipeline = CineFlowImagePipeline(imageCacheService: service)
+        let url = URL(string: "https://images.example.com/poster.jpg")!
+
+        async let first = pipeline.data(for: url)
+        async let second = pipeline.data(for: url)
+
+        let firstData = try await first
+        let secondData = try await second
+        XCTAssertEqual(firstData, secondData)
+        XCTAssertEqual(pipeline.loadedImageCount, 1)
+        XCTAssertEqual(pipeline.activeRequestCount, 0)
+        let requestCount = await service.requests()
+        XCTAssertEqual(requestCount, 1)
+    }
+
     func testPrefetchWarmsMemoryCacheWithLimit() async {
         let service = CountingImageCacheService(data: Data([0x04]))
         let pipeline = CineFlowImagePipeline(imageCacheService: service)
@@ -36,14 +53,19 @@ final class CineFlowImagePipelineTests: XCTestCase {
 
 private actor CountingImageCacheService: ImageCacheServiceProtocol {
     private let data: Data
+    private let delayNanoseconds: UInt64
     private(set) var requestCount = 0
 
-    init(data: Data) {
+    init(data: Data, delayNanoseconds: UInt64 = 0) {
         self.data = data
+        self.delayNanoseconds = delayNanoseconds
     }
 
     func imageData(for url: URL, kind: CachedImageKind) async throws -> Data {
         requestCount += 1
+        if delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
         return data
     }
 

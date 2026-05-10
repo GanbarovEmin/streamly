@@ -28,7 +28,7 @@ Latest local verification, 2026-05-10:
 
 - `swift test`: passed, 120 tests, 0 failures.
 - `script/create_dmg.sh --version 1.0.0 --build 100 --unsigned`: passed.
-- Launch smoke: `dist/release/Streamly.app/Contents/MacOS/CineFlow` stayed running after 5 seconds.
+- Launch smoke: `dist/release/Streamly.app/Contents/MacOS/Streamly` stayed running after 5 seconds.
 - DMG SHA-256: `4c251158b6bb01b42bdc561050bc516734ee4fae6f52710d99b8c1de8c83ed7c`.
 - DMG contents verified: `Streamly.app`, `Applications`, `README.txt`.
 - Sparkle framework verified in `Streamly.app/Contents/Frameworks/Sparkle.framework`.
@@ -73,7 +73,7 @@ Latest local verification, 2026-05-10:
 
 ## Packaging
 
-- [ ] `Configuration/CineFlow-Info.plist` has the intended version and build.
+- [ ] `Configuration/Streamly-Info.plist` has the intended version and build.
 - [ ] DMG contains `Streamly.app`.
 - [ ] DMG contains an `Applications` shortcut.
 - [ ] DMG contains `README.txt` with install/opening instructions.

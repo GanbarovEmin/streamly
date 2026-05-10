@@ -29,10 +29,11 @@ struct CineFlowApplication: App {
     private let watchHistoryRepository: (any WatchHistoryRepositoryProtocol)?
     private let keychainService: any KeychainServiceProtocol
     private let updateService: GitHubReleaseUpdateService
+    private static let environment = ProcessInfo.processInfo.environment
 
     init() {
         let liveDatabaseManager = try? DatabaseManager.live()
-        if let liveDatabaseManager {
+        if let liveDatabaseManager, Self.shouldSeedDevelopmentData {
             try? DatabaseSeeder.seedDevelopmentData(in: liveDatabaseManager)
         }
 
@@ -41,18 +42,26 @@ struct CineFlowApplication: App {
             .map(DatabaseLibraryRepository.init(databaseManager:)) ?? MockLibraryRepository()
         let settingsRepository: SettingsRepositoryProtocol = liveDatabaseManager
             .map(DatabaseSettingsRepository.init(databaseManager:)) ?? MockSettingsRepository()
+        let keychainService = KeychainService()
+        self.keychainService = keychainService
         let metadataService: MetadataServiceProtocol
         if let liveDatabaseManager {
             let cacheRepository = CacheRepository(databaseManager: liveDatabaseManager)
-            let settingsCredentialProvider = DatabaseTMDBCredentialProvider(
-                settingsRepository: DatabaseSettingsRepository(databaseManager: liveDatabaseManager)
+            let legacySettingsRepository = DatabaseSettingsRepository(databaseManager: liveDatabaseManager)
+            let keychainCredentialProvider = KeychainTMDBCredentialProvider(
+                keychainService: keychainService,
+                legacySettingsRepository: legacySettingsRepository
             )
-            metadataService = TMDBMetadataService(
+            let tmdbMetadataService = TMDBMetadataService(
                 credentialProvider: CompositeTMDBCredentialProvider([
-                    settingsCredentialProvider,
+                    keychainCredentialProvider,
                     LocalTMDBCredentialProvider()
                 ]),
                 cacheRepository: cacheRepository
+            )
+            metadataService = CompositeMetadataService(
+                primary: CinemetaMetadataService(cacheRepository: cacheRepository),
+                fallback: tmdbMetadataService
             )
         } else {
             metadataService = MockMetadataService()
@@ -66,8 +75,6 @@ struct CineFlowApplication: App {
         self.playbackProgressRepository = playbackProgressRepository
         self.watchHistoryRepository = watchHistoryRepository
 
-        let keychainService = KeychainService()
-        self.keychainService = keychainService
         let torrentioSettingsStore = UserDefaultsTorrentioSettingsStore()
         let diagnosticsService = LocalDiagnosticsService(
             settingsSummaryProvider: {
@@ -102,12 +109,13 @@ struct CineFlowApplication: App {
         self.updateService = updateService
         let userMediaSourceRepository = liveDatabaseManager
             .map(DatabaseUserMediaSourceRepository.init(databaseManager:))
+        let playbackService: any PlaybackServiceProtocol = TranscodingAVPlaybackService()
 
         let appEnvironment = AppEnvironment(
             metadataService: metadataService,
             torrentEngine: EmbeddedLibtorrentTorrentEngine(bridge: NativeLibtorrentBridge()),
-            playbackService: AVFoundationPlaybackService(),
-            subtitleService: MockSubtitleService(),
+            playbackService: playbackService,
+            subtitleService: SubtitleService(),
             libraryRepository: libraryRepository,
             settingsRepository: settingsRepository,
             diagnosticsService: diagnosticsService,
@@ -198,6 +206,11 @@ struct CineFlowApplication: App {
                 .keyboardShortcut(.cancelAction)
             }
         }
+    }
+
+    private static var shouldSeedDevelopmentData: Bool {
+        environment["STREAMLY_SEED_DEVELOPMENT_DATA"] == "1"
+            || environment["CINEFLOW_SEED_DEVELOPMENT_DATA"] == "1"
     }
 }
 

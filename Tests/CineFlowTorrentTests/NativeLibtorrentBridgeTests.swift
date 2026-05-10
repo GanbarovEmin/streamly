@@ -102,6 +102,34 @@ final class NativeLibtorrentBridgeTests: XCTestCase {
         XCTAssertTrue(status.isSequentialDownloadEnabled)
         XCTAssertTrue([.checking, .downloading, .streaming, .seeding].contains(status.state))
     }
+
+    func testNativeBridgeCanResolveFilesAndStreamingURLWhenTorrentFileEnvironmentIsProvided() async throws {
+        guard let torrentPath = ProcessInfo.processInfo.environment["CINEFLOW_NATIVE_LIBTORRENT_TEST_TORRENT_FILE"],
+              !torrentPath.isEmpty else {
+            throw XCTSkip("Set CINEFLOW_NATIVE_LIBTORRENT_TEST_TORRENT_FILE to run the native file-to-stream smoke test.")
+        }
+
+        let bridge = NativeLibtorrentBridge()
+        let storageURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("native-libtorrent-file-stream", isDirectory: true)
+
+        let handle = try await bridge.addTorrentFile(
+            url: URL(fileURLWithPath: torrentPath),
+            storageURL: storageURL
+        )
+        try await bridge.setSequentialDownload(handle: handle, enabled: true)
+        try await bridge.start(handle: handle)
+        let files = try await bridge.files(handle: handle)
+        let mediaFile = try XCTUnwrap(files.first(where: \.isMediaFile))
+        try await bridge.selectFile(handle: handle, fileId: mediaFile.id)
+        let streamingURL = try await bridge.streamingURL(handle: handle)
+
+        XCTAssertFalse(handle.isEmpty)
+        XCTAssertFalse(files.isEmpty)
+        XCTAssertEqual(streamingURL.scheme, "http")
+        XCTAssertEqual(streamingURL.host, "127.0.0.1")
+        try await bridge.remove(handle: handle, deleteFiles: true)
+    }
 }
 
 private final class FakeNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Sendable {

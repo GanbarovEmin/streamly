@@ -123,23 +123,59 @@ public struct CompositeTMDBCredentialProvider: TMDBCredentialProviding {
     }
 }
 
-public final class DatabaseTMDBCredentialProvider: TMDBCredentialProviding {
-    private let settingsRepository: DatabaseSettingsRepository
+public final class KeychainTMDBCredentialProvider: TMDBCredentialProviding {
+    private let keychainService: any KeychainServiceProtocol
+    private let legacySettingsRepository: DatabaseSettingsRepository?
 
-    public init(settingsRepository: DatabaseSettingsRepository) {
-        self.settingsRepository = settingsRepository
+    public init(
+        keychainService: any KeychainServiceProtocol,
+        legacySettingsRepository: DatabaseSettingsRepository? = nil
+    ) {
+        self.keychainService = keychainService
+        self.legacySettingsRepository = legacySettingsRepository
     }
 
     public var readAccessToken: String? {
         get async {
-            try? await settingsRepository.string(forKey: TMDBSettingsKeys.readAccessToken)?.nilIfBlank
+            await credentialValue(
+                accountID: TMDBCredentialAccountIDs.readAccessToken,
+                legacyKey: TMDBSettingsKeys.readAccessToken
+            )
         }
     }
 
     public var apiKey: String? {
         get async {
-            try? await settingsRepository.string(forKey: TMDBSettingsKeys.apiKey)?.nilIfBlank
+            await credentialValue(
+                accountID: TMDBCredentialAccountIDs.apiKey,
+                legacyKey: TMDBSettingsKeys.apiKey
+            )
         }
+    }
+
+    private func credentialValue(accountID: String, legacyKey: String) async -> String? {
+        if let credential = try? await keychainService.readCredential(accountID: accountID),
+           let token = credential.token?.nilIfBlank {
+            return token
+        }
+
+        guard let legacySettingsRepository,
+              let legacyValue = try? await legacySettingsRepository.string(forKey: legacyKey),
+              let legacyValue = legacyValue.nilIfBlank
+        else {
+            return nil
+        }
+
+        _ = try? await keychainService.saveCredential(
+            KeychainCredential(
+                accountID: accountID,
+                kind: .apiToken,
+                sourceID: "tmdb",
+                token: legacyValue
+            )
+        )
+        await legacySettingsRepository.setMetadataCredential(nil, forKey: legacyKey)
+        return legacyValue
     }
 }
 
@@ -193,8 +229,16 @@ public struct TMDBImageURLBuilder: Sendable {
 
     private let baseURL: URL
 
-    public init(baseURL: URL = URL(string: "https://image.tmdb.org/t/p")!) {
+    public init(baseURL: URL = TMDBImageURLBuilder.defaultBaseURL) {
         self.baseURL = baseURL
+    }
+
+    public static var defaultBaseURL: URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "image.tmdb.org"
+        components.path = "/t/p"
+        return components.url ?? URL(fileURLWithPath: "/")
     }
 
     public func url(path: String?, size: ImageSize) -> URL? {
@@ -218,7 +262,7 @@ public final class TMDBMetadataService: MetadataServiceProtocol {
         credentialProvider: any TMDBCredentialProviding,
         cacheRepository: CacheRepository? = nil,
         session: URLSession = .shared,
-        baseURL: URL = URL(string: "https://api.themoviedb.org/3")!,
+        baseURL: URL = TMDBMetadataService.defaultBaseURL,
         imageURLBuilder: TMDBImageURLBuilder = TMDBImageURLBuilder()
     ) {
         self.credentialProvider = credentialProvider
@@ -228,6 +272,14 @@ public final class TMDBMetadataService: MetadataServiceProtocol {
         self.imageURLBuilder = imageURLBuilder
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .formatted(Self.tmdbDateFormatter)
+    }
+
+    public static var defaultBaseURL: URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api.themoviedb.org"
+        components.path = "/3"
+        return components.url ?? URL(fileURLWithPath: "/")
     }
 
     public func search(query: String) async throws -> [MediaItem] {

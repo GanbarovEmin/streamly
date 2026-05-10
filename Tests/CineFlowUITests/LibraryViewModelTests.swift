@@ -97,7 +97,7 @@ final class LibraryViewModelTests: XCTestCase {
 
         viewModel.updateSearchQuery("Matrix")
         XCTAssertEqual(viewModel.visibleItems.count, 750)
-        XCTAssertEqual(viewModel.prefetchArtworkURLs.count, 750)
+        XCTAssertEqual(viewModel.prefetchArtworkURLs.count, 48)
         XCTAssertFalse(viewModel.artworkPrefetchKey.isEmpty)
 
         viewModel.setSortOrder(.yearDescending)

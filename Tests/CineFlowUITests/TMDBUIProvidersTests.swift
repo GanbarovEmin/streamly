@@ -135,6 +135,115 @@ final class TMDBUIProvidersTests: XCTestCase {
         XCTAssertEqual(releases.first?.sourceName, "Rutracker")
     }
 
+    func testTMDBMovieDetailProviderSupportsIMDbIDsFromCinemetaSearch() async throws {
+        let movie = Self.movie(id: "imdb:movie:tt0133093", imdbID: "tt0133093")
+        let metadataService = StubMetadataService(movieDetailsByIMDbID: ["tt0133093": movie])
+        let sourceProvider = RecordingTorrentProvider(releases: [
+            TorrentRelease(
+                id: "torrentio-matrix-2160p",
+                sourceId: "torrentio",
+                sourceName: "Torrentio",
+                title: "The Matrix 2160p",
+                magnetURI: "magnet:?xt=urn:btih:matrix",
+                quality: .ultraHD,
+                seeders: 14
+            )
+        ])
+        let sourceManager = SourceManager(
+            providers: [sourceProvider],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        let provider = TMDBMovieDetailProvider(
+            metadataService: metadataService,
+            torrentAggregator: TorrentSearchAggregator(sourceManager: sourceManager)
+        )
+
+        let response = try await provider.movieDetail(id: "imdb:movie:tt0133093")
+        let queries = await sourceProvider.recordedQueries()
+
+        XCTAssertEqual(response?.movie.id, "imdb:movie:tt0133093")
+        XCTAssertEqual(response?.movie.title, "The Matrix")
+        XCTAssertEqual(queries, ["tt0133093"])
+        XCTAssertEqual(response?.releases.map(\.id), ["torrentio-matrix-2160p"])
+    }
+
+    func testTMDBSeriesDetailProviderSupportsIMDbIDsFromCinemetaSearch() async throws {
+        let series = Self.series(id: "imdb:series:tt0944947", imdbID: "tt0944947")
+        let metadataService = StubMetadataService(seriesDetailsByIMDbID: ["tt0944947": series])
+        let provider = TMDBSeriesDetailProvider(metadataService: metadataService)
+
+        let response = try await provider.seriesDetail(id: "imdb:series:tt0944947")
+
+        XCTAssertEqual(response?.series.id, "imdb:series:tt0944947")
+        XCTAssertEqual(response?.series.title, "Game of Thrones")
+        XCTAssertEqual(response?.seasons.map(\.seasonNumber), [1])
+        XCTAssertEqual(response?.seasons.first?.episodes.first?.id, "tt0944947:1:1")
+    }
+
+    func testTMDBSeriesDetailProviderFetchesEpisodeTorrentReleasesByStremioVideoID() async throws {
+        let series = Self.series(id: "imdb:series:tt0944947", imdbID: "tt0944947")
+        let metadataService = StubMetadataService(seriesDetailsByIMDbID: ["tt0944947": series])
+        let sourceProvider = RecordingTorrentProvider(releases: [
+            TorrentRelease(
+                id: "torrentio-got-s1e1-1080p",
+                sourceId: "torrentio",
+                sourceName: "Torrentio",
+                title: "Game of Thrones S01E01 1080p",
+                magnetURI: "magnet:?xt=urn:btih:got",
+                quality: .fullHD,
+                seeders: 42
+            )
+        ])
+        let sourceManager = SourceManager(
+            providers: [sourceProvider],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        let provider = TMDBSeriesDetailProvider(
+            metadataService: metadataService,
+            torrentAggregator: TorrentSearchAggregator(sourceManager: sourceManager)
+        )
+
+        let response = try await provider.seriesDetail(id: "imdb:series:tt0944947")
+        let queries = await sourceProvider.recordedQueries()
+
+        XCTAssertEqual(queries, ["tt0944947:1:1"])
+        XCTAssertEqual(response?.releases.map { $0.release.id }, ["torrentio-got-s1e1-1080p"])
+        XCTAssertEqual(response?.releases.first?.scope, .episode("tt0944947:1:1"))
+    }
+
+    func testTMDBSeriesDetailProviderFetchesSelectedEpisodeTorrentReleasesByStremioVideoID() async throws {
+        let metadataService = StubMetadataService()
+        let sourceProvider = RecordingTorrentProvider(releases: [
+            TorrentRelease(
+                id: "torrentio-got-s1e2-1080p",
+                sourceId: "torrentio",
+                sourceName: "Torrentio",
+                title: "Game of Thrones S01E02 1080p",
+                magnetURI: "magnet:?xt=urn:btih:got2",
+                quality: .fullHD,
+                seeders: 77
+            )
+        ])
+        let sourceManager = SourceManager(
+            providers: [sourceProvider],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        let provider = TMDBSeriesDetailProvider(
+            metadataService: metadataService,
+            torrentAggregator: TorrentSearchAggregator(sourceManager: sourceManager)
+        )
+
+        let releases = try await provider.episodeReleases(seriesID: "imdb:series:tt0944947", episodeID: "tt0944947:1:2")
+        let queries = await sourceProvider.recordedQueries()
+
+        XCTAssertEqual(queries, ["tt0944947:1:2"])
+        XCTAssertEqual(releases.map { $0.release.id }, ["torrentio-got-s1e2-1080p"])
+        XCTAssertEqual(releases.first?.scope, .episode("tt0944947:1:2"))
+    }
+
     func testTMDBMovieDetailProviderSkipsTorrentLookupWithoutIMDbID() async throws {
         let movie = Self.movie(imdbID: nil)
         let metadataService = StubMetadataService(movieDetails: [603: movie])
@@ -208,7 +317,7 @@ final class TMDBUIProvidersTests: XCTestCase {
         )
     }
 
-    private static func movie(imdbID: String?) -> Movie {
+    private static func movie(id: String = "tmdb:movie:603", imdbID: String?) -> Movie {
         let metadata = MediaMetadata(
             tmdbId: 603,
             imdbId: imdbID,
@@ -221,7 +330,7 @@ final class TMDBUIProvidersTests: XCTestCase {
             rating: 8.2
         )
         let item = MediaItem(
-            id: "tmdb:movie:603",
+            id: id,
             title: "The Matrix",
             kind: .movie,
             overview: metadata.overview,
@@ -231,6 +340,46 @@ final class TMDBUIProvidersTests: XCTestCase {
         )
         return Movie(id: item.id, mediaItem: item, metadata: metadata)
     }
+
+    private static func series(id: String, imdbID: String?) -> Series {
+        let metadata = MediaMetadata(
+            tmdbId: 1399,
+            imdbId: imdbID,
+            title: "Game of Thrones",
+            originalTitle: "Game of Thrones",
+            overview: "Noble families fight for control.",
+            year: 2011,
+            genres: ["Action", "Drama"],
+            runtime: 57,
+            rating: 9.2
+        )
+        let item = MediaItem(
+            id: id,
+            title: "Game of Thrones",
+            kind: .series,
+            overview: metadata.overview,
+            releaseYear: 2011,
+            posterPath: nil,
+            metadata: metadata
+        )
+        let episode = Episode(
+            id: "tt0944947:1:1",
+            seriesID: id,
+            seasonID: "\(id):season:1",
+            episodeNumber: 1,
+            title: "Winter Is Coming",
+            overview: "Pilot.",
+            runtimeMinutes: 62
+        )
+        let season = Season(
+            id: "\(id):season:1",
+            seriesID: id,
+            seasonNumber: 1,
+            title: "Season 1",
+            episodes: [episode]
+        )
+        return Series(id: item.id, mediaItem: item, metadata: metadata, seasons: [season])
+    }
 }
 
 private final class StubMetadataService: MetadataServiceProtocol {
@@ -239,6 +388,8 @@ private final class StubMetadataService: MetadataServiceProtocol {
     private let popularMovieResults: [MediaItem]
     private let popularSeriesResults: [MediaItem]
     private let movieDetails: [Int: Movie]
+    private let movieDetailsByIMDbID: [String: Movie]
+    private let seriesDetailsByIMDbID: [String: Series]
     private let similarResults: [MediaItem]
     private let trailers: [Trailer]
     private let cast: [CastMember]
@@ -249,6 +400,8 @@ private final class StubMetadataService: MetadataServiceProtocol {
         popularMovieResults: [MediaItem] = [],
         popularSeriesResults: [MediaItem] = [],
         movieDetails: [Int: Movie] = [:],
+        movieDetailsByIMDbID: [String: Movie] = [:],
+        seriesDetailsByIMDbID: [String: Series] = [:],
         similarResults: [MediaItem] = [],
         trailers: [Trailer] = [],
         cast: [CastMember] = []
@@ -258,6 +411,8 @@ private final class StubMetadataService: MetadataServiceProtocol {
         self.popularMovieResults = popularMovieResults
         self.popularSeriesResults = popularSeriesResults
         self.movieDetails = movieDetails
+        self.movieDetailsByIMDbID = movieDetailsByIMDbID
+        self.seriesDetailsByIMDbID = seriesDetailsByIMDbID
         self.similarResults = similarResults
         self.trailers = trailers
         self.cast = cast
@@ -284,6 +439,20 @@ private final class StubMetadataService: MetadataServiceProtocol {
             throw CoreMetadataServiceError.unsupported
         }
         return movie
+    }
+
+    func movieDetail(imdbID: String) async throws -> Movie {
+        guard let movie = movieDetailsByIMDbID[imdbID] else {
+            throw CoreMetadataServiceError.unsupported
+        }
+        return movie
+    }
+
+    func seriesDetail(imdbID: String) async throws -> Series {
+        guard let series = seriesDetailsByIMDbID[imdbID] else {
+            throw CoreMetadataServiceError.unsupported
+        }
+        return series
     }
 
     func similar(to mediaID: String) async throws -> [MediaItem] {

@@ -1,14 +1,14 @@
-# CineFlow Sparkle Updates
+# Streamly Sparkle Updates
 
-CineFlow is distributed outside the Mac App Store as a signed and notarized `.dmg`.
+Streamly is distributed outside the Mac App Store as a signed and notarized `.dmg`.
 Auto-updates use Sparkle 2:
 
-`CineFlow.app -> appcast.xml -> GitHub Releases .dmg -> Sparkle update`
+`Streamly.app -> appcast.xml -> GitHub Releases .dmg -> Sparkle update`
 
-The placeholder appcast URL in `Configuration/CineFlow-Info.plist` is:
+The placeholder appcast URL in `Configuration/Streamly-Info.plist` is:
 
 ```text
-https://<github-pages-domain>/cineflow/appcast.xml
+https://<github-pages-domain>/streamly/appcast.xml
 ```
 
 Replace it with the final GitHub Pages or static hosting URL before shipping.
@@ -29,7 +29,7 @@ Replace it with the final GitHub Pages or static hosting URL before shipping.
 
    Sparkle stores the private key in the macOS login Keychain and prints the public key.
 
-3. Copy the printed public key into `Configuration/CineFlow-Info.plist`:
+3. Copy the printed public key into `Configuration/Streamly-Info.plist`:
 
    ```xml
    <key>SUPublicEDKey</key>
@@ -38,7 +38,7 @@ Replace it with the final GitHub Pages or static hosting URL before shipping.
 
 4. Do not commit private keys or exported key material. If a local export is needed for a release machine migration, keep it outside the repository. The repository ignores common local paths such as `sparkle_keys/`, `*.ed25519`, and `*.sparkle-private-key`.
 
-5. `SUEnableInstallerLauncherService` is not enabled by default because this SwiftPM app currently has no sandbox entitlement file. If CineFlow becomes sandboxed, add the boolean key to `Configuration/CineFlow-Info.plist` and embed Sparkle's required XPC services during archive packaging.
+5. `SUEnableInstallerLauncherService` is not enabled by default because this SwiftPM app currently has no sandbox entitlement file. If Streamly becomes sandboxed, add the boolean key to `Configuration/Streamly-Info.plist` and embed Sparkle's required XPC services during archive packaging.
 
 ## Create a Release Build
 
@@ -62,7 +62,7 @@ Replace it with the final GitHub Pages or static hosting URL before shipping.
 5. Name the artifact predictably:
 
    ```text
-   CineFlow-1.0.1.dmg
+   Streamly-1.0.1.dmg
    ```
 
 ## Sign the Update
@@ -71,7 +71,7 @@ Recommended path: use Sparkle's `generate_appcast`, which signs the update and c
 
 ```bash
 mkdir -p releases/sparkle
-cp path/to/CineFlow-1.0.1.dmg releases/sparkle/
+cp path/to/Streamly-1.0.1.dmg releases/sparkle/
 .build/artifacts/sparkle/Sparkle/bin/generate_appcast releases/sparkle/
 ```
 
@@ -80,7 +80,7 @@ The tool reads the EdDSA private key from Keychain and writes `appcast.xml` plus
 Manual signature path, only when you are maintaining appcast XML yourself:
 
 ```bash
-.build/artifacts/sparkle/Sparkle/bin/sign_update path/to/CineFlow-1.0.1.dmg
+.build/artifacts/sparkle/Sparkle/bin/sign_update path/to/Streamly-1.0.1.dmg
 ```
 
 Copy the emitted `sparkle:edSignature` and `length` attributes into the appcast enclosure.
@@ -93,14 +93,14 @@ The appcast must point to the `.dmg` uploaded in GitHub Releases:
 <rss version="2.0"
      xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>CineFlow Updates</title>
+    <title>Streamly Updates</title>
     <item>
       <title>Version 1.0.1</title>
       <sparkle:version>101</sparkle:version>
       <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
       <pubDate>Sun, 10 May 2026 00:00:00 +0400</pubDate>
       <enclosure
-        url="https://github.com/<owner>/<repo>/releases/download/v1.0.1/CineFlow-1.0.1.dmg"
+        url="https://github.com/<owner>/<repo>/releases/download/v1.0.1/Streamly-1.0.1.dmg"
         type="application/octet-stream"
         sparkle:edSignature="SIGNATURE_FROM_GENERATE_APPCAST_OR_SIGN_UPDATE"
         length="DMG_SIZE_IN_BYTES" />
@@ -125,16 +125,16 @@ When using `generate_appcast`, prefer the generated XML and only review it for U
 3. Upload:
 
    ```text
-   CineFlow-1.0.1.dmg
+   Streamly-1.0.1.dmg
    ```
 
 4. Publish `appcast.xml` to the configured static URL, for example GitHub Pages:
 
    ```text
-   https://<github-pages-domain>/cineflow/appcast.xml
+   https://<github-pages-domain>/streamly/appcast.xml
    ```
 
-5. Open CineFlow and use Settings -> Updates -> Check for updates. Sparkle should read the hosted appcast and offer the GitHub Releases `.dmg` when its `CFBundleVersion` is newer than the installed app.
+5. Open Streamly and use Settings -> Updates -> Check for updates. Sparkle should read the hosted appcast and offer the GitHub Releases `.dmg` when its `CFBundleVersion` is newer than the installed app.
 
 ## Release Checklist
 

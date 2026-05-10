@@ -24,7 +24,7 @@ Streamly-1.0.0.dmg
 
 ## Appcast
 
-Sparkle reads update metadata from the appcast configured in `Configuration/CineFlow-Info.plist`.
+Sparkle reads update metadata from the appcast configured in `Configuration/Streamly-Info.plist`.
 
 The current feed URL is:
 

@@ -15,13 +15,15 @@ public struct MovieDetailView: View {
         navigationCoordinator: NavigationCoordinator,
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         detailProvider: (any MovieDetailProviderProtocol)? = nil,
-        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
+        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         _viewModel = StateObject(wrappedValue: MovieDetailViewModel(
             mediaID: mediaID,
             provider: detailProvider ?? MockMovieDetailProvider(),
             libraryRepository: libraryRepository,
-            userMediaSourceRepository: userMediaSourceRepository
+            userMediaSourceRepository: userMediaSourceRepository,
+            diagnosticsService: diagnosticsService
         ))
         self.navigationCoordinator = navigationCoordinator
     }
@@ -182,12 +184,7 @@ public struct MovieDetailView: View {
 
             HStack(spacing: CFSpacing.md) {
                 PrimaryButton(t(.detailWatch), systemImage: "play.fill") {
-                    if let release = viewModel.releases.first?.release {
-                        viewModel.play(release)
-                        navigationCoordinator.navigate(to: .player(mediaID: movie.id, release: release))
-                    } else {
-                        playMovie(movie)
-                    }
+                    playMovie(movie)
                 }
                 SecondaryButton(t(.detailLibrary), systemImage: "plus") {
                     viewModel.addToLibrary()
@@ -204,11 +201,6 @@ public struct MovieDetailView: View {
     }
 
     private func playMovie(_ movie: MovieDetail) {
-        if let release = viewModel.releases.first?.release {
-            viewModel.play(release)
-            navigationCoordinator.navigate(to: .player(mediaID: movie.id, release: release))
-            return
-        }
         if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
             viewModel.selectUserSource(source)
             navigationCoordinator.navigate(to: .player(mediaID: movie.id, sourceID: source.id))

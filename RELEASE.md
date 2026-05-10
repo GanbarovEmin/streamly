@@ -35,7 +35,7 @@ dist/release/Streamly.app
 By default this creates an unsigned local distribution build. Pass `--sign` or set
 `STREAMLY_CODESIGN_IDENTITY` for Developer ID release builds.
 
-The script packages only the release executable, `Configuration/CineFlow-Info.plist`,
+The script packages only the release executable, `Configuration/Streamly-Info.plist`,
 SwiftPM resource bundles, and `Sparkle.framework`. It refuses to package common local
 config or secret-like files such as `.env`, `*.local.json`, `*.ed25519`, or
 `*.sparkle-private-key`.

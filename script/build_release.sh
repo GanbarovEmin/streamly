@@ -3,16 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Streamly"
-PRODUCT_NAME="CineFlow"
-INFO_PLIST="$ROOT_DIR/Configuration/CineFlow-Info.plist"
+PRODUCT_NAME="Streamly"
+INFO_PLIST="$ROOT_DIR/Configuration/Streamly-Info.plist"
 APP_ICON="$ROOT_DIR/Configuration/Streamly.icns"
 NATIVE_LIBTORRENT_XCFRAMEWORK="$ROOT_DIR/Vendor/CineFlowLibtorrentNative.xcframework"
 NATIVE_LIBTORRENT_FRAMEWORK_NAME="CineFlowLibtorrentNative.framework"
+MPV_PLAYBACK_SERVICE="$ROOT_DIR/Sources/CineFlowPlayback/MPVPlaybackService.swift"
+FFMPEG_EXECUTABLE="${STREAMLY_FFMPEG_EXECUTABLE:-}"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
 SIGN_IDENTITY="${STREAMLY_CODESIGN_IDENTITY:-}"
 SKIP_SIGN=1
+ALLOW_MISSING_NATIVE_RUNTIME="${STREAMLY_ALLOW_MISSING_NATIVE_RUNTIME:-0}"
+ALLOW_PLACEHOLDER_MPV_RUNTIME="${STREAMLY_ALLOW_PLACEHOLDER_MPV_RUNTIME:-0}"
 VERSION=""
 BUILD_NUMBER=""
 
@@ -25,6 +29,10 @@ Options:
   --build BUILD_NUMBER    Override CFBundleVersion in the staged app.
   --sign IDENTITY         Sign with a Developer ID Application identity.
   --unsigned              Do not codesign the staged app.
+  --allow-missing-native-runtime
+                         Development-only: package without native libtorrent.
+  --allow-placeholder-mpv-runtime
+                         Development-only: package while mpv bridge is placeholder.
   -h, --help              Show this help.
 
 Default output is unsigned. Set STREAMLY_CODESIGN_IDENTITY or pass --sign for
@@ -55,6 +63,14 @@ while [[ $# -gt 0 ]]; do
             SKIP_SIGN=1
             shift
             ;;
+        --allow-missing-native-runtime)
+            ALLOW_MISSING_NATIVE_RUNTIME=1
+            shift
+            ;;
+        --allow-placeholder-mpv-runtime)
+            ALLOW_PLACEHOLDER_MPV_RUNTIME=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -78,6 +94,41 @@ if [[ -z "$VERSION" || -z "$BUILD_NUMBER" ]]; then
     echo "Version and build number must be non-empty." >&2
     exit 65
 fi
+
+if [[ ! -d "$NATIVE_LIBTORRENT_XCFRAMEWORK" && "$ALLOW_MISSING_NATIVE_RUNTIME" != "1" ]]; then
+    echo "Refusing to package Streamly without native libtorrent runtime." >&2
+    echo "Expected: $NATIVE_LIBTORRENT_XCFRAMEWORK" >&2
+    echo "Use --allow-missing-native-runtime only for development QA builds." >&2
+    exit 72
+fi
+
+if grep -q 'PlaceholderMPVBridge' "$MPV_PLAYBACK_SERVICE" && [[ "$ALLOW_PLACEHOLDER_MPV_RUNTIME" != "1" ]]; then
+    echo "Refusing to package Streamly while MPV playback bridge is placeholder." >&2
+    echo "Integrate the production mpv bridge or use --allow-placeholder-mpv-runtime for development QA builds." >&2
+    exit 74
+fi
+
+resolve_ffmpeg_executable() {
+    if [[ -n "$FFMPEG_EXECUTABLE" && -x "$FFMPEG_EXECUTABLE" ]]; then
+        printf '%s\n' "$FFMPEG_EXECUTABLE"
+        return 0
+    fi
+
+    local candidates=(
+        "$ROOT_DIR/Vendor/ffmpeg/ffmpeg"
+        "/Applications/Stremio.app/Contents/MacOS/ffmpeg"
+        "/opt/homebrew/bin/ffmpeg"
+        "/usr/local/bin/ffmpeg"
+    )
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [[ -x "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
 
 echo "Building $APP_NAME $VERSION ($BUILD_NUMBER) with SwiftPM product $PRODUCT_NAME..."
 (cd "$ROOT_DIR" && swift build -c release --product "$PRODUCT_NAME")
@@ -130,9 +181,34 @@ if [[ -d "$NATIVE_LIBTORRENT_XCFRAMEWORK" ]]; then
     fi
     NATIVE_LIBTORRENT_COPIED=1
 else
-    echo "Native libtorrent framework not found at $NATIVE_LIBTORRENT_XCFRAMEWORK."
-    echo "Packaging Streamly without torrent playback; torrent routes will surface the unavailable bridge state."
+    if [[ "$ALLOW_MISSING_NATIVE_RUNTIME" == "1" ]]; then
+        echo "Native libtorrent framework not found at $NATIVE_LIBTORRENT_XCFRAMEWORK."
+        echo "Development override enabled; packaging Streamly without torrent playback."
+    else
+        echo "Refusing to package Streamly without native libtorrent runtime." >&2
+        echo "Expected: $NATIVE_LIBTORRENT_XCFRAMEWORK" >&2
+        echo "Use --allow-missing-native-runtime only for development QA builds." >&2
+        exit 72
+    fi
 fi
+
+if grep -q 'PlaceholderMPVBridge' "$MPV_PLAYBACK_SERVICE"; then
+    if [[ "$ALLOW_PLACEHOLDER_MPV_RUNTIME" == "1" ]]; then
+        echo "Development override enabled; packaging while MPV playback bridge is placeholder."
+    else
+        echo "Refusing to package Streamly while MPV playback bridge is placeholder." >&2
+        echo "Integrate the production mpv bridge or use --allow-placeholder-mpv-runtime for development QA builds." >&2
+        exit 74
+    fi
+fi
+
+if ! FFMPEG_SOURCE="$(resolve_ffmpeg_executable)"; then
+    echo "Refusing to package Streamly without ffmpeg runtime for in-app torrent playback." >&2
+    echo "Set STREAMLY_FFMPEG_EXECUTABLE or place ffmpeg at Vendor/ffmpeg/ffmpeg." >&2
+    exit 75
+fi
+/usr/bin/ditto --noextattr --norsrc "$FFMPEG_SOURCE" "$APP_BUNDLE/Contents/Resources/ffmpeg"
+chmod 755 "$APP_BUNDLE/Contents/Resources/ffmpeg"
 
 if ! otool -l "$APP_BUNDLE/Contents/MacOS/$APP_NAME" | grep -q '@executable_path/../Frameworks'; then
     install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
@@ -155,7 +231,7 @@ if [[ "$SKIP_SIGN" -eq 0 ]]; then
     SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
     SIGN_ARGS+=(--options runtime --timestamp)
     if [[ "$NATIVE_LIBTORRENT_COPIED" -eq 1 ]]; then
-        codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME"
+        codesign "${SIGN_ARGS[@]}" --deep "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME"
     fi
     codesign "${SIGN_ARGS[@]}" --deep "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
     codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE"

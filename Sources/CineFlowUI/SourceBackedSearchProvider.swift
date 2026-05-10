@@ -50,6 +50,8 @@ private extension SearchTorrentRelease {
             mediaYear: media?.year ?? 0,
             title: release.title,
             source: release.sourceName,
+            magnetURI: release.magnetURI,
+            torrentFileURL: release.torrentFileURL,
             quality: release.quality,
             isHDR: release.hdr != .none && release.hdr != .unknown,
             seeders: release.seeders,

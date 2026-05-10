@@ -84,13 +84,17 @@ public struct ContentContainerView: View {
                 )
             )
         } else if case .mediaDetail(let id) = route {
-            if id.contains(":tv:") {
+            if id.contains(":tv:") || id.contains(":series:") {
                 SeriesDetailView(
                     seriesID: id,
                     navigationCoordinator: navigationCoordinator,
                     libraryRepository: environment.libraryRepository,
-                    detailProvider: TMDBSeriesDetailProvider(metadataService: environment.metadataService),
-                    userMediaSourceRepository: environment.userMediaSourceRepository
+                    detailProvider: TMDBSeriesDetailProvider(
+                        metadataService: environment.metadataService,
+                        torrentAggregator: sourceManager.map { TorrentSearchAggregator(sourceManager: $0) }
+                    ),
+                    userMediaSourceRepository: environment.userMediaSourceRepository,
+                    diagnosticsService: environment.diagnosticsService
                 )
             } else {
                 MovieDetailView(
@@ -101,7 +105,8 @@ public struct ContentContainerView: View {
                         metadataService: environment.metadataService,
                         torrentAggregator: sourceManager.map { TorrentSearchAggregator(sourceManager: $0) }
                     ),
-                    userMediaSourceRepository: environment.userMediaSourceRepository
+                    userMediaSourceRepository: environment.userMediaSourceRepository,
+                    diagnosticsService: environment.diagnosticsService
                 )
             }
         } else {
@@ -399,6 +404,12 @@ private struct PlayerRouteView: View {
         }
 
         guard let repository = environment.userMediaSourceRepository else {
+            await environment.diagnosticsService.log(
+                level: .warning,
+                subsystem: .playback,
+                message: "Playback source repository is unavailable.",
+                metadata: ["operation": "player.route.localSource", "mediaID": mediaID]
+            )
             state = .missingSource
             return
         }
@@ -422,6 +433,8 @@ private struct PlayerRouteView: View {
                 state = .unsupportedSource(source.displayName)
             }
         } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .database)
+            await environment.diagnosticsService.log(cineFlowError, operation: "player.route.localSource", metadata: ["mediaID": mediaID])
             state = .missingSource
         }
     }
@@ -431,7 +444,7 @@ private struct PlayerRouteView: View {
             let session = try await environment.torrentEngine.startStreaming(release)
             let files = try await environment.torrentEngine.getFileList(sessionId: session.id)
             if session.selectedFileId == nil,
-               let mediaFile = files.first(where: \.isMediaFile) {
+               let mediaFile = selectedMediaFile(for: release, files: files) {
                 try await environment.torrentEngine.selectMediaFile(sessionId: session.id, fileId: mediaFile.id)
             }
             let streamingURL = try await environment.torrentEngine.getStreamingURL(sessionId: session.id)
@@ -448,7 +461,21 @@ private struct PlayerRouteView: View {
         } catch {
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .torrent)
             state = .torrentFailed(cineFlowError.userMessage)
+            await environment.diagnosticsService.log(
+                cineFlowError,
+                operation: "player.route.torrent",
+                metadata: ["mediaID": mediaID, "releaseID": release.id, "sourceID": release.sourceId]
+            )
         }
+    }
+
+    private func selectedMediaFile(for release: TorrentRelease, files: [TorrentFile]) -> TorrentFile? {
+        if let preferredFileIndex = release.preferredFileIndex,
+           let preferredFile = files.first(where: { Int($0.id) == preferredFileIndex && $0.isMediaFile }) {
+            return preferredFile
+        }
+
+        return files.first(where: \.isMediaFile)
     }
 
     private enum RouteState: Equatable {

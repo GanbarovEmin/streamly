@@ -10,7 +10,7 @@ public actor GitHubReleaseUpdateService: UpdateServiceProtocol {
     private var automaticChecksEnabled: Bool
 
     public init(
-        latestReleaseURL: URL = URL(string: "https://api.github.com/repos/GanbarovEmin/streamly/releases/latest")!,
+        latestReleaseURL: URL = GitHubReleaseUpdateService.defaultLatestReleaseURL,
         currentVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0",
         session: URLSession = .shared,
         automaticallyChecksForUpdates: Bool = true
@@ -67,6 +67,14 @@ public actor GitHubReleaseUpdateService: UpdateServiceProtocol {
 
     public func setAutomaticallyChecksForUpdates(_ enabled: Bool) async {
         automaticChecksEnabled = enabled
+    }
+
+    public static var defaultLatestReleaseURL: URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api.github.com"
+        components.path = "/repos/GanbarovEmin/streamly/releases/latest"
+        return components.url ?? URL(fileURLWithPath: "/")
     }
 
     private static func normalizedVersion(_ raw: String) -> String? {

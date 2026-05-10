@@ -66,6 +66,41 @@ final class MovieDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testStaleMovieDetailLoadDoesNotOverwriteNewerResult() async throws {
+        let provider = SequencedMovieDetailProvider(steps: [
+            MovieDetailLoadStep(delayNanoseconds: 120_000_000, response: .empty),
+            MovieDetailLoadStep(delayNanoseconds: 0, response: .matrix)
+        ])
+        let viewModel = MovieDetailViewModel(mediaID: "tmdb:movie:603", provider: provider)
+
+        let firstLoad = Task { await viewModel.load() }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        await viewModel.load()
+        await firstLoad.value
+
+        XCTAssertEqual(viewModel.state, .loaded)
+        XCTAssertEqual(viewModel.movie?.title, "The Matrix")
+    }
+
+    @MainActor
+    func testMovieDetailFailureLogsDiagnostics() async {
+        let diagnostics = MovieDetailCapturingDiagnosticsService()
+        let viewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: FailingMovieDetailProvider(),
+            diagnosticsService: diagnostics
+        )
+
+        await viewModel.load()
+
+        let events = await diagnostics.events()
+        XCTAssertEqual(viewModel.state, .failed("Movie details are temporarily unavailable."))
+        XCTAssertEqual(events.first?.metadata["operation"], "movieDetail.load")
+        XCTAssertEqual(events.first?.metadata["mediaID"], "tmdb:movie:603")
+        XCTAssertTrue(events.first?.metadata["technicalDescription"]?.contains("Fixture metadata failure") == true)
+    }
+
+    @MainActor
     func testPlayAndCopyMagnetActionsAreRecordedThroughViewModel() async throws {
         let viewModel = MovieDetailViewModel(mediaID: "tmdb:movie:603", provider: MockMovieDetailProvider())
         await viewModel.load()
@@ -107,6 +142,86 @@ final class MovieDetailViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state, .empty)
         XCTAssertNil(viewModel.movie)
+    }
+}
+
+private struct MovieDetailLoadStep: Sendable {
+    enum Response: Sendable {
+        case empty
+        case matrix
+    }
+
+    let delayNanoseconds: UInt64
+    let response: Response
+}
+
+private actor SequencedMovieDetailProvider: MovieDetailProviderProtocol {
+    private var steps: [MovieDetailLoadStep]
+    private var index = 0
+
+    init(steps: [MovieDetailLoadStep]) {
+        self.steps = steps
+    }
+
+    func movieDetail(id: String) async throws -> MovieDetailResponse? {
+        let step = nextStep()
+        if step.delayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: step.delayNanoseconds)
+        }
+        switch step.response {
+        case .empty:
+            return nil
+        case .matrix:
+            return try await MockMovieDetailProvider().movieDetail(id: id)
+        }
+    }
+
+    private func nextStep() -> MovieDetailLoadStep {
+        let step = steps[min(index, steps.count - 1)]
+        index += 1
+        return step
+    }
+}
+
+private struct FailingMovieDetailProvider: MovieDetailProviderProtocol {
+    func movieDetail(id: String) async throws -> MovieDetailResponse? {
+        throw MovieDetailFixtureError()
+    }
+}
+
+private struct MovieDetailFixtureError: Error, CineFlowErrorConvertible {
+    var cineFlowError: CineFlowError {
+        CineFlowError(
+            category: .metadata,
+            technicalDescription: "Fixture metadata failure",
+            userMessage: "Movie details are temporarily unavailable.",
+            recoverySuggestion: "Try again in a moment.",
+            logLevel: .error
+        )
+    }
+}
+
+private actor MovieDetailCapturingDiagnosticsService: DiagnosticsServiceProtocol {
+    private var storedEvents: [DiagnosticsEvent] = []
+
+    func log(level: DiagnosticsLogLevel, subsystem: DiagnosticsSubsystem, message: String, metadata: [String: String]) async {
+        storedEvents.append(DiagnosticsEvent(level: level, subsystem: subsystem, message: message, metadata: metadata))
+    }
+
+    func exportDiagnostics() async -> String {
+        ""
+    }
+
+    func exportDiagnosticsPackage() async throws -> URL {
+        URL(fileURLWithPath: "/tmp/movie-detail-diagnostics.zip")
+    }
+
+    func recentEvents(limit: Int) async -> [DiagnosticsEvent] {
+        Array(storedEvents.prefix(limit))
+    }
+
+    func events() -> [DiagnosticsEvent] {
+        storedEvents
     }
 }
 

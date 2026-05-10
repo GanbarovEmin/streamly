@@ -141,14 +141,19 @@ final class TMDBMetadataServiceTests: XCTestCase {
         }
     }
 
-    func testCredentialProvidersUseSettingsAndLocalConfigWithoutHardcodingSecrets() async throws {
-        let database = try DatabaseManager.inMemory()
-        let settings = DatabaseSettingsRepository(databaseManager: database)
-        try await settings.setString("settings-token", forKey: TMDBSettingsKeys.readAccessToken)
-
-        let settingsProvider = DatabaseTMDBCredentialProvider(settingsRepository: settings)
-        let settingsToken = await settingsProvider.readAccessToken
-        XCTAssertEqual(settingsToken, "settings-token")
+    func testCredentialProvidersUseKeychainAndLocalConfigWithoutHardcodingSecrets() async throws {
+        let keychainService = MockKeychainService()
+        _ = try await keychainService.saveCredential(
+            KeychainCredential(
+                accountID: TMDBCredentialAccountIDs.readAccessToken,
+                kind: .apiToken,
+                sourceID: "tmdb",
+                token: "keychain-token"
+            )
+        )
+        let keychainProvider = KeychainTMDBCredentialProvider(keychainService: keychainService)
+        let keychainToken = await keychainProvider.readAccessToken
+        XCTAssertEqual(keychainToken, "keychain-token")
 
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         try #"{"readAccessToken":"file-token","apiKey":"file-key"}"#.write(to: tempURL, atomically: true, encoding: .utf8)
@@ -160,22 +165,53 @@ final class TMDBMetadataServiceTests: XCTestCase {
         XCTAssertEqual(localAPIKey, "file-key")
     }
 
-    func testCompositeCredentialProviderPrefersSettingsAndFallsBackToLocalConfig() async throws {
-        let database = try DatabaseManager.inMemory()
-        let settings = DatabaseSettingsRepository(databaseManager: database)
-        let settingsProvider = DatabaseTMDBCredentialProvider(settingsRepository: settings)
-
+    func testCompositeCredentialProviderPrefersKeychainAndFallsBackToLocalConfig() async throws {
+        let keychainService = MockKeychainService()
+        let keychainProvider = KeychainTMDBCredentialProvider(keychainService: keychainService)
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
         try #"{"readAccessToken":"file-token","apiKey":"file-key"}"#.write(to: tempURL, atomically: true, encoding: .utf8)
         let localProvider = LocalTMDBCredentialProvider(configURL: tempURL, environment: [:])
 
-        let fallbackProvider = CompositeTMDBCredentialProvider([settingsProvider, localProvider])
+        let fallbackProvider = CompositeTMDBCredentialProvider([keychainProvider, localProvider])
         let fallbackToken = await fallbackProvider.readAccessToken
         XCTAssertEqual(fallbackToken, "file-token")
 
-        try await settings.setString("settings-token", forKey: TMDBSettingsKeys.readAccessToken)
-        let settingsToken = await fallbackProvider.readAccessToken
-        XCTAssertEqual(settingsToken, "settings-token")
+        _ = try await keychainService.saveCredential(
+            KeychainCredential(
+                accountID: TMDBCredentialAccountIDs.readAccessToken,
+                kind: .apiToken,
+                sourceID: "tmdb",
+                token: "keychain-token"
+            )
+        )
+        let keychainToken = await fallbackProvider.readAccessToken
+        XCTAssertEqual(keychainToken, "keychain-token")
+    }
+
+    func testKeychainTMDBCredentialProviderMigratesLegacyDatabaseCredentials() async throws {
+        let database = try DatabaseManager.inMemory()
+        let settings = DatabaseSettingsRepository(databaseManager: database)
+        try await settings.setString("legacy-token", forKey: TMDBSettingsKeys.readAccessToken)
+        try await settings.setString("legacy-key", forKey: TMDBSettingsKeys.apiKey)
+        let keychainService = MockKeychainService()
+        let provider = KeychainTMDBCredentialProvider(
+            keychainService: keychainService,
+            legacySettingsRepository: settings
+        )
+
+        let token = await provider.readAccessToken
+        let apiKey = await provider.apiKey
+        let storedToken = try await keychainService.readCredential(accountID: TMDBCredentialAccountIDs.readAccessToken)
+        let storedAPIKey = try await keychainService.readCredential(accountID: TMDBCredentialAccountIDs.apiKey)
+        let legacyToken = try await settings.string(forKey: TMDBSettingsKeys.readAccessToken)
+        let legacyAPIKey = try await settings.string(forKey: TMDBSettingsKeys.apiKey)
+
+        XCTAssertEqual(token, "legacy-token")
+        XCTAssertEqual(apiKey, "legacy-key")
+        XCTAssertEqual(storedToken?.token, "legacy-token")
+        XCTAssertEqual(storedAPIKey?.token, "legacy-key")
+        XCTAssertNil(legacyToken)
+        XCTAssertNil(legacyAPIKey)
     }
 
     private func makeService(

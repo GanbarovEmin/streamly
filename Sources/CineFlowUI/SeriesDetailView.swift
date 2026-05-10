@@ -15,13 +15,15 @@ public struct SeriesDetailView: View {
         navigationCoordinator: NavigationCoordinator,
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         detailProvider: (any SeriesDetailProviderProtocol)? = nil,
-        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
+        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         _viewModel = StateObject(wrappedValue: SeriesDetailViewModel(
             seriesID: seriesID,
             provider: detailProvider ?? MockSeriesDetailProvider(),
             libraryRepository: libraryRepository,
-            userMediaSourceRepository: userMediaSourceRepository
+            userMediaSourceRepository: userMediaSourceRepository,
+            diagnosticsService: diagnosticsService
         ))
         self.navigationCoordinator = navigationCoordinator
     }
@@ -222,7 +224,9 @@ public struct SeriesDetailView: View {
                             title: L10n.format(.seriesSeasonFormat, language: selectedLanguage, season.seasonNumber),
                             isSelected: viewModel.selectedSeason?.id == season.id
                         ) {
-                            viewModel.selectSeason(id: season.id)
+                            Task {
+                                await viewModel.selectSeasonAndLoadReleases(id: season.id)
+                            }
                         }
                     }
                 }
@@ -238,7 +242,9 @@ public struct SeriesDetailView: View {
                         isSelected: viewModel.selectedEpisode?.id == episode.id,
                         episodeLabel: L10n.format(.seriesEpisodeFormat, language: selectedLanguage, episode.episodeNumber)
                     ) {
-                        viewModel.selectEpisode(id: episode.id)
+                        Task {
+                            await viewModel.selectEpisodeAndLoadReleases(id: episode.id)
+                        }
                     } play: {
                         viewModel.playEpisode(id: episode.id)
                         playSeriesID(viewModel.series?.id ?? episode.id)

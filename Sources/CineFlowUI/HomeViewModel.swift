@@ -334,13 +334,13 @@ public final class HomeViewModel: ObservableObject {
     }
 
     public var prefetchArtworkURLs: [URL] {
-        sections.flatMap { section in
+        Array(sections.lazy.flatMap { section in
             section.items.compactMap(\.artworkURL)
-        }
+        }.prefix(24))
     }
 
     public var artworkPrefetchKey: String {
-        prefetchArtworkURLs.prefix(24).map(\.absoluteString).joined(separator: "|")
+        prefetchArtworkURLs.map(\.absoluteString).joined(separator: "|")
     }
 
     public func load() async {
@@ -356,19 +356,28 @@ public final class HomeViewModel: ObservableObject {
                 return
             }
 
-            featuredItems = Array(items.filter(\.isFeatured).prefix(4)).enumerated().map { index, item in
-                HomeFeaturedItem(
-                    id: item.id,
-                    title: item.title,
-                    metadataLine: metadataLine(for: item),
-                    overview: item.overview,
-                    qualityBadge: item.quality,
-                    accentIndex: index,
-                    backdropURL: item.backdropURL
-                )
+            let progressRecords: [PlaybackProgress]
+            let libraryItems: [MediaItem]
+            if let progressRepository {
+                progressRecords = try await progressRepository.continueWatching(includeCompleted: false)
+                libraryItems = (try? await libraryRepository?.items()) ?? []
+            } else {
+                progressRecords = []
+                libraryItems = []
             }
+
+            let usesProgressRepository = progressRepository != nil
+            let content = await Task.detached(priority: .userInitiated) {
+                HomeContentBuilder.build(
+                    items: items,
+                    progressRecords: progressRecords,
+                    libraryItems: libraryItems,
+                    usesProgressRepository: usesProgressRepository
+                )
+            }.value
+            featuredItems = content.featuredItems
             selectedFeaturedIndex = 0
-            sections = try await buildSections(from: items)
+            sections = content.sections
             state = .loaded
         } catch {
             featuredItems = []
@@ -382,19 +391,41 @@ public final class HomeViewModel: ObservableObject {
         guard let index = featuredItems.firstIndex(where: { $0.id == id }) else { return }
         selectedFeaturedIndex = index
     }
+}
 
-    private func buildSections(from items: [HomeSeedItem]) async throws -> [HomeSection] {
+private struct HomePreparedContent: Sendable {
+    let featuredItems: [HomeFeaturedItem]
+    let sections: [HomeSection]
+}
+
+private enum HomeContentBuilder {
+    static func build(
+        items: [HomeSeedItem],
+        progressRecords: [PlaybackProgress],
+        libraryItems: [MediaItem],
+        usesProgressRepository: Bool
+    ) -> HomePreparedContent {
+        let featuredItems = Array(items.filter(\.isFeatured).prefix(4)).enumerated().map { index, item in
+            HomeFeaturedItem(
+                id: item.id,
+                title: item.title,
+                metadataLine: metadataLine(for: item),
+                overview: item.overview,
+                qualityBadge: item.quality,
+                accentIndex: index,
+                backdropURL: item.backdropURL
+            )
+        }
+
         let continueItems: [CFMediaCardModel]
-        if let progressRepository {
-            let progressRecords = try await progressRepository.continueWatching(includeCompleted: false)
-            let libraryItems = (try? await libraryRepository?.items()) ?? []
+        if usesProgressRepository {
             let mediaByID = Dictionary(uniqueKeysWithValues: libraryItems.map { ($0.id, $0) })
             continueItems = progressRecords.map { card(from: $0, mediaItem: mediaByID[$0.mediaID]) }
         } else {
             continueItems = cards(from: items.filter { $0.progress != nil }, limit: 6)
         }
 
-        return [
+        let sections = [
             HomeSection(
                 kind: .continueWatching,
                 title: "Continue Watching",
@@ -432,15 +463,17 @@ public final class HomeViewModel: ObservableObject {
                 items: cards(from: items.filter { $0.quality.contains("2160p") }, limit: 8)
             )
         ]
+
+        return HomePreparedContent(featuredItems: featuredItems, sections: sections)
     }
 
-    private func ranked(_ items: [HomeSeedItem], kind: SeedMediaKind) -> [HomeSeedItem] {
+    private static func ranked(_ items: [HomeSeedItem], kind: SeedMediaKind) -> [HomeSeedItem] {
         items
             .filter { $0.kind == kind }
             .sorted { $0.popularityRank < $1.popularityRank }
     }
 
-    private func cards(from items: [HomeSeedItem], limit: Int) -> [CFMediaCardModel] {
+    private static func cards(from items: [HomeSeedItem], limit: Int) -> [CFMediaCardModel] {
         Array(items.prefix(limit)).enumerated().map { index, item in
             CFMediaCardModel(
                 id: item.id,
@@ -454,7 +487,7 @@ public final class HomeViewModel: ObservableObject {
         }
     }
 
-    private func card(from progress: PlaybackProgress, mediaItem: MediaItem?) -> CFMediaCardModel {
+    private static func card(from progress: PlaybackProgress, mediaItem: MediaItem?) -> CFMediaCardModel {
         CFMediaCardModel(
             id: progress.episodeID ?? progress.mediaID,
             title: mediaItem?.displayTitle ?? progress.episodeID ?? progress.mediaID,
@@ -466,7 +499,7 @@ public final class HomeViewModel: ObservableObject {
         )
     }
 
-    private func metadataLine(for item: HomeSeedItem) -> String {
+    private static func metadataLine(for item: HomeSeedItem) -> String {
         "\(item.year) · \(item.rating) · \(item.runtime) · \(item.genre)"
     }
 }

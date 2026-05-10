@@ -11,6 +11,7 @@ public final class CineFlowImagePipeline: ObservableObject {
     private let fallbackLoader: CFImageDataLoader
     private var memoryCache: [URL: Data] = [:]
     private var memoryOrder: [URL] = []
+    private var inFlightRequests: [URL: Task<Data, Error>] = [:]
     private let memoryLimit: Int
 
     public init(
@@ -30,17 +31,24 @@ public final class CineFlowImagePipeline: ObservableObject {
         if let cached = memoryCache[url] {
             return cached
         }
-
-        activeRequestCount += 1
-        defer { activeRequestCount = max(0, activeRequestCount - 1) }
-
-        let data: Data
-        if let imageCacheService {
-            data = try await imageCacheService.imageData(for: url, kind: .poster)
-        } else {
-            data = try await fallbackLoader(url)
+        if let inFlightRequest = inFlightRequests[url] {
+            return try await inFlightRequest.value
         }
 
+        activeRequestCount += 1
+        let request = Task<Data, Error> { [imageCacheService, fallbackLoader] in
+            if let imageCacheService {
+                return try await imageCacheService.imageData(for: url, kind: .poster)
+            }
+            return try await fallbackLoader(url)
+        }
+        inFlightRequests[url] = request
+        defer {
+            inFlightRequests[url] = nil
+            activeRequestCount = max(0, activeRequestCount - 1)
+        }
+
+        let data = try await request.value
         store(data, for: url)
         loadedImageCount += 1
         return data
@@ -50,9 +58,17 @@ public final class CineFlowImagePipeline: ObservableObject {
         let candidates = Array(urls.filter { memoryCache[$0] == nil }.prefix(limit))
         guard !candidates.isEmpty else { return }
 
-        for url in candidates {
+        let batchSize = 4
+        for startIndex in stride(from: 0, to: candidates.count, by: batchSize) {
             guard !Task.isCancelled else { return }
-            _ = try? await data(for: url)
+            let batch = candidates[startIndex..<min(startIndex + batchSize, candidates.count)]
+            await withTaskGroup(of: Void.self) { group in
+                for url in batch {
+                    group.addTask { [weak self] in
+                        _ = try? await self?.data(for: url)
+                    }
+                }
+            }
         }
     }
 

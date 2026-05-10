@@ -17,13 +17,13 @@ let nativeLibtorrentTargets: [Target] = hasNativeLibtorrentXCFramework
     : []
 
 let package = Package(
-    name: "CineFlow",
+    name: "Streamly",
     defaultLocalization: "en",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "CineFlow", targets: ["CineFlowApp"]),
+        .executable(name: "Streamly", targets: ["CineFlowApp"]),
         .library(name: "CineFlowCore", targets: ["CineFlowCore"]),
         .library(name: "CineFlowLocalization", targets: ["CineFlowLocalization"]),
         .library(name: "CineFlowDesignSystem", targets: ["CineFlowDesignSystem"]),

@@ -9,6 +9,11 @@ public enum KeychainCredentialKind: String, Codable, CaseIterable, Hashable, Sen
     case futureSync
 }
 
+public enum TMDBCredentialAccountIDs {
+    public static let readAccessToken = "api:tmdb:read_access_token"
+    public static let apiKey = "api:tmdb:api_key"
+}
+
 public struct KeychainCredential: Codable, Equatable, Sendable {
     public let accountID: String
     public var kind: KeychainCredentialKind

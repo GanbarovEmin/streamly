@@ -1,16 +1,16 @@
-# CineFlow Product Specification v1.0
+# Streamly Product Specification v1.0
 
 ## 1. Назначение продукта
 
-CineFlow — нативное macOS-приложение для поиска, каталогизации и воспроизведения torrent-видео в формате Netflix-like / Apple-like медиаплатформы.
+Streamly — нативное macOS-приложение для поиска, каталогизации и воспроизведения torrent-видео в формате Netflix-like / Apple-like медиаплатформы.
 
 Цель продукта — дать пользователю единый медиаклиент, в котором можно находить релизы, видеть метаданные, выбирать качество, запускать просмотр и продолжать воспроизведение без ручного скачивания файла целиком и без перехода между отдельными torrent-клиентами, файловыми менеджерами и видеоплеерами.
 
-CineFlow не является поставщиком контента. Приложение является оболочкой и медиаклиентом, который работает с пользовательскими источниками, локальными данными, metadata providers, subtitle providers, torrent engine и playback engine.
+Streamly не является поставщиком контента. Приложение является оболочкой и медиаклиентом, который работает с пользовательскими источниками, локальными данными, metadata providers, subtitle providers, torrent engine и playback engine.
 
 ## 2. Product Positioning
 
-CineFlow v1.0 позиционируется как desktop-first приложение для macOS:
+Streamly v1.0 позиционируется как desktop-first приложение для macOS:
 
 - визуально близкое к Netflix и Apple TV;
 - нативное по ощущениям, а не web-wrapper;
@@ -20,7 +20,7 @@ CineFlow v1.0 позиционируется как desktop-first приложе
 
 Основной сценарий v1.0:
 
-1. Пользователь открывает CineFlow.
+1. Пользователь открывает Streamly.
 2. Ищет фильм или сериал.
 3. Видит карточку с метаданными, постером, описанием, рейтингами и доступными релизами.
 4. Выбирает релиз с лучшим качеством и достаточным количеством seeders.
@@ -31,7 +31,7 @@ CineFlow v1.0 позиционируется как desktop-first приложе
 
 ### 3.1 Platform
 
-- Название приложения: CineFlow.
+- Название приложения: Streamly.
 - Платформа: macOS.
 - Поддерживаемая архитектура процессоров: Apple Silicon only.
 - Target architecture: arm64.
@@ -42,7 +42,7 @@ CineFlow v1.0 позиционируется как desktop-first приложе
 
 ### 3.2 Visual Direction
 
-Визуальный стиль CineFlow v1.0:
+Визуальный стиль Streamly v1.0:
 
 - гибрид Netflix + Apple TV;
 - dark graphite background;
@@ -57,7 +57,7 @@ Dark Mode является единственным поддерживаемым
 
 ## 4. Scope v1.0
 
-CineFlow v1.0 включает:
+Streamly v1.0 включает:
 
 - нативное macOS-приложение на SwiftUI;
 - модульную архитектуру с MVVM и Services Layer;
@@ -110,7 +110,7 @@ CineFlow v1.0 включает:
 
 ## 6. High-Level Architecture
 
-CineFlow использует Modular Architecture + MVVM + Services Layer.
+Streamly использует Modular Architecture + MVVM + Services Layer.
 
 ### 6.1 UI Layer
 
@@ -265,7 +265,7 @@ UI должен показывать качество, seeders и важные �
 
 ## 8. Local Data & Privacy
 
-CineFlow v1.0 является local-first приложением.
+Streamly v1.0 является local-first приложением.
 
 В v1.0 без аккаунта локально хранятся:
 
@@ -285,7 +285,7 @@ CineFlow v1.0 является local-first приложением.
 
 ## 9. Diagnostics & Logs
 
-CineFlow v1.0 должен иметь локальные diagnostics logs и функцию Export Diagnostics.
+Streamly v1.0 должен иметь локальные diagnostics logs и функцию Export Diagnostics.
 
 Diagnostics должны помогать разбирать:
 
@@ -304,7 +304,7 @@ Diagnostics не должны скрыто отправляться на вне�
 
 ## 10. Legal & Content Responsibility
 
-CineFlow является медиаклиентом и программной оболочкой.
+Streamly является медиаклиентом и программной оболочкой.
 
 Приложение:
 
@@ -328,7 +328,7 @@ CineFlow является медиаклиентом и программной �
 
 ## 11. Release Model
 
-CineFlow распространяется вне App Store.
+Streamly распространяется вне App Store.
 
 Базовая release-модель v1.0:
 
@@ -343,6 +343,6 @@ Landing page должен быть публичной точкой входа д
 
 ## 12. Canonical Status
 
-Этот документ является главным продуктовым документом CineFlow v1.0.
+Этот документ является главным продуктовым документом Streamly v1.0.
 
 Все последующие задачи по архитектуре, UI, persistence, torrent engine, playback, metadata, subtitles, diagnostics, release engineering и legal boundaries должны ссылаться на `PRODUCT_SPEC.md` как на источник продуктовых и технических решений v1.0.

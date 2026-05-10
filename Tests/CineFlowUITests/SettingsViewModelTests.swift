@@ -77,6 +77,7 @@ final class SettingsViewModelTests: XCTestCase {
 
     func testTMDBCredentialsCanBeSavedAndClearedFromSettings() async {
         let settingsRepository = CoreMockSettingsRepository()
+        let keychainService = MockKeychainService()
         let viewModel = SettingsViewModel(
             environment: AppEnvironment(
                 metadataService: CoreMockMetadataService(),
@@ -86,7 +87,8 @@ final class SettingsViewModelTests: XCTestCase {
                 libraryRepository: CoreMockLibraryRepository(),
                 settingsRepository: settingsRepository,
                 diagnosticsService: CoreMockDiagnosticsService(),
-                updateService: CoreMockUpdateService()
+                updateService: CoreMockUpdateService(),
+                keychainService: keychainService
             )
         )
 
@@ -97,16 +99,24 @@ final class SettingsViewModelTests: XCTestCase {
 
         let savedToken = await settingsRepository.metadataCredential(forKey: "tmdb_read_access_token")
         let savedAPIKey = await settingsRepository.metadataCredential(forKey: "tmdb_api_key")
-        XCTAssertEqual(savedToken, "token")
-        XCTAssertEqual(savedAPIKey, "key")
+        let keychainToken = try? await keychainService.readCredential(accountID: TMDBCredentialAccountIDs.readAccessToken)
+        let keychainAPIKey = try? await keychainService.readCredential(accountID: TMDBCredentialAccountIDs.apiKey)
+        XCTAssertNil(savedToken)
+        XCTAssertNil(savedAPIKey)
+        XCTAssertEqual(keychainToken?.token, "token")
+        XCTAssertEqual(keychainAPIKey?.token, "key")
         XCTAssertEqual(viewModel.tmdbCredentialSummary.statusText, "TMDB read access token saved")
 
         await viewModel.clearTMDBCredentials()
 
         let clearedToken = await settingsRepository.metadataCredential(forKey: "tmdb_read_access_token")
         let clearedAPIKey = await settingsRepository.metadataCredential(forKey: "tmdb_api_key")
+        let clearedKeychainToken = try? await keychainService.readCredential(accountID: TMDBCredentialAccountIDs.readAccessToken)
+        let clearedKeychainAPIKey = try? await keychainService.readCredential(accountID: TMDBCredentialAccountIDs.apiKey)
         XCTAssertNil(clearedToken)
         XCTAssertNil(clearedAPIKey)
+        XCTAssertNil(clearedKeychainToken)
+        XCTAssertNil(clearedKeychainAPIKey)
         XCTAssertEqual(viewModel.tmdbCredentialSummary.statusText, "TMDB credentials missing")
     }
 

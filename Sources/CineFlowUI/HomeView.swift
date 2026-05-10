@@ -129,12 +129,19 @@ private struct HomeHeroView: View {
     let onWatch: () -> Void
     let onLibrary: () -> Void
     let onSelectFeatured: (String) -> Void
-    let imageDataLoader: CFImageDataLoader?
+    let imageDataLoader: (@Sendable (URL) async throws -> Data)?
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .bottomLeading) {
-                HomeBackdrop(item: item, imageDataLoader: imageDataLoader)
+                HomeBackdrop(item: item)
+                    .overlay {
+                        if let backdropURL = item.backdropURL {
+                            CFCachedAsyncImage(url: backdropURL, contentMode: .fill, imageDataLoader: imageDataLoader)
+                                .opacity(0.38)
+                                .overlay(CFColors.backgroundPrimary.opacity(0.26))
+                        }
+                    }
 
                 LinearGradient(
                     colors: [
@@ -223,7 +230,6 @@ private struct HomeHeroView: View {
 
 private struct HomeBackdrop: View {
     let item: HomeFeaturedItem
-    let imageDataLoader: CFImageDataLoader?
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -259,13 +265,6 @@ private struct HomeBackdrop: View {
                 .blur(radius: 12)
                 .opacity(0.68)
                 .offset(x: -220, y: 170)
-        }
-        .overlay {
-            if let backdropURL = item.backdropURL {
-                CFCachedAsyncImage(url: backdropURL, contentMode: .fill, imageDataLoader: imageDataLoader)
-                    .opacity(0.38)
-                    .overlay(CFColors.backgroundPrimary.opacity(0.26))
-            }
         }
     }
 }

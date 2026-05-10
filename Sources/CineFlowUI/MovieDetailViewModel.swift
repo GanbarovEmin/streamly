@@ -163,10 +163,7 @@ public struct MockMovieDetailProvider: MovieDetailProviderProtocol {
                 MovieTrailer(id: "trailer-main", title: "Official Trailer", source: "YouTube"),
                 MovieTrailer(id: "trailer-legacy", title: "Theatrical Trailer", source: "Apple TV")
             ],
-            similar: [
-                SearchMediaResult(item: HomeSeedLibrary.developmentItems.first { $0.id == "tmdb:movie:27205" }!),
-                SearchMediaResult(item: HomeSeedLibrary.developmentItems.first { $0.id == "tmdb:movie:157336" }!)
-            ],
+            similar: Self.similarItems(ids: ["tmdb:movie:27205", "tmdb:movie:157336"]),
             cast: [
                 MovieCastMember(id: "keanu", name: "Keanu Reeves", role: "Neo"),
                 MovieCastMember(id: "carrie", name: "Carrie-Anne Moss", role: "Trinity"),
@@ -174,6 +171,14 @@ public struct MockMovieDetailProvider: MovieDetailProviderProtocol {
             ],
             progress: PlaybackProgress(mediaID: "tmdb:movie:603", positionSeconds: 3_400, durationSeconds: 8_160)
         )
+    }
+
+    private static func similarItems(ids: [String]) -> [SearchMediaResult] {
+        ids.compactMap { id in
+            HomeSeedLibrary.developmentItems
+                .first { $0.id == id }
+                .map(SearchMediaResult.init(item:))
+        }
     }
 }
 
@@ -204,19 +209,23 @@ public final class MovieDetailViewModel: ObservableObject {
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
     private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
+    private let diagnosticsService: (any DiagnosticsServiceProtocol)?
+    private var loadGeneration = 0
 
     public init(
         mediaID: String,
         provider: any MovieDetailProviderProtocol = MockMovieDetailProvider(),
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
-        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
+        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         self.mediaID = mediaID
         self.provider = provider
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
         self.userMediaSourceRepository = userMediaSourceRepository
+        self.diagnosticsService = diagnosticsService
     }
 
     public var hasContinueWatching: Bool {
@@ -240,10 +249,13 @@ public final class MovieDetailViewModel: ObservableObject {
     }
 
     public func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         state = .loading
 
         do {
             guard let response = try await provider.movieDetail(id: mediaID) else {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 movie = nil
                 releases = []
                 trailers = []
@@ -255,6 +267,7 @@ public final class MovieDetailViewModel: ObservableObject {
                 return
             }
 
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             movie = response.movie
             mediaItem = response.movie.mediaItem()
             releases = rankingEngine.rank(response.releases)
@@ -264,9 +277,13 @@ public final class MovieDetailViewModel: ObservableObject {
             progress = response.progress
             await refreshLibraryState()
             await refreshUserSources()
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             state = .loaded
         } catch {
-            state = .failed(CineFlowError.from(error, fallbackCategory: .metadata).userMessage)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
+            state = .failed(cineFlowError.userMessage)
+            await diagnosticsService?.log(cineFlowError, operation: "movieDetail.load", metadata: ["mediaID": mediaID])
         }
     }
 

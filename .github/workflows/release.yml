@@ -49,7 +49,7 @@ jobs:
             PRERELEASE="${{ inputs.prerelease }}"
           else
             VERSION="${GITHUB_REF_NAME#v}"
-            BUILD="${GITHUB_RUN_NUMBER}"
+            BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Configuration/Streamly-Info.plist)"
             PRERELEASE="false"
           fi
 

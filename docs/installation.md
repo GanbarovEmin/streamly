@@ -2,7 +2,7 @@
 
 Streamly is distributed outside the Mac App Store as a `.dmg`.
 
-The public app bundle is `Streamly.app`. Swift package and target names may still use the internal `CineFlow*` names.
+The public app bundle, Swift package and executable product are named `Streamly`. Some legacy source targets may still use `CineFlow*` implementation names until a separate module-graph migration renames them safely.
 
 ## Download
 

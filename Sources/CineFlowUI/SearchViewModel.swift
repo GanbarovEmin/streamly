@@ -81,7 +81,8 @@ public struct SearchMediaResult: Identifiable, Equatable, Sendable {
         self.artworkURL = mediaItem.bestPosterURL
 
         let genres = mediaItem.metadata?.genres.prefix(2).joined(separator: ", ")
-        let rating = mediaItem.metadata?.rating.map { String(format: "TMDB %.1f", $0) }
+        let ratingLabel = mediaItem.id.hasPrefix("imdb:") ? "IMDb" : "TMDB"
+        let rating = mediaItem.metadata?.rating.map { String(format: "\(ratingLabel) %.1f", $0) }
         self.metadata = [
             year > 0 ? String(year) : nil,
             genres?.isEmpty == false ? genres : nil,
@@ -100,6 +101,8 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
     public let mediaYear: Int
     public let title: String
     public let source: String
+    public let magnetURI: String?
+    public let torrentFileURL: URL?
     public let quality: ReleaseQuality
     public let isHDR: Bool
     public let seeders: Int
@@ -110,6 +113,48 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
     public let subtitleLanguages: [String]
     public var rankingScore: Double = 0
     public var rankingReasons: [ReleaseRankingReason] = []
+
+    public init(
+        id: String,
+        mediaID: String,
+        mediaTitle: String,
+        mediaKind: SeedMediaKind,
+        mediaYear: Int,
+        title: String,
+        source: String,
+        magnetURI: String? = nil,
+        torrentFileURL: URL? = nil,
+        quality: ReleaseQuality,
+        isHDR: Bool,
+        seeders: Int,
+        leechers: Int,
+        sizeBytes: Int64,
+        uploadDate: Date,
+        audioLanguages: [String],
+        subtitleLanguages: [String],
+        rankingScore: Double = 0,
+        rankingReasons: [ReleaseRankingReason] = []
+    ) {
+        self.id = id
+        self.mediaID = mediaID
+        self.mediaTitle = mediaTitle
+        self.mediaKind = mediaKind
+        self.mediaYear = mediaYear
+        self.title = title
+        self.source = source
+        self.magnetURI = magnetURI
+        self.torrentFileURL = torrentFileURL
+        self.quality = quality
+        self.isHDR = isHDR
+        self.seeders = seeders
+        self.leechers = leechers
+        self.sizeBytes = sizeBytes
+        self.uploadDate = uploadDate
+        self.audioLanguages = audioLanguages
+        self.subtitleLanguages = subtitleLanguages
+        self.rankingScore = rankingScore
+        self.rankingReasons = rankingReasons
+    }
 
     public var qualityLabel: String {
         isHDR ? "\(quality.qualityLabel) HDR" : quality.qualityLabel
@@ -136,6 +181,8 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
             sourceId: source.lowercased(),
             sourceName: source,
             title: title,
+            magnetURI: magnetURI,
+            torrentFileURL: torrentFileURL,
             quality: quality,
             codec: .unknown,
             hdr: isHDR ? .hdr10 : .none,
@@ -144,7 +191,8 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
             seeders: seeders,
             leechers: leechers,
             sizeBytes: sizeBytes,
-            uploadDate: uploadDate
+            uploadDate: uploadDate,
+            rankScore: rankingScore
         )
     }
 }
@@ -391,6 +439,7 @@ public struct MockSearchProvider: SearchProviderProtocol {
             mediaYear: mediaYear,
             title: title,
             source: source,
+            magnetURI: "magnet:?xt=urn:btih:\(id)",
             quality: quality,
             isHDR: isHDR,
             seeders: seeders,
@@ -421,6 +470,7 @@ public final class SearchViewModel: ObservableObject {
     private let debounceNanoseconds: UInt64
     private var debounceTask: Task<Void, Never>?
     private var lastResponse = SearchProviderResponse(media: [], releases: [])
+    private var searchGeneration = 0
 
     public init(
         provider: any SearchProviderProtocol = MockSearchProvider(),
@@ -439,6 +489,7 @@ public final class SearchViewModel: ObservableObject {
     public func updateQuery(_ query: String) {
         queryText = query
         debounceTask?.cancel()
+        let generation = nextSearchGeneration()
 
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             state = .idle
@@ -453,15 +504,21 @@ public final class SearchViewModel: ObservableObject {
             guard let self else { return }
             try? await Task.sleep(nanoseconds: debounceNanoseconds)
             guard !Task.isCancelled else { return }
-            await self.searchNow(query: query)
+            await self.searchNow(query: query, generation: generation)
         }
     }
 
     public func searchNow(query: String) async {
+        let generation = nextSearchGeneration()
+        await searchNow(query: query, generation: generation)
+    }
+
+    private func searchNow(query: String, generation: Int) async {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         queryText = normalizedQuery
 
         guard !normalizedQuery.isEmpty else {
+            guard generation == searchGeneration else { return }
             state = .idle
             results = SearchResults()
             lastResponse = SearchProviderResponse(media: [], releases: [])
@@ -473,11 +530,23 @@ public final class SearchViewModel: ObservableObject {
 
         do {
             let response = try await provider.search(query: normalizedQuery)
+            let filters = filters
+            let sortOption = sortOption
+            let preparedResults = await Task.detached(priority: .userInitiated) {
+                SearchResultsBuilder.build(
+                    response: response,
+                    filters: filters,
+                    sortOption: sortOption
+                )
+            }.value
+            guard generation == searchGeneration, !Task.isCancelled else { return }
             lastResponse = response
             lastError = nil
             updateAvailableFilterOptions(from: response)
-            applyCurrentFiltersAndSort()
+            results = preparedResults
+            state = results.isEmpty ? .empty : .loaded
         } catch {
+            guard generation == searchGeneration, !Task.isCancelled else { return }
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
             results = SearchResults()
             lastError = cineFlowError
@@ -488,6 +557,11 @@ public final class SearchViewModel: ObservableObject {
 
     public func retryLastSearch() async {
         await searchNow(query: queryText)
+    }
+
+    private func nextSearchGeneration() -> Int {
+        searchGeneration += 1
+        return searchGeneration
     }
 
     public func setSortOption(_ option: SearchSortOption) {
@@ -613,6 +687,129 @@ public final class SearchViewModel: ObservableObject {
     }
 
     private var searchRankingPreferences: RankingPreferences {
+        RankingPreferences(
+            preferredAudioLanguages: filters.audioLanguage.map { [$0] } ?? [],
+            preferredSubtitleLanguages: filters.subtitleLanguage.map { [$0] } ?? [],
+            supportsHDR: true
+        )
+    }
+}
+
+private enum SearchResultsBuilder {
+    static func build(
+        response: SearchProviderResponse,
+        filters: SearchFilters,
+        sortOption: SearchSortOption
+    ) -> SearchResults {
+        let media = filteredMedia(response.media, filters: filters)
+        let releases = sort(filteredReleases(response.releases, filters: filters), filters: filters, sortOption: sortOption)
+
+        return SearchResults(
+            topMatches: Array(media.prefix(1)),
+            movies: media.filter { $0.kind == .movie },
+            series: media.filter { $0.kind == .series },
+            torrentReleases: releases
+        )
+    }
+
+    private static func filteredMedia(_ media: [SearchMediaResult], filters: SearchFilters) -> [SearchMediaResult] {
+        media.filter { item in
+            switch filters.mediaType {
+            case .all:
+                break
+            case .movies where item.kind != .movie:
+                return false
+            case .series where item.kind != .series:
+                return false
+            default:
+                break
+            }
+
+            if let year = filters.year, item.year != year {
+                return false
+            }
+
+            return true
+        }
+    }
+
+    private static func filteredReleases(_ releases: [SearchTorrentRelease], filters: SearchFilters) -> [SearchTorrentRelease] {
+        releases.filter { release in
+            switch filters.mediaType {
+            case .all:
+                break
+            case .movies where release.mediaKind != .movie:
+                return false
+            case .series where release.mediaKind != .series:
+                return false
+            default:
+                break
+            }
+
+            if !filters.qualities.isEmpty, !filters.qualities.contains(release.quality) {
+                return false
+            }
+            if filters.requiresHDR, !release.isHDR {
+                return false
+            }
+            if let source = filters.source, !source.isEmpty, release.source != source {
+                return false
+            }
+            if let year = filters.year, release.mediaYear != year {
+                return false
+            }
+            if let audioLanguage = filters.audioLanguage, !audioLanguage.isEmpty, !release.audioLanguages.contains(audioLanguage) {
+                return false
+            }
+            if let subtitleLanguage = filters.subtitleLanguage, !subtitleLanguage.isEmpty, !release.subtitleLanguages.contains(subtitleLanguage) {
+                return false
+            }
+
+            return true
+        }
+    }
+
+    private static func sort(
+        _ releases: [SearchTorrentRelease],
+        filters: SearchFilters,
+        sortOption: SearchSortOption
+    ) -> [SearchTorrentRelease] {
+        if sortOption == .best {
+            let ranked = ReleaseRankingEngine(preferences: rankingPreferences(filters: filters))
+                .rank(releases.map(\.torrentRelease))
+            let byID = Dictionary(uniqueKeysWithValues: releases.map { ($0.id, $0) })
+
+            return ranked.compactMap { rankedRelease in
+                guard var release = byID[rankedRelease.release.id] else { return nil }
+                release.rankingScore = rankedRelease.score
+                release.rankingReasons = rankedRelease.reasons
+                return release
+            }
+        }
+
+        return releases.sorted { lhs, rhs in
+            switch sortOption {
+            case .best:
+                return lhs.id < rhs.id
+            case .quality:
+                if lhs.quality != rhs.quality {
+                    return lhs.quality > rhs.quality
+                }
+                if lhs.isHDR != rhs.isHDR {
+                    return lhs.isHDR && !rhs.isHDR
+                }
+                return lhs.seeders > rhs.seeders
+            case .seeders:
+                return lhs.seeders > rhs.seeders
+            case .size:
+                return lhs.sizeBytes > rhs.sizeBytes
+            case .date:
+                return lhs.uploadDate > rhs.uploadDate
+            }
+        }
+    }
+
+    private static func rankingPreferences(filters: SearchFilters) -> RankingPreferences {
         RankingPreferences(
             preferredAudioLanguages: filters.audioLanguage.map { [$0] } ?? [],
             preferredSubtitleLanguages: filters.subtitleLanguage.map { [$0] } ?? [],

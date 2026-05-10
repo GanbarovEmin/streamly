@@ -253,7 +253,7 @@ public struct SearchView: View {
                                 navigationCoordinator.navigate(to: .mediaDetail(id: release.mediaID))
                             },
                             onPlay: {
-                                navigationCoordinator.navigate(to: .player(mediaID: release.mediaID))
+                                navigationCoordinator.navigate(to: .player(mediaID: release.mediaID, release: release.torrentRelease))
                             },
                             onAdd: {
                                 navigationCoordinator.navigate(to: .mediaDetail(id: release.mediaID))

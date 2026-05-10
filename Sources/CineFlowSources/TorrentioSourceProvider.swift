@@ -140,8 +140,15 @@ public enum TorrentioStreamType: String, Sendable {
 public struct TorrentioConfigurationURLBuilder: Sendable {
     public let baseURL: URL
 
-    public init(baseURL: URL = URL(string: "https://torrentio.strem.fun")!) {
+    public init(baseURL: URL = TorrentioConfigurationURLBuilder.defaultBaseURL) {
         self.baseURL = baseURL
+    }
+
+    public static var defaultBaseURL: URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "torrentio.strem.fun"
+        return components.url ?? URL(fileURLWithPath: "/")
     }
 
     public func manifestURL(settings: TorrentioSettings) throws -> URL {
@@ -267,7 +274,8 @@ public struct TorrentioStreamMapper: Sendable {
             subtitleLanguages: languageCodes(from: searchText),
             seeders: seeders(from: stream.title),
             leechers: 0,
-            sizeBytes: sizeBytes(from: stream.title)
+            sizeBytes: sizeBytes(from: stream.title),
+            preferredFileIndex: fileIndex
         )
     }
 
@@ -432,12 +440,13 @@ public struct TorrentioSourceProvider: TorrentSourceProviderProtocol {
 
     public func search(query: String, filters: TorrentSourceSearchFilters) async throws -> [TorrentRelease] {
         let stremioID = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard stremioID.range(of: #"^tt[0-9]+$"#, options: .regularExpression) != nil else {
+        guard stremioID.range(of: #"^tt[0-9]+(?::[0-9]+:[0-9]+)?$"#, options: .regularExpression) != nil else {
             return []
         }
 
         let settings = try await settingsStore.settings()
-        let url = try urlBuilder.streamURL(type: .movie, id: stremioID, settings: settings)
+        let streamType: TorrentioStreamType = stremioID.contains(":") ? .series : .movie
+        let url = try urlBuilder.streamURL(type: streamType, id: stremioID, settings: settings)
         let response: StremioStreamResponse = try await fetch(url)
         return mapper.releases(from: response, mediaID: stremioID).filtered(by: filters)
     }

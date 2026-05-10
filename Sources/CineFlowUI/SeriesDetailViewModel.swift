@@ -101,6 +101,13 @@ public struct SeriesDetailResponse: Sendable {
 
 public protocol SeriesDetailProviderProtocol: Sendable {
     func seriesDetail(id: String) async throws -> SeriesDetailResponse?
+    func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)]
+}
+
+public extension SeriesDetailProviderProtocol {
+    func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
+        []
+    }
 }
 
 public struct MockSeriesDetailProvider: SeriesDetailProviderProtocol {
@@ -216,9 +223,7 @@ public struct MockSeriesDetailProvider: SeriesDetailProviderProtocol {
                 )
             ],
             trailers: [MovieTrailer(id: "got-trailer", title: "Series Trailer", source: "HBO")],
-            similar: [
-                SearchMediaResult(item: HomeSeedLibrary.developmentItems.first { $0.id == "tmdb:tv:94997" }!)
-            ],
+            similar: Self.similarItems(ids: ["tmdb:tv:94997"]),
             cast: [
                 MovieCastMember(id: "kit", name: "Kit Harington", role: "Jon Snow"),
                 MovieCastMember(id: "emilia", name: "Emilia Clarke", role: "Daenerys Targaryen")
@@ -229,6 +234,28 @@ public struct MockSeriesDetailProvider: SeriesDetailProviderProtocol {
             ],
             lastWatchedEpisodeID: "got-s1-e2"
         )
+    }
+
+    private static func similarItems(ids: [String]) -> [SearchMediaResult] {
+        ids.compactMap { id in
+            HomeSeedLibrary.developmentItems
+                .first { $0.id == id }
+                .map(SearchMediaResult.init(item:))
+        }
+    }
+
+    public func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
+        guard let response = try await seriesDetail(id: seriesID) else { return [] }
+        return response.releases.filter { _, scope in
+            switch scope {
+            case .series:
+                true
+            case .season(let seasonID):
+                response.seasons.first { $0.id == seasonID }?.episodes.contains { $0.id == episodeID } == true
+            case .episode(let scopedEpisodeID):
+                scopedEpisodeID == episodeID
+            }
+        }
     }
 }
 
@@ -260,19 +287,24 @@ public final class SeriesDetailViewModel: ObservableObject {
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
     private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
+    private let diagnosticsService: (any DiagnosticsServiceProtocol)?
+    private var loadGeneration = 0
+    private var episodeReleaseGeneration = 0
 
     public init(
         seriesID: String,
         provider: any SeriesDetailProviderProtocol = MockSeriesDetailProvider(),
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
-        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
+        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         self.seriesID = seriesID
         self.provider = provider
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
         self.userMediaSourceRepository = userMediaSourceRepository
+        self.diagnosticsService = diagnosticsService
     }
 
     public var selectedSeason: SeriesSeason? {
@@ -309,10 +341,13 @@ public final class SeriesDetailViewModel: ObservableObject {
     }
 
     public func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
         state = .loading
 
         do {
             guard let response = try await provider.seriesDetail(id: seriesID) else {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
                 series = nil
                 seasons = []
                 releases = []
@@ -326,6 +361,7 @@ public final class SeriesDetailViewModel: ObservableObject {
                 return
             }
 
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             series = response.series
             mediaItem = response.series.mediaItem()
             seasons = response.seasons
@@ -339,9 +375,13 @@ public final class SeriesDetailViewModel: ObservableObject {
             releases = rankScopedReleases(response.releases)
             await refreshLibraryState()
             await refreshUserSources()
+            guard generation == loadGeneration, !Task.isCancelled else { return }
             state = .loaded
         } catch {
-            state = .failed(CineFlowError.from(error, fallbackCategory: .metadata).userMessage)
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
+            state = .failed(cineFlowError.userMessage)
+            await diagnosticsService?.log(cineFlowError, operation: "seriesDetail.load", metadata: ["seriesID": seriesID])
         }
     }
 
@@ -354,6 +394,19 @@ public final class SeriesDetailViewModel: ObservableObject {
     public func selectEpisode(id: String) {
         guard allEpisodes.contains(where: { $0.id == id }) else { return }
         selectedEpisodeID = id
+    }
+
+    public func selectSeasonAndLoadReleases(id: String) async {
+        selectSeason(id: id)
+        if let episodeID = selectedEpisodeID {
+            await loadReleasesForEpisode(id: episodeID)
+        }
+    }
+
+    public func selectEpisodeAndLoadReleases(id: String) async {
+        selectEpisode(id: id)
+        guard selectedEpisodeID == id else { return }
+        await loadReleasesForEpisode(id: id)
     }
 
     public func playEpisode(id: String) {
@@ -443,6 +496,25 @@ public final class SeriesDetailViewModel: ObservableObject {
         return rankingEngine.rank(releases.map(\.release)).compactMap { ranked in
             guard let scope = scopeByReleaseID[ranked.release.id] else { return nil }
             return ScopedSeriesRelease(ranked: ranked, scope: scope)
+        }
+    }
+
+    private func loadReleasesForEpisode(id: String) async {
+        episodeReleaseGeneration += 1
+        let generation = episodeReleaseGeneration
+        do {
+            let episodeReleases = try await provider.episodeReleases(seriesID: seriesID, episodeID: id)
+            guard generation == episodeReleaseGeneration, selectedEpisodeID == id, !Task.isCancelled else { return }
+            releases = rankScopedReleases(episodeReleases)
+        } catch {
+            guard generation == episodeReleaseGeneration, selectedEpisodeID == id, !Task.isCancelled else { return }
+            releases = []
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .source)
+            await diagnosticsService?.log(
+                cineFlowError,
+                operation: "seriesDetail.episodeReleases",
+                metadata: ["seriesID": seriesID, "episodeID": id]
+            )
         }
     }
 

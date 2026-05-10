@@ -5,7 +5,9 @@ public protocol MetadataServiceProtocol {
     func searchMovies(query: String) async throws -> [MediaItem]
     func searchSeries(query: String) async throws -> [MediaItem]
     func movieDetail(tmdbID: Int) async throws -> Movie
+    func movieDetail(imdbID: String) async throws -> Movie
     func seriesDetail(tmdbID: Int) async throws -> Series
+    func seriesDetail(imdbID: String) async throws -> Series
     func seasonDetail(seriesTMDBID: Int, seasonNumber: Int) async throws -> Season
     func episodeDetail(seriesTMDBID: Int, seasonNumber: Int, episodeNumber: Int) async throws -> Episode
     func popularMovies() async throws -> [MediaItem]
@@ -63,7 +65,15 @@ public extension MetadataServiceProtocol {
         throw CoreMetadataServiceError.unsupported
     }
 
+    func movieDetail(imdbID: String) async throws -> Movie {
+        throw CoreMetadataServiceError.unsupported
+    }
+
     func seriesDetail(tmdbID: Int) async throws -> Series {
+        throw CoreMetadataServiceError.unsupported
+    }
+
+    func seriesDetail(imdbID: String) async throws -> Series {
         throw CoreMetadataServiceError.unsupported
     }
 

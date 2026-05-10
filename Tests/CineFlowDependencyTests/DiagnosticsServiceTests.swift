@@ -21,7 +21,7 @@ final class DiagnosticsServiceTests: XCTestCase {
             message: #"{"token":"json-secret","status":"failed"}"#
         )
 
-        let logURL = workspace.appendingPathComponent("Logs/cineflow.log")
+        let logURL = workspace.appendingPathComponent("Logs/streamly.log")
         let logBody = try String(contentsOf: logURL)
 
         XCTAssertTrue(logURL.path.contains("Logs"))
@@ -33,6 +33,39 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(logBody.contains("session=private"))
         XCTAssertFalse(logBody.contains("json-secret"))
         XCTAssertTrue(logBody.contains(#""token":"[REDACTED]""#))
+    }
+
+    func testLocalLoggerRedactsHeadersPrivateURLsAndMagnetLinks() async throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let service = LocalDiagnosticsService(baseDirectory: workspace)
+
+        await service.log(
+            level: .warning,
+            subsystem: .source,
+            message: "https://user:pass@example.test/feed?token=url-token&quality=1080p Authorization: Bearer live-token Cookie: sid=session-cookie magnet:?xt=urn:btih:privatehash",
+            metadata: [
+                "sourceURL": "https://example.test/manifest?api_key=query-secret&public=ok",
+                "authorizationHeader": "Bearer metadata-token",
+                "magnetURI": "magnet:?xt=urn:btih:metadataprivatehash"
+            ]
+        )
+
+        let logURL = workspace.appendingPathComponent("Logs/streamly.log")
+        let logBody = try String(contentsOf: logURL)
+
+        XCTAssertFalse(logBody.contains("live-token"))
+        XCTAssertFalse(logBody.contains("session-cookie"))
+        XCTAssertFalse(logBody.contains("user:pass"))
+        XCTAssertFalse(logBody.contains("url-token"))
+        XCTAssertFalse(logBody.contains("privatehash"))
+        XCTAssertFalse(logBody.contains("query-secret"))
+        XCTAssertFalse(logBody.contains("metadata-token"))
+        XCTAssertFalse(logBody.contains("metadataprivatehash"))
+        XCTAssertTrue(logBody.contains("quality=1080p"))
+        XCTAssertTrue(logBody.contains("public=ok"))
+        XCTAssertTrue(logBody.contains("[REDACTED]"))
+        XCTAssertTrue(logBody.contains("[REDACTED_MAGNET]"))
     }
 
     func testExportDiagnosticsCreatesZipPackageWithoutSecrets() async throws {
@@ -59,7 +92,7 @@ final class DiagnosticsServiceTests: XCTestCase {
         try unzip(zipURL, to: unzippedURL)
 
         let summary = try String(contentsOf: unzippedURL.appendingPathComponent("diagnostics/summary.json"))
-        let exportedLog = try String(contentsOf: unzippedURL.appendingPathComponent("diagnostics/logs/cineflow.log"))
+        let exportedLog = try String(contentsOf: unzippedURL.appendingPathComponent("diagnostics/logs/streamly.log"))
 
         XCTAssertEqual(zipURL.pathExtension, "zip")
         XCTAssertTrue(summary.contains(#""appVersion":"1.2.3""#))
@@ -70,6 +103,23 @@ final class DiagnosticsServiceTests: XCTestCase {
         XCTAssertFalse(summary.contains("private-token"))
         XCTAssertFalse(exportedLog.contains("private-token"))
         XCTAssertTrue(exportedLog.contains("[REDACTED]"))
+    }
+
+    func testLocalLoggerMigratesLegacyCineFlowLogToStreamlyLog() async throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+        let logsURL = workspace.appendingPathComponent("Logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logsURL, withIntermediateDirectories: true)
+        try Data("legacy log line\n".utf8).write(to: logsURL.appendingPathComponent("cineflow.log"))
+
+        let service = LocalDiagnosticsService(baseDirectory: workspace)
+        await service.log(level: .info, subsystem: .app, message: "new log line")
+
+        let streamlyLogURL = logsURL.appendingPathComponent("streamly.log")
+        let logBody = try String(contentsOf: streamlyLogURL)
+        XCTAssertTrue(logBody.contains("legacy log line"))
+        XCTAssertTrue(logBody.contains("new log line"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logsURL.appendingPathComponent("cineflow.log").path))
     }
 
     private func unzip(_ zipURL: URL, to destinationURL: URL) throws {

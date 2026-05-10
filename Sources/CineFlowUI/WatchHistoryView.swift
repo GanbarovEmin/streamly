@@ -33,7 +33,7 @@ public struct ContinueWatchingView: View {
         case .failed(let message):
             ErrorState(title: "Не удалось загрузить прогресс", message: message)
         case .empty:
-            EmptyState(title: "Нет незавершенного просмотра", message: "Начните просмотр, и CineFlow сохранит позицию для продолжения.", systemImage: "play.rectangle")
+            EmptyState(title: "Нет незавершенного просмотра", message: "Начните просмотр, и Streamly сохранит позицию для продолжения.", systemImage: "play.rectangle")
                 .frame(maxWidth: .infinity, minHeight: 360)
         case .loaded:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 430), spacing: CFSpacing.md)], spacing: CFSpacing.md) {

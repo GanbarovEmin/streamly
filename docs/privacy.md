@@ -26,7 +26,7 @@ Credentials and tokens are stored through macOS Keychain where supported:
 - OpenSubtitles credentials or tokens;
 - source provider usernames, passwords, cookies or session tokens.
 
-Local settings should store only references to Keychain items, not raw secrets.
+Local settings should store only references to Keychain items, visible account labels or authentication status, not raw secrets.
 
 ## Not Sent Automatically
 
@@ -36,7 +36,7 @@ Diagnostics are not uploaded automatically. A diagnostics export is created only
 
 ## Diagnostics Export
 
-Diagnostics exports are local files that the user can choose to share manually. Logs should redact secret-like values such as passwords, tokens, cookies, sessions and API keys.
+Diagnostics exports are local files that the user can choose to share manually. Logs should redact secret-like values such as passwords, tokens, cookies, sessions, API keys, Authorization headers, sensitive URL query parameters, private source URLs and magnet links.
 
 ## Delete Local Data
 

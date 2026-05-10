@@ -4,9 +4,9 @@
 
 ![Streamly hero banner](docs/assets/hero-banner.png)
 
-Streamly is a local-first media client for macOS that brings TMDB discovery, user-controlled playback sources, local-file playback, personal library features and updates into one polished Apple Silicon app.
+Streamly is a local-first media client for macOS that brings Cinemeta/TMDB discovery, user-controlled playback sources, local-file playback, personal library features and updates into one polished Apple Silicon app.
 
-Streamly is the public app and distribution name. The Swift package, products and source modules still use the internal `CineFlow*` names in this pass.
+Streamly is the public app, Swift package and executable product name. Some legacy source targets still use `CineFlow*` implementation names until a separate module-graph migration renames them safely.
 
 ## What Streamly Does
 
@@ -20,8 +20,9 @@ Streamly does not provide or host media content. It is a media client that works
 - Netflix-like / Apple-like dark interface.
 - User-controlled local file, magnet and `.torrent` source references.
 - Native local-file playback through AVFoundation.
-- Honest unavailable state for torrent streaming until the production libtorrent bridge is connected.
-- TMDB metadata integration.
+- Torrent streaming through the bundled `CineFlowLibtorrentNative.xcframework` runtime.
+- mpv-capable playback bridge with AVFoundation fallback when no mpv runtime is available.
+- Cinemeta/Stremio metadata integration with TMDB fallback for movie and series discovery.
 - Local library and watch history.
 - Continue Watching.
 - User lists and favorites.
@@ -50,7 +51,7 @@ Screenshots are placeholder mock UI assets and can be replaced with real app cap
 
 - macOS 13.0 or newer.
 - Apple Silicon Mac: M1, M2, M3, M4 or newer.
-- Internet connection for TMDB metadata, search and release updates.
+- Internet connection for metadata, search and release updates.
 - Free disk space for local app data, image cache and diagnostics exports.
 
 ## Installation
