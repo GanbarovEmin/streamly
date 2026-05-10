@@ -5,11 +5,13 @@ public final class MockSettingsRepository: SettingsRepositoryProtocol {
     private var settings: AppSettings
     private var subtitleSettingsValue: SubtitleSettings
     private var languages: [String]
+    private var metadataCredentials: [String: String]
 
     public init(settings: AppSettings = AppSettings(), languages: [String] = ["ru", "en"]) {
         self.settings = settings
         subtitleSettingsValue = SubtitleSettings(languagePreference: SubtitleLanguagePreference(languages))
         self.languages = languages
+        metadataCredentials = [:]
     }
 
     public var appSettings: AppSettings {
@@ -38,9 +40,23 @@ public final class MockSettingsRepository: SettingsRepositoryProtocol {
         languages = settings.languagePreference.languageCodes
     }
 
+    public func metadataCredential(forKey key: String) async -> String? {
+        metadataCredentials[key]
+    }
+
+    public func setMetadataCredential(_ value: String?, forKey key: String) async {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            metadataCredentials[key] = trimmed
+        } else {
+            metadataCredentials.removeValue(forKey: key)
+        }
+    }
+
     public func clearAllLocalData() async {
         settings = AppSettings()
         subtitleSettingsValue = SubtitleSettings()
         languages = ["ru", "en"]
+        metadataCredentials.removeAll()
     }
 }

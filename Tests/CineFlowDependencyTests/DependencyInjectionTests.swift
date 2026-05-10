@@ -30,7 +30,7 @@ final class DependencyInjectionTests: XCTestCase {
         XCTAssertEqual(subtitles.map(\.languageCode), ["ru", "en"])
         XCTAssertEqual(library.map(\.id), ["tmdb:movie:603"])
         XCTAssertEqual(languages, ["ru", "en"])
-        XCTAssertTrue(diagnostics.contains("CineFlow diagnostics"))
+        XCTAssertTrue(diagnostics.contains("Streamly diagnostics"))
         XCTAssertEqual(updateStatus, .idle)
         XCTAssertEqual(sourceCatalog.providerNames, ["Mock Source Provider"])
     }

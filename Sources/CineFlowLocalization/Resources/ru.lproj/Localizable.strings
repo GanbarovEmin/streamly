@@ -25,7 +25,7 @@
 "topControl.profile" = "Профиль";
 "search.placeholder" = "Поиск фильмов, сериалов, релизов";
 "search.title" = "Поиск";
-"search.subtitle" = "Ищите фильмы, сериалы и torrent-релизы через нормализованный mock provider.";
+"search.subtitle" = "Ищите фильмы и сериалы через TMDB-метаданные. Воспроизведение использует только добавленные вами источники.";
 "search.filters" = "Фильтры";
 "search.sort" = "Сортировка";
 "search.state.idle.title" = "Поиск Streamly";
@@ -92,8 +92,8 @@
 "series.release.scope.episode" = "Серия";
 
 "sidebar.tagline" = "Киноцентр";
-"sidebar.runtime.title" = "Mock-режим";
-"sidebar.runtime.message" = "Внешние API и движки не активны";
+"sidebar.runtime.title" = "Локальный режим";
+"sidebar.runtime.message" = "TMDB-метаданные активны; источники добавляете вы";
 
 "hero.metric.bestRelease" = "Лучший релиз";
 "hero.metric.mode" = "Режим";
@@ -106,7 +106,7 @@
 "home.action.addToLibrary" = "В библиотеку";
 "home.state.loading" = "Готовим главный экран";
 "home.state.empty.title" = "Главный экран пуст";
-"home.state.empty.message" = "Добавьте фильмы или сериалы в seed layer, чтобы наполнить Streamly.";
+"home.state.empty.message" = "Добавьте TMDB credentials в настройках или локальном конфиге, чтобы наполнить Streamly.";
 "home.state.error.title" = "Главный экран недоступен";
 "home.section.continueWatching" = "Продолжить просмотр";
 "home.section.popularMovies" = "Популярное — Фильмы";
@@ -115,13 +115,13 @@
 "home.section.recommended" = "Рекомендовано";
 "home.section.topQuality" = "Топ по качеству";
 "hero.subtitle.nativeShell" = "Нативная macOS media shell";
-"hero.subtitle.noMetadata" = "Mock-метаданные недоступны";
-"hero.subtitle.loadFailed" = "Mock-окружение не загрузилось";
+"hero.subtitle.noMetadata" = "Метаданные еще не загружены";
+"hero.subtitle.loadFailed" = "Метаданные не загрузились";
 "hero.unknownYear" = "Неизвестно";
 
 "mediaKind.movie" = "Фильм";
 "mediaKind.series" = "Сериал";
-"release.unavailable" = "Mock-релизы недоступны";
+"release.unavailable" = "Пользовательские источники не добавлены";
 "release.best.format" = "%@ · %d сидов";
 "subtitle.language.format" = "Субтитры: %@";
 "subtitle.language.unavailable" = "Субтитры: не настроены";

@@ -3,17 +3,17 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>CineFlow</string>
+    <string>Streamly</string>
     <key>CFBundleExecutable</key>
-    <string>CineFlow</string>
+    <string>Streamly</string>
     <key>CFBundleIdentifier</key>
-    <string>com.cineflow.app</string>
+    <string>com.streamly.app</string>
     <key>CFBundleName</key>
-    <string>CineFlow</string>
+    <string>Streamly</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>1.0.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>100</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleDocumentTypes</key>
@@ -51,7 +51,7 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>SUFeedURL</key>
-    <string>https://&lt;github-pages-domain&gt;/cineflow/appcast.xml</string>
+    <string>https://ganbarovemin.github.io/streamly/appcast.xml</string>
     <key>SUPublicEDKey</key>
     <string>REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY</string>
 </dict>

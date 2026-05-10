@@ -100,7 +100,7 @@ final class TorrentEngineTests: XCTestCase {
         let cacheURL = engine.temporaryStorageURL
 
         XCTAssertTrue(cacheURL.path.contains("Application Support"))
-        XCTAssertTrue(cacheURL.path.contains("CineFlow/TorrentCache"))
+        XCTAssertTrue(cacheURL.path.contains("Streamly/TorrentCache"))
 
         do {
             _ = try await engine.addMagnet(uri: "magnet:?xt=urn:btih:placeholder")

@@ -78,7 +78,7 @@ public struct SubtitleCache {
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         return applicationSupport
-            .appendingPathComponent("CineFlow", isDirectory: true)
+            .appendingPathComponent("Streamly", isDirectory: true)
             .appendingPathComponent("Subtitles", isDirectory: true)
     }
 

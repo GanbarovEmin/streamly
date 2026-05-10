@@ -5,17 +5,20 @@ import SwiftUI
 public struct LibraryView: View {
     @ObservedObject private var viewModel: LibraryViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
+    @ObservedObject private var imagePipeline: CineFlowImagePipeline
 
     private let initialSection: LibrarySection
 
     public init(
         viewModel: LibraryViewModel,
         navigationCoordinator: NavigationCoordinator,
-        initialSection: LibrarySection = .favorites
+        initialSection: LibrarySection = .favorites,
+        imagePipeline: CineFlowImagePipeline
     ) {
         self.viewModel = viewModel
         self.navigationCoordinator = navigationCoordinator
         self.initialSection = initialSection
+        self.imagePipeline = imagePipeline
     }
 
     public var body: some View {
@@ -207,9 +210,15 @@ public struct LibraryView: View {
                     },
                     rate: {
                         Task { try? await viewModel.rate(item, rating: 8) }
+                    },
+                    imageDataLoader: { url in
+                        try await imagePipeline.data(for: url)
                     }
                 )
             }
+        }
+        .task(id: viewModel.artworkPrefetchKey) {
+            await imagePipeline.prefetch(viewModel.prefetchArtworkURLs)
         }
     }
 
@@ -390,6 +399,7 @@ private struct LibraryPosterCard: View {
     let remove: () -> Void
     let addToList: () -> Void
     let rate: () -> Void
+    let imageDataLoader: CFImageDataLoader?
 
     @State private var isHovering = false
 
@@ -414,7 +424,7 @@ private struct LibraryPosterCard: View {
                         )
                         .overlay {
                             if let artworkURL = model.artworkURL {
-                                CFCachedAsyncImage(url: artworkURL, contentMode: .fill)
+                                CFCachedAsyncImage(url: artworkURL, contentMode: .fill, imageDataLoader: imageDataLoader)
                                     .clipShape(RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
                             } else {
                                 Text(String(model.title.prefix(1)))
@@ -442,11 +452,14 @@ private struct LibraryPosterCard: View {
                     .padding(CFSpacing.md)
                     .frame(maxHeight: .infinity, alignment: .top)
 
-                    Image(systemName: "play.circle.fill")
-                        .font(.system(size: 32, weight: .semibold))
-                        .foregroundStyle(CFColors.textPrimary)
-                        .cfShadow(.icon)
-                        .padding(CFSpacing.md)
+                    if isHovering {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 32, weight: .semibold))
+                            .foregroundStyle(CFColors.textPrimary)
+                            .cfShadow(.icon)
+                            .padding(CFSpacing.md)
+                            .transition(.opacity)
+                    }
                 }
 
                 Text(model.title)
@@ -459,8 +472,8 @@ private struct LibraryPosterCard: View {
                     .foregroundStyle(CFColors.textMuted)
                     .lineLimit(1)
             }
-            .scaleEffect(isHovering ? CFMotion.hoverScale : 1)
-            .animation(CFMotion.spring, value: isHovering)
+            .scaleEffect(isHovering ? 1.012 : 1)
+            .animation(CFMotion.quick, value: isHovering)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }

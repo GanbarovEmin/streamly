@@ -76,7 +76,7 @@ extension KeychainServiceError: CineFlowErrorConvertible {
         CineFlowError(
             category: .permissions,
             technicalDescription: errorDescription ?? String(describing: self),
-            userMessage: "CineFlow cannot access secure credentials.",
+            userMessage: "Streamly cannot access secure credentials.",
             recoverySuggestion: "Check Keychain and macOS permissions, then try again.",
             logLevel: .warning
         )
@@ -86,7 +86,7 @@ extension KeychainServiceError: CineFlowErrorConvertible {
 public struct KeychainService: KeychainServiceProtocol {
     private let service: String
 
-    public init(service: String = "com.cineflow.credentials") {
+    public init(service: String = "com.streamly.credentials") {
         self.service = service
     }
 

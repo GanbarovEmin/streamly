@@ -12,7 +12,7 @@ public struct MockDiagnosticsService: DiagnosticsServiceProtocol {
 
     public func exportDiagnosticsPackage() async throws -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CineFlow-Mock-Diagnostics")
+            .appendingPathComponent("Streamly-Mock-Diagnostics")
             .appendingPathExtension("zip")
         try Data("mock diagnostics".utf8).write(to: url)
         return url

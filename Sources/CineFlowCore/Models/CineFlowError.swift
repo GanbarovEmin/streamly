@@ -99,7 +99,7 @@ public struct CineFlowError: LocalizedError, Equatable, Sendable {
         return CineFlowError(
             category: .network,
             technicalDescription: "URLError.\(urlErrorCodeName(error.code)) \(error.localizedDescription)",
-            userMessage: "CineFlow cannot reach the network right now.",
+            userMessage: "Streamly cannot reach the network right now.",
             recoverySuggestion: suggestion,
             logLevel: .warning
         )
@@ -127,7 +127,7 @@ public struct CineFlowError: LocalizedError, Equatable, Sendable {
             return CineFlowError(
                 category: .permissions,
                 technicalDescription: "CocoaError.\(error.code.rawValue) \(error.localizedDescription)",
-                userMessage: "CineFlow does not have permission to access this file.",
+                userMessage: "Streamly does not have permission to access this file.",
                 recoverySuggestion: "Choose another file or grant access in macOS privacy settings.",
                 logLevel: .warning
             )
@@ -149,7 +149,7 @@ public struct CineFlowError: LocalizedError, Equatable, Sendable {
     public static func defaultUserMessage(for category: CineFlowErrorCategory) -> String {
         switch category {
         case .network:
-            "CineFlow cannot reach the network right now."
+            "Streamly cannot reach the network right now."
         case .metadata:
             "Metadata could not be loaded."
         case .source:
@@ -169,7 +169,7 @@ public struct CineFlowError: LocalizedError, Equatable, Sendable {
         case .update:
             "Update check failed."
         case .permissions:
-            "CineFlow does not have permission to complete this action."
+            "Streamly does not have permission to complete this action."
         case .unknown:
             "Something went wrong."
         }
@@ -188,7 +188,7 @@ public struct CineFlowError: LocalizedError, Equatable, Sendable {
         case .torrent:
             "Try another release or source."
         case .database:
-            "Restart CineFlow. If the problem continues, export diagnostics."
+            "Restart Streamly. If the problem continues, export diagnostics."
         case .update:
             "Try again later or download the latest build manually."
         default:

@@ -28,6 +28,14 @@ public final class UserListsViewModel: ObservableObject {
         return lists.first { $0.id == selectedListID } ?? lists.first
     }
 
+    public var prefetchArtworkURLs: [URL] {
+        visibleItems.compactMap(\.bestPosterURL)
+    }
+
+    public var artworkPrefetchKey: String {
+        prefetchArtworkURLs.prefix(24).map(\.absoluteString).joined(separator: "|")
+    }
+
     public func load() async {
         state = .loading
         errorMessage = nil

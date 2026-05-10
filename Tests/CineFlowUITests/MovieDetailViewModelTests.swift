@@ -1,3 +1,4 @@
+import CineFlowCore
 import XCTest
 @testable import CineFlowUI
 
@@ -78,6 +79,27 @@ final class MovieDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalUserSourceSelectionIsStoredAndLoadedForMovie() async throws {
+        let repository = InMemoryUserMediaSourceRepository()
+        let viewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: MockMovieDetailProvider(),
+            userMediaSourceRepository: repository
+        )
+        let localURL = URL(fileURLWithPath: "/tmp/The Matrix.mkv")
+
+        await viewModel.load()
+        XCTAssertTrue(viewModel.userSources.isEmpty)
+
+        await viewModel.addLocalSource(url: localURL)
+
+        XCTAssertEqual(viewModel.userSources.map(\.displayName), ["The Matrix"])
+        XCTAssertEqual(viewModel.userSources.first?.url, localURL)
+        XCTAssertEqual(viewModel.selectedUserSourceID, viewModel.userSources.first?.id)
+        XCTAssertEqual(viewModel.userSources.first?.playbackMediaSource?.url, localURL)
+    }
+
+    @MainActor
     func testUnknownMovieUsesEmptyState() async {
         let viewModel = MovieDetailViewModel(mediaID: "missing", provider: MockMovieDetailProvider())
 
@@ -85,5 +107,27 @@ final class MovieDetailViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state, .empty)
         XCTAssertNil(viewModel.movie)
+    }
+}
+
+private actor InMemoryUserMediaSourceRepository: UserMediaSourceRepositoryProtocol {
+    private var sourcesByID: [String: UserMediaSource] = [:]
+
+    func sources(for mediaID: String) async throws -> [UserMediaSource] {
+        sourcesByID.values
+            .filter { $0.mediaID == mediaID }
+            .sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func source(id: String) async throws -> UserMediaSource? {
+        sourcesByID[id]
+    }
+
+    func save(_ source: UserMediaSource) async throws {
+        sourcesByID[source.id] = source
+    }
+
+    func delete(id: String) async throws {
+        sourcesByID.removeValue(forKey: id)
     }
 }

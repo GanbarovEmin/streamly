@@ -66,6 +66,97 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertEqual(catalog.providerIds, ["mock", "rutracker"])
     }
 
+    func testTorrentioConfigurationURLBuilderUsesConfiguredStremioPath() throws {
+        let settings = TorrentioSettings(
+            providers: [.rutor, .rutracker],
+            priorityLanguage: .russian,
+            excludedQualities: [.screener, .cam],
+            resultLimit: 10
+        )
+
+        let url = try TorrentioConfigurationURLBuilder().streamURL(
+            type: .movie,
+            id: "tt0133093",
+            settings: settings
+        )
+
+        XCTAssertEqual(
+            url.path,
+            "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=10/stream/movie/tt0133093.json"
+        )
+    }
+
+    func testTorrentioStreamResponseNormalizesIntoTorrentRelease() throws {
+        let json = """
+        {
+          "streams": [
+            {
+              "name": "Torrentio\\n4k DV | HDR",
+              "title": "The Matrix 1999 WEB-DL 2160p H265 DV HDR\\n👤 14 💾 18.45 GB ⚙️ Rutracker\\n🇬🇧 / 🇷🇺",
+              "infoHash": "61065ea115b7cc3e8db9fb5ab1f6f327f08bd1c9",
+              "fileIdx": 0,
+              "behaviorHints": {
+                "bingeGroup": "torrentio|4k|WEB-DL|h265|DV|HDR",
+                "filename": "The.Matrix.1999.WEB-DL.2160p.mkv"
+              },
+              "sources": [
+                "tracker:http://bt4.t-ru.org/ann?magnet",
+                "dht:61065ea115b7cc3e8db9fb5ab1f6f327f08bd1c9",
+                "tracker:udp://tracker.opentrackr.org:1337/announce"
+              ]
+            }
+          ]
+        }
+        """
+        let response = try JSONDecoder().decode(StremioStreamResponse.self, from: Data(json.utf8))
+
+        let releases = TorrentioStreamMapper().releases(from: response, mediaID: "tt0133093")
+
+        XCTAssertEqual(releases.count, 1)
+        let release = try XCTUnwrap(releases.first)
+        XCTAssertEqual(release.id, "torrentio:tt0133093:61065ea115b7cc3e8db9fb5ab1f6f327f08bd1c9:0")
+        XCTAssertEqual(release.sourceId, "torrentio")
+        XCTAssertEqual(release.sourceName, "Rutracker")
+        XCTAssertEqual(release.title, "The.Matrix.1999.WEB-DL.2160p.mkv")
+        XCTAssertEqual(release.quality, .ultraHD)
+        XCTAssertEqual(release.codec, .h265)
+        XCTAssertEqual(release.hdr, .dolbyVision)
+        XCTAssertEqual(release.audioLanguages, ["en", "ru"])
+        XCTAssertEqual(release.seeders, 14)
+        XCTAssertEqual(release.sizeBytes, 18_450_000_000)
+        XCTAssertTrue(release.magnetURI?.contains("xt=urn:btih:61065ea115b7cc3e8db9fb5ab1f6f327f08bd1c9") == true)
+        XCTAssertTrue(release.magnetURI?.contains("tr=http%3A%2F%2Fbt4.t-ru.org%2Fann%3Fmagnet") == true)
+        XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce") == true)
+    }
+
+    func testTorrentioProviderIsVisibleButInactiveByDefault() async throws {
+        let settingsStore = InMemoryTorrentioSettingsStore()
+        let catalog = SourceProviderCatalog.providers(
+            featureFlags: SourceProviderFeatureFlags(
+                mockProvider: false,
+                torrentioProvider: true
+            ),
+            torrentioSettingsStore: settingsStore
+        )
+        let manager = SourceManager(
+            providers: catalog.makeProviders(),
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+
+        let settings = try await manager.settings(for: "torrentio")
+        let initiallyActive = try await manager.activeProviders().map(\.sourceId)
+
+        XCTAssertEqual(catalog.providerIds, ["torrentio"])
+        XCTAssertFalse(settings.isEnabled)
+        XCTAssertTrue(initiallyActive.isEmpty)
+
+        try await manager.setSourceEnabled(true, sourceId: "torrentio")
+
+        let enabledActive = try await manager.activeProviders().map(\.sourceId)
+        XCTAssertEqual(enabledActive, ["torrentio"])
+    }
+
     func testAuthenticationStoresSecretsInCredentialStoreAndSettingsKeepOnlyKeychainReference() async throws {
         let credentialStore = InMemorySourceCredentialStore()
         let manager = SourceManager(

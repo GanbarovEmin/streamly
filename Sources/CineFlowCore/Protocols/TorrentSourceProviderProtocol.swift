@@ -132,6 +132,7 @@ public protocol TorrentSourceProviderProtocol: Sendable {
     var displayName: String { get }
     var requiresAuthentication: Bool { get }
     var isEnabled: Bool { get }
+    var defaultIsEnabled: Bool { get }
 
     func search(query: String, filters: TorrentSourceSearchFilters) async throws -> [TorrentRelease]
     func fetchDetails(releaseId: String) async throws -> TorrentReleaseDetails
@@ -140,6 +141,10 @@ public protocol TorrentSourceProviderProtocol: Sendable {
 }
 
 public extension TorrentSourceProviderProtocol {
+    var defaultIsEnabled: Bool {
+        isEnabled
+    }
+
     func authenticate(credentials: SourceCredentials) async throws -> SourceAuthenticationStatus {
         throw SourceProviderError.authenticationUnsupported(sourceId: sourceId)
     }

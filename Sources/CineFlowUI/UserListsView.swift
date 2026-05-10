@@ -9,10 +9,12 @@ public struct UserListsView: View {
     @State private var newListDescription = ""
     @State private var renameName = ""
     @State private var renameDescription = ""
+    @ObservedObject private var imagePipeline: CineFlowImagePipeline
 
-    public init(viewModel: UserListsViewModel, navigationCoordinator: NavigationCoordinator) {
+    public init(viewModel: UserListsViewModel, navigationCoordinator: NavigationCoordinator, imagePipeline: CineFlowImagePipeline) {
         _viewModel = StateObject(wrappedValue: viewModel)
         self.navigationCoordinator = navigationCoordinator
+        self.imagePipeline = imagePipeline
     }
 
     public var body: some View {
@@ -176,6 +178,8 @@ public struct UserListsView: View {
                             ForEach(viewModel.visibleItems) { item in
                                 PosterCard(model: viewModel.cardModel(for: item)) {
                                     navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+                                } imageDataLoader: { url in
+                                    try await imagePipeline.data(for: url)
                                 }
                                 .contextMenu {
                                     Button("Открыть", systemImage: "info.circle") {
@@ -186,6 +190,9 @@ public struct UserListsView: View {
                                     }
                                 }
                             }
+                        }
+                        .task(id: viewModel.artworkPrefetchKey) {
+                            await imagePipeline.prefetch(viewModel.prefetchArtworkURLs)
                         }
                     }
                 }

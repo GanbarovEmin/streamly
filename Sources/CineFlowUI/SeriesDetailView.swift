@@ -1,7 +1,9 @@
 import CineFlowCore
 import CineFlowDesignSystem
 import CineFlowLocalization
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 public struct SeriesDetailView: View {
     @StateObject private var viewModel: SeriesDetailViewModel
@@ -11,9 +13,16 @@ public struct SeriesDetailView: View {
     public init(
         seriesID: String,
         navigationCoordinator: NavigationCoordinator,
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        detailProvider: (any SeriesDetailProviderProtocol)? = nil,
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
     ) {
-        _viewModel = StateObject(wrappedValue: SeriesDetailViewModel(seriesID: seriesID, libraryRepository: libraryRepository))
+        _viewModel = StateObject(wrappedValue: SeriesDetailViewModel(
+            seriesID: seriesID,
+            provider: detailProvider ?? MockSeriesDetailProvider(),
+            libraryRepository: libraryRepository,
+            userMediaSourceRepository: userMediaSourceRepository
+        ))
         self.navigationCoordinator = navigationCoordinator
     }
 
@@ -57,7 +66,7 @@ public struct SeriesDetailView: View {
     private func hero(_ series: SeriesDetail) -> some View {
         GeometryReader { proxy in
             ZStack(alignment: .bottomLeading) {
-                MovieBackdrop(accentIndex: series.backdropAccentIndex, title: series.title)
+                MovieBackdrop(accentIndex: series.backdropAccentIndex, title: series.title, backdropURL: series.backdropURL)
 
                 LinearGradient(
                     colors: [CFColors.clear, CFColors.backgroundPrimary.opacity(0.48), CFColors.backgroundPrimary.opacity(0.92)],
@@ -92,9 +101,13 @@ public struct SeriesDetailView: View {
                 )
             )
             .overlay {
-                Text(String(series.title.prefix(1)))
-                    .font(.system(size: 86, weight: .black, design: .rounded))
-                    .foregroundStyle(CFColors.textPrimary.opacity(0.22))
+                if let posterURL = series.posterURL {
+                    CFCachedAsyncImage(url: posterURL, contentMode: .fill)
+                } else {
+                    Text(String(series.title.prefix(1)))
+                        .font(.system(size: 86, weight: .black, design: .rounded))
+                        .foregroundStyle(CFColors.textPrimary.opacity(0.22))
+                }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
@@ -141,14 +154,12 @@ public struct SeriesDetailView: View {
                 PrimaryButton(t(.seriesActionWatch), systemImage: "play.fill") {
                     if let episode = viewModel.selectedEpisode {
                         viewModel.playEpisode(id: episode.id)
-                        navigationCoordinator.navigate(to: .player(mediaID: episode.id))
+                        playSeries(series)
                     }
                 }
                 SecondaryButton(t(.seriesActionContinue), systemImage: "play.rectangle.fill") {
                     viewModel.continueWatching()
-                    if let episodeID = viewModel.lastPlayedEpisodeID {
-                        navigationCoordinator.navigate(to: .player(mediaID: episodeID))
-                    }
+                    playSeries(series)
                 }
                 SecondaryButton(t(.seriesActionLibrary), systemImage: "plus") {
                     viewModel.addToLibrary()
@@ -184,7 +195,7 @@ public struct SeriesDetailView: View {
             MediaCarousel(
                 title: t(.seriesTabSimilar),
                 items: viewModel.similar.map {
-                    CFMediaCardModel(id: $0.id, title: $0.title, metadata: $0.metadata, badge: $0.quality)
+                    CFMediaCardModel(id: $0.id, title: $0.title, metadata: $0.metadata, badge: $0.quality, artworkURL: $0.artworkURL)
                 }
             ) { item in
                 navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
@@ -230,7 +241,7 @@ public struct SeriesDetailView: View {
                         viewModel.selectEpisode(id: episode.id)
                     } play: {
                         viewModel.playEpisode(id: episode.id)
-                        navigationCoordinator.navigate(to: .player(mediaID: episode.id))
+                        playSeriesID(viewModel.series?.id ?? episode.id)
                     }
                 }
             }
@@ -251,11 +262,41 @@ public struct SeriesDetailView: View {
                         onPlay: {
                             if let episode = viewModel.selectedEpisode {
                                 viewModel.playEpisode(id: episode.id)
-                                navigationCoordinator.navigate(to: .player(mediaID: episode.id))
+                                playSeriesID(viewModel.series?.id ?? episode.id)
                             }
                         }
                     )
                 }
+            }
+        }
+    }
+
+    private func playSeries(_ series: SeriesDetail) {
+        playSeriesID(series.id)
+    }
+
+    private func playSeriesID(_ mediaID: String) {
+        if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
+            viewModel.selectUserSource(source)
+            navigationCoordinator.navigate(to: .player(mediaID: mediaID, sourceID: source.id))
+            return
+        }
+        openLocalMediaPanel(mediaID: mediaID)
+    }
+
+    private func openLocalMediaPanel(mediaID: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose a local video file for Streamly playback."
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                await viewModel.addLocalSource(url: url)
+                navigationCoordinator.navigate(to: .player(mediaID: mediaID, sourceID: viewModel.selectedUserSourceID))
             }
         }
     }

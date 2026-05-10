@@ -8,7 +8,7 @@ final class CineFlowErrorTests: XCTestCase {
 
         XCTAssertEqual(error.category, .network)
         XCTAssertEqual(error.logLevel, .warning)
-        XCTAssertEqual(error.userMessage, "CineFlow cannot reach the network right now.")
+        XCTAssertEqual(error.userMessage, "Streamly cannot reach the network right now.")
         XCTAssertEqual(error.recoverySuggestion, "Check your internet connection and try again.")
         XCTAssertTrue(error.technicalDescription.contains("notConnectedToInternet"))
         XCTAssertFalse(error.userMessage.contains("URLError"))

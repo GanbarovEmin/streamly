@@ -17,6 +17,7 @@ public struct ContentContainerView: View {
     private let environment: AppEnvironment
     private let sourceManager: SourceManager?
     private let playbackProgressRecorder: PlaybackProgressRecorder?
+    private let imagePipeline: CineFlowImagePipeline
 
     public init(
         route: AppRoute,
@@ -25,7 +26,8 @@ public struct ContentContainerView: View {
         searchViewModel: SearchViewModel,
         navigationCoordinator: NavigationCoordinator,
         sourceManager: SourceManager? = nil,
-        playbackProgressRecorder: PlaybackProgressRecorder? = nil
+        playbackProgressRecorder: PlaybackProgressRecorder? = nil,
+        imagePipeline: CineFlowImagePipeline
     ) {
         self.route = route
         self.viewModel = viewModel
@@ -34,21 +36,27 @@ public struct ContentContainerView: View {
         self.environment = environment
         self.sourceManager = sourceManager
         self.playbackProgressRecorder = playbackProgressRecorder
-        _homeViewModel = StateObject(wrappedValue: HomeViewModel(progressRepository: environment.playbackProgressRepository))
+        self.imagePipeline = imagePipeline
+        _homeViewModel = StateObject(wrappedValue: HomeViewModel(
+            metadataService: environment.metadataService,
+            progressRepository: environment.playbackProgressRepository,
+            libraryRepository: environment.libraryRepository
+        ))
         _libraryViewModel = StateObject(wrappedValue: LibraryViewModel(repository: environment.libraryRepository))
     }
 
     public var body: some View {
         if route == .home {
-            HomeView(viewModel: homeViewModel, navigationCoordinator: navigationCoordinator)
+            HomeView(viewModel: homeViewModel, navigationCoordinator: navigationCoordinator, imagePipeline: imagePipeline)
         } else if route == .search {
             SearchView(viewModel: searchViewModel, navigationCoordinator: navigationCoordinator)
         } else if route == .library {
-            LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .favorites)
+            LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .favorites, imagePipeline: imagePipeline)
         } else if route == .lists {
             UserListsView(
                 viewModel: UserListsViewModel(repository: environment.libraryRepository),
-                navigationCoordinator: navigationCoordinator
+                navigationCoordinator: navigationCoordinator,
+                imagePipeline: imagePipeline
             )
         } else if route == .history {
             if let historyRepository = environment.watchHistoryRepository {
@@ -57,7 +65,7 @@ public struct ContentContainerView: View {
                     navigationCoordinator: navigationCoordinator
                 )
             } else {
-                LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .watched)
+                LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .watched, imagePipeline: imagePipeline)
             }
         } else if route == .continueWatching {
             if let progressRepository = environment.playbackProgressRepository {
@@ -66,7 +74,7 @@ public struct ContentContainerView: View {
                     navigationCoordinator: navigationCoordinator
                 )
             } else {
-                LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .watched)
+                LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .watched, imagePipeline: imagePipeline)
             }
         } else if route == .settings {
             SettingsView(
@@ -77,9 +85,24 @@ public struct ContentContainerView: View {
             )
         } else if case .mediaDetail(let id) = route {
             if id.contains(":tv:") {
-                SeriesDetailView(seriesID: id, navigationCoordinator: navigationCoordinator, libraryRepository: environment.libraryRepository)
+                SeriesDetailView(
+                    seriesID: id,
+                    navigationCoordinator: navigationCoordinator,
+                    libraryRepository: environment.libraryRepository,
+                    detailProvider: TMDBSeriesDetailProvider(metadataService: environment.metadataService),
+                    userMediaSourceRepository: environment.userMediaSourceRepository
+                )
             } else {
-                MovieDetailView(mediaID: id, navigationCoordinator: navigationCoordinator, libraryRepository: environment.libraryRepository)
+                MovieDetailView(
+                    mediaID: id,
+                    navigationCoordinator: navigationCoordinator,
+                    libraryRepository: environment.libraryRepository,
+                    detailProvider: TMDBMovieDetailProvider(
+                        metadataService: environment.metadataService,
+                        torrentAggregator: sourceManager.map { TorrentSearchAggregator(sourceManager: $0) }
+                    ),
+                    userMediaSourceRepository: environment.userMediaSourceRepository
+                )
             }
         } else {
             legacyBody
@@ -155,21 +178,13 @@ public struct ContentContainerView: View {
             ) {
                 navigationCoordinator.navigate(to: .player(mediaID: id))
             }
-        case .player(let mediaID):
-            PlayerView(
-                viewModel: PlayerViewModel(
-                    service: viewModel.playbackService,
-                    mediaSource: PlaybackMediaSource(
-                        id: mediaID,
-                        title: mediaID,
-                        url: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("cineflow-mock-player.mkv"),
-                        qualityLabel: "Mock 2160p",
-                        sourceName: "Mock Source"
-                    ),
-                    diagnosticsService: environment.diagnosticsService,
-                    progressRecorder: playbackProgressRecorder,
-                    progressRepository: environment.playbackProgressRepository
-                )
+        case .player(let mediaID, let sourceID):
+            PlayerRouteView(
+                mediaID: mediaID,
+                sourceID: sourceID,
+                environment: environment,
+                playbackService: viewModel.playbackService,
+                playbackProgressRecorder: playbackProgressRecorder
             ) {
                 navigationCoordinator.goBack()
             }
@@ -199,6 +214,8 @@ public struct ContentContainerView: View {
                 ForEach(sampleCards) { card in
                     PosterCard(model: card) {
                         navigationCoordinator.navigate(to: .mediaDetail(id: card.id))
+                    } imageDataLoader: { url in
+                        try await imagePipeline.data(for: url)
                     }
                 }
             }
@@ -316,6 +333,91 @@ public struct ContentContainerView: View {
 
     private func t(_ key: L10nKey) -> String {
         L10n.string(key, language: selectedLanguage)
+    }
+}
+
+private struct PlayerRouteView: View {
+    let mediaID: String
+    let sourceID: String?
+    let environment: AppEnvironment
+    let playbackService: any PlaybackServiceProtocol
+    let playbackProgressRecorder: PlaybackProgressRecorder?
+    let onExit: () -> Void
+
+    @State private var state: RouteState = .loading
+
+    var body: some View {
+        Group {
+            switch state {
+            case .loading:
+                LoadingSkeleton(height: 420, cornerRadius: CFRadius.hero)
+                    .padding(30)
+            case .missingSource:
+                EmptyState(
+                    title: "Choose a source",
+                    message: "Streamly does not include media files. Open the movie or series detail page and choose a local file you control.",
+                    systemImage: "play.slash"
+                )
+                .frame(maxWidth: .infinity, minHeight: 520)
+            case .unsupportedSource(let title):
+                ErrorState(
+                    title: "Source is not playable yet",
+                    message: "\(title) is saved, but torrent streaming requires the production libtorrent bridge. Local files are playable now."
+                )
+                .padding(30)
+            case .ready(let source):
+                PlayerView(
+                    viewModel: PlayerViewModel(
+                        service: playbackService,
+                        mediaSource: source,
+                        subtitleService: environment.subtitleService,
+                        diagnosticsService: environment.diagnosticsService,
+                        progressRecorder: playbackProgressRecorder,
+                        progressRepository: environment.playbackProgressRepository
+                    ),
+                    onExit: onExit
+                )
+            }
+        }
+        .task(id: "\(mediaID):\(sourceID ?? "auto")") {
+            await load()
+        }
+    }
+
+    private func load() async {
+        guard let repository = environment.userMediaSourceRepository else {
+            state = .missingSource
+            return
+        }
+
+        do {
+            let source: UserMediaSource?
+            if let sourceID {
+                source = try await repository.source(id: sourceID)
+            } else {
+                source = try await repository.sources(for: mediaID).first
+            }
+
+            guard let source else {
+                state = .missingSource
+                return
+            }
+
+            if let playbackSource = source.playbackMediaSource {
+                state = .ready(playbackSource)
+            } else {
+                state = .unsupportedSource(source.displayName)
+            }
+        } catch {
+            state = .missingSource
+        }
+    }
+
+    private enum RouteState: Equatable {
+        case loading
+        case missingSource
+        case unsupportedSource(String)
+        case ready(PlaybackMediaSource)
     }
 }
 

@@ -123,11 +123,45 @@ final class CoreModelTests: XCTestCase {
         XCTAssertEqual(decoded.positionSeconds, 90)
     }
 
+    func testPlaybackProgressCompletionThresholdAndClamping() {
+        let active = PlaybackProgress(mediaID: "tmdb:movie:603", positionSeconds: 90, durationSeconds: 100)
+        let completed = PlaybackProgress(mediaID: "tmdb:movie:603", positionSeconds: 91, durationSeconds: 100)
+        let overrun = PlaybackProgress(mediaID: "tmdb:movie:603", positionSeconds: 140, durationSeconds: 100)
+        let negative = PlaybackProgress(mediaID: "tmdb:movie:603", positionSeconds: -12, durationSeconds: 100)
+
+        XCTAssertEqual(active.progressPercent, 90, accuracy: 0.001)
+        XCTAssertFalse(active.completed)
+        XCTAssertEqual(completed.progressPercent, 91, accuracy: 0.001)
+        XCTAssertTrue(completed.completed)
+        XCTAssertEqual(overrun.progressPercent, 100, accuracy: 0.001)
+        XCTAssertTrue(overrun.completed)
+        XCTAssertEqual(negative.positionSeconds, 0, accuracy: 0.001)
+        XCTAssertEqual(negative.progressPercent, 0, accuracy: 0.001)
+        XCTAssertFalse(negative.completed)
+    }
+
+    func testWatchHistoryCompletionCanFollowPlaybackProgressOrExplicitOverride() {
+        let progress = PlaybackProgress(mediaID: "tmdb:movie:603", positionSeconds: 95, durationSeconds: 100)
+        let historyFromProgress = WatchHistoryItem(progress: progress, id: "history-1")
+        let manuallyActive = WatchHistoryItem(
+            id: "history-2",
+            mediaID: "tmdb:movie:603",
+            positionSeconds: 95,
+            durationSeconds: 100,
+            completed: false
+        )
+
+        XCTAssertTrue(historyFromProgress.completed)
+        XCTAssertEqual(historyFromProgress.progressPercent, 95, accuracy: 0.001)
+        XCTAssertFalse(manuallyActive.completed)
+        XCTAssertEqual(manuallyActive.progressPercent, 95, accuracy: 0.001)
+    }
+
     func testAppSettingsExposeDefaultTorrentCacheLocation() {
         let settings = AppSettings()
 
         XCTAssertTrue(settings.storage.torrentCacheFolderPath.contains("Application Support"))
-        XCTAssertTrue(settings.storage.torrentCacheFolderPath.contains("CineFlow/TorrentCache"))
+        XCTAssertTrue(settings.storage.torrentCacheFolderPath.contains("Streamly/TorrentCache"))
         XCTAssertNil(settings.storage.downloadsFolderPath)
     }
 }

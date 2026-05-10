@@ -4,13 +4,13 @@
 
 ![Streamly hero banner](docs/assets/hero-banner.png)
 
-Streamly is a local-first media client for macOS that brings search, release selection, playback, metadata, subtitles, personal library features and updates into one polished Apple Silicon app.
+Streamly is a local-first media client for macOS that brings TMDB discovery, user-controlled playback sources, local-file playback, personal library features and updates into one polished Apple Silicon app.
 
-Streamly is the public project name. CineFlow is the current internal app name/build target.
+Streamly is the public app and distribution name. The Swift package, products and source modules still use the internal `CineFlow*` names in this pass.
 
 ## What Streamly Does
 
-Streamly is designed for people who want a desktop-first media experience without switching between separate torrent tools, metadata sites, file managers and video players. The app focuses on discovery, release choice, playback and continuing later from a native macOS interface.
+Streamly is designed for people who want a desktop-first media experience without switching between metadata sites, file managers and video players. The app focuses on discovery, source selection, local-file playback and continuing later from a native macOS interface.
 
 Streamly does not provide or host media content. It is a media client that works with user-controlled sources and local data.
 
@@ -18,16 +18,15 @@ Streamly does not provide or host media content. It is a media client that works
 
 - Native macOS app built with SwiftUI.
 - Netflix-like / Apple-like dark interface.
-- Torrent streaming without manual full-file download.
-- Embedded libtorrent architecture behind an internal abstraction layer.
-- Embedded libmpv playback architecture.
+- User-controlled local file, magnet and `.torrent` source references.
+- Native local-file playback through AVFoundation.
+- Honest unavailable state for torrent streaming until the production libtorrent bridge is connected.
 - TMDB metadata integration.
 - Local library and watch history.
 - Continue Watching.
 - User lists and favorites.
 - User ratings.
 - Embedded, local `.srt` / `.ass`, and online subtitle workflow.
-- OpenSubtitles-ready architecture.
 - Sparkle 2 auto-updates.
 - GitHub Releases distribution with `.dmg` installers.
 
@@ -51,17 +50,17 @@ Screenshots are placeholder mock UI assets and can be replaced with real app cap
 
 - macOS 13.0 or newer.
 - Apple Silicon Mac: M1, M2, M3, M4 or newer.
-- Internet connection for metadata, search, subtitles and updates.
-- Free disk space for temporary torrent cache, image cache, subtitle cache and diagnostics exports.
+- Internet connection for TMDB metadata, search and release updates.
+- Free disk space for local app data, image cache and diagnostics exports.
 
 ## Installation
 
-1. Download the latest `.dmg` from [GitHub Releases](https://github.com/GanbarovEmin/Streamly/releases/latest).
+1. Download the latest `.dmg` from [GitHub Releases](https://github.com/GanbarovEmin/streamly/releases/latest).
 2. Open the `.dmg`.
-3. Drag `CineFlow.app` to `Applications`.
+3. Drag `Streamly.app` to `Applications`.
 4. Open the app from `Applications`.
 
-If the app is unsigned or not notarized yet, macOS may block the first launch. Open **System Settings -> Privacy & Security**, find the CineFlow warning and choose **Open Anyway**. You can also Control-click the app, choose **Open**, then confirm.
+If the app is unsigned or not notarized yet, macOS may block the first launch. Open **System Settings -> Privacy & Security**, find the Streamly warning and choose **Open Anyway**. You can also Control-click the app, choose **Open**, then confirm.
 
 See [Installation](docs/installation.md) for uninstall steps and local data locations.
 
@@ -97,15 +96,15 @@ See [Legal](docs/legal.md) for details.
 
 ## Release Model
 
-- Installers are distributed as `.dmg` files through [GitHub Releases](https://github.com/GanbarovEmin/Streamly/releases/latest).
+- Installers are distributed as `.dmg` files through [GitHub Releases](https://github.com/GanbarovEmin/streamly/releases/latest).
 - Auto-updates use Sparkle 2 and a hosted appcast.
 - Release notes are tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ## Links
 
 - [Landing Page](https://ganbarovemin.github.io/streamly/)
-- [Latest Release](https://github.com/GanbarovEmin/Streamly/releases/latest)
-- [Issues](https://github.com/GanbarovEmin/Streamly/issues)
+- [Latest Release](https://github.com/GanbarovEmin/streamly/releases/latest)
+- [Issues](https://github.com/GanbarovEmin/streamly/issues)
 - [Changelog](CHANGELOG.md)
 - [Installation](docs/installation.md)
 - [Updates](docs/updates.md)

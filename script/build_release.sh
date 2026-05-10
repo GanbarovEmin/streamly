@@ -2,13 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="CineFlow"
+APP_NAME="Streamly"
 PRODUCT_NAME="CineFlow"
 INFO_PLIST="$ROOT_DIR/Configuration/CineFlow-Info.plist"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
-SIGN_IDENTITY="${CINEFLOW_CODESIGN_IDENTITY:-}"
+SIGN_IDENTITY="${STREAMLY_CODESIGN_IDENTITY:-}"
 SKIP_SIGN=1
 VERSION=""
 BUILD_NUMBER=""
@@ -24,7 +24,7 @@ Options:
   --unsigned              Do not codesign the staged app.
   -h, --help              Show this help.
 
-Default output is unsigned. Set CINEFLOW_CODESIGN_IDENTITY or pass --sign for
+Default output is unsigned. Set STREAMLY_CODESIGN_IDENTITY or pass --sign for
 Developer ID distribution builds.
 USAGE
 }
@@ -76,7 +76,8 @@ if [[ -z "$VERSION" || -z "$BUILD_NUMBER" ]]; then
     exit 65
 fi
 
-echo "Building $PRODUCT_NAME $VERSION ($BUILD_NUMBER) for release..."
+echo "Building $APP_NAME $VERSION ($BUILD_NUMBER) with SwiftPM product $PRODUCT_NAME..."
+(cd "$ROOT_DIR" && swift build -c release --product "$PRODUCT_NAME")
 BIN_DIR="$(cd "$ROOT_DIR" && swift build -c release --product "$PRODUCT_NAME" --show-bin-path)"
 EXECUTABLE="$BIN_DIR/$PRODUCT_NAME"
 

@@ -145,13 +145,16 @@ public final class DatabaseTMDBCredentialProvider: TMDBCredentialProviding {
 
 public struct LocalTMDBCredentialProvider: TMDBCredentialProviding {
     private let configURL: URL
+    private let legacyConfigURL: URL?
     private let environment: [String: String]
 
     public init(
-        configURL: URL = URL(fileURLWithPath: ".cineflow/tmdb.local.json"),
+        configURL: URL = URL(fileURLWithPath: ".streamly/tmdb.local.json"),
+        legacyConfigURL: URL? = URL(fileURLWithPath: ".cineflow/tmdb.local.json"),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.configURL = configURL
+        self.legacyConfigURL = legacyConfigURL
         self.environment = environment
     }
 
@@ -168,8 +171,15 @@ public struct LocalTMDBCredentialProvider: TMDBCredentialProviding {
     }
 
     private var localConfig: TMDBLocalConfig? {
-        guard let data = try? Data(contentsOf: configURL) else { return nil }
-        return try? JSONDecoder().decode(TMDBLocalConfig.self, from: data)
+        for url in [configURL, legacyConfigURL].compactMap({ $0 }) {
+            guard let data = try? Data(contentsOf: url),
+                  let config = try? JSONDecoder().decode(TMDBLocalConfig.self, from: data)
+            else {
+                continue
+            }
+            return config
+        }
+        return nil
     }
 }
 

@@ -20,6 +20,7 @@ final class DatabaseLayerTests: XCTestCase {
         XCTAssertTrue(tables.contains("app_settings"))
         XCTAssertTrue(tables.contains("diagnostics_events"))
         XCTAssertTrue(tables.contains("cached_images"))
+        XCTAssertTrue(tables.contains("user_media_sources"))
 
         let sourceAccountColumns = try databaseManager.read { db in
             try Row.fetchAll(db, sql: "PRAGMA table_info(source_accounts)").map { row in
@@ -186,6 +187,66 @@ final class DatabaseLayerTests: XCTestCase {
         await settingsRepository.setSubtitleLanguagePriority(["en", "ru"])
         let languages = await settingsRepository.subtitleLanguagePriority
         XCTAssertEqual(languages, ["en", "ru"])
+    }
+
+    func testUserMediaSourcesPersistAndFilterByMediaID() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let repository = DatabaseUserMediaSourceRepository(databaseManager: databaseManager)
+        let movieFile = URL(fileURLWithPath: "/tmp/matrix.mkv")
+        let seriesFile = URL(fileURLWithPath: "/tmp/series.mkv")
+
+        try await repository.save(
+            UserMediaSource(
+                id: "source-movie",
+                mediaID: "tmdb:movie:603",
+                displayName: "The Matrix",
+                kind: .localFile,
+                url: movieFile
+            )
+        )
+        try await repository.save(
+            UserMediaSource(
+                id: "source-series",
+                mediaID: "tmdb:tv:1399",
+                displayName: "Game of Thrones",
+                kind: .localFile,
+                url: seriesFile
+            )
+        )
+
+        let movieSources = try await repository.sources(for: "tmdb:movie:603")
+        let storedSource = try await repository.source(id: "source-movie")
+
+        XCTAssertEqual(movieSources.map(\.id), ["source-movie"])
+        XCTAssertEqual(storedSource?.displayName, "The Matrix")
+        XCTAssertEqual(storedSource?.url, movieFile)
+        XCTAssertEqual(storedSource?.playbackMediaSource?.sourceName, "Local file")
+
+        try await repository.delete(id: "source-movie")
+        let deletedSource = try await repository.source(id: "source-movie")
+        XCTAssertNil(deletedSource)
+    }
+
+    func testApplicationSupportMigrationMovesLegacyCineFlowDirectoryToStreamly() throws {
+        let baseURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let legacyDirectory = baseURL.appendingPathComponent("CineFlow", isDirectory: true)
+        let legacyDatabase = legacyDirectory.appendingPathComponent("CineFlow.sqlite")
+        let streamlyDirectory = baseURL.appendingPathComponent("Streamly", isDirectory: true)
+        let streamlyDatabase = streamlyDirectory.appendingPathComponent(DatabaseManager.fileName)
+
+        try FileManager.default.createDirectory(at: legacyDirectory, withIntermediateDirectories: true)
+        try Data("legacy db".utf8).write(to: legacyDatabase)
+        defer {
+            try? FileManager.default.removeItem(at: baseURL)
+        }
+
+        try DatabaseManager.migrateLegacyApplicationSupportIfNeeded(baseURL: baseURL)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: streamlyDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: streamlyDatabase.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: streamlyDirectory.appendingPathComponent("CineFlow.sqlite").path))
     }
 
     func testFullAppSettingsPersistAcrossReopen() async throws {

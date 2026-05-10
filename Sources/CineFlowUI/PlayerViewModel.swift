@@ -1,5 +1,6 @@
 import CineFlowCore
 import CineFlowPlayback
+import AVFoundation
 import Foundation
 
 @MainActor
@@ -59,6 +60,10 @@ public final class PlayerViewModel: ObservableObject {
     public var shouldOfferResume: Bool {
         guard let resumeProgress else { return false }
         return resumeProgress.positionSeconds > 5 && !resumeProgress.completed
+    }
+
+    public var avPlayer: AVPlayer? {
+        (service as? AVPlayerProviding)?.avPlayer
     }
 
     public func start() async {

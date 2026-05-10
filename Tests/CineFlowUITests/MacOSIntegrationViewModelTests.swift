@@ -51,7 +51,7 @@ final class MacOSIntegrationViewModelTests: XCTestCase {
             .appendingPathExtension("txt")
 
         await viewModel.handleOpenURL(unsupportedURL)
-        XCTAssertEqual(viewModel.permissionErrorMessage, "CineFlow can open only .torrent files or magnet links.")
+        XCTAssertEqual(viewModel.permissionErrorMessage, "Streamly can open only .torrent files or magnet links.")
 
         await viewModel.handleDroppedText("not a magnet")
         XCTAssertEqual(viewModel.permissionErrorMessage, "Dropped text is not a magnet link.")
@@ -63,7 +63,7 @@ final class MacOSIntegrationViewModelTests: XCTestCase {
 
         XCTAssertEqual(
             viewModel.permissionErrorMessage,
-            "CineFlow could not access this file or folder. Choose a readable location in Settings or grant macOS permission."
+            "Streamly could not access this file or folder. Choose a readable location in Settings or grant macOS permission."
         )
     }
 }

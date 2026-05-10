@@ -269,7 +269,7 @@ public actor MockTorrentEngine: TorrentEngineProtocol {
     }
 
     private func mockFiles(for release: TorrentRelease?, storageURL: URL) -> [TorrentFile] {
-        let title = release?.title ?? "CineFlow Mock Release"
+        let title = release?.title ?? "Streamly Mock Release"
         let mediaName = sanitizedFileName(title).appending(".mkv")
         let sizeBytes = release?.sizeBytes ?? 8_500_000_000
         let progress = TorrentProgress(

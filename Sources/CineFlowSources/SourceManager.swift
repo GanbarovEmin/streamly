@@ -31,10 +31,14 @@ public actor SourceManager {
     public static func development(
         featureFlags: SourceProviderFeatureFlags = .development,
         settingsStore: any SourceSettingsStoreProtocol = UserDefaultsSourceSettingsStore(),
-        credentialStore: any SourceCredentialStoreProtocol = KeychainSourceCredentialStore()
+        credentialStore: any SourceCredentialStoreProtocol = KeychainSourceCredentialStore(),
+        torrentioSettingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore()
     ) -> SourceManager {
         SourceManager(
-            providers: SourceProviderCatalog.providers(featureFlags: featureFlags).makeProviders(),
+            providers: SourceProviderCatalog.providers(
+                featureFlags: featureFlags,
+                torrentioSettingsStore: torrentioSettingsStore
+            ).makeProviders(),
             settingsStore: settingsStore,
             credentialStore: credentialStore
         )
@@ -76,7 +80,7 @@ public actor SourceManager {
 
         let settings = SourceSettings(
             sourceId: sourceId,
-            isEnabled: provider.isEnabled,
+            isEnabled: provider.defaultIsEnabled,
             authenticationStatus: provider.requiresAuthentication ? .unauthenticated : .notRequired
         )
         try await settingsStore.save(settings)

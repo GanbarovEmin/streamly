@@ -25,6 +25,7 @@ public struct HomeFeaturedItem: Identifiable, Equatable, Sendable {
     public let overview: String
     public let qualityBadge: String
     public let accentIndex: Int
+    public let backdropURL: URL?
 }
 
 public struct HomeSection: Identifiable, Equatable, Sendable {
@@ -58,6 +59,8 @@ public struct HomeSeedItem: Identifiable, Equatable, Sendable {
     public let isRecentlyAdded: Bool
     public let isRecommended: Bool
     public let progress: Double?
+    public let artworkURL: URL?
+    public let backdropURL: URL?
 
     public init(
         id: String,
@@ -73,7 +76,9 @@ public struct HomeSeedItem: Identifiable, Equatable, Sendable {
         isFeatured: Bool = false,
         isRecentlyAdded: Bool = false,
         isRecommended: Bool = false,
-        progress: Double? = nil
+        progress: Double? = nil,
+        artworkURL: URL? = nil,
+        backdropURL: URL? = nil
     ) {
         self.id = id
         self.title = title
@@ -89,6 +94,8 @@ public struct HomeSeedItem: Identifiable, Equatable, Sendable {
         self.isRecentlyAdded = isRecentlyAdded
         self.isRecommended = isRecommended
         self.progress = progress.map { min(max($0, 0), 1) }
+        self.artworkURL = artworkURL
+        self.backdropURL = backdropURL
     }
 }
 
@@ -272,23 +279,53 @@ public final class HomeViewModel: ObservableObject {
     @Published public private(set) var selectedFeaturedIndex = 0
     @Published public private(set) var sections: [HomeSection] = []
 
-    private let seedProvider: () throws -> [HomeSeedItem]
+    private let seedProvider: () async throws -> [HomeSeedItem]
     private let progressRepository: (any PlaybackProgressRepositoryProtocol)?
+    private let libraryRepository: (any LibraryRepositoryProtocol)?
 
     public init(
         seedItems: [HomeSeedItem] = HomeSeedLibrary.developmentItems,
-        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil
+        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil
     ) {
         self.seedProvider = { seedItems }
         self.progressRepository = progressRepository
+        self.libraryRepository = libraryRepository
     }
 
     public init(
-        seedProvider: @escaping () throws -> [HomeSeedItem],
-        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil
+        seedProvider: @escaping () async throws -> [HomeSeedItem],
+        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil
     ) {
         self.seedProvider = seedProvider
         self.progressRepository = progressRepository
+        self.libraryRepository = libraryRepository
+    }
+
+    public convenience init(
+        seedProvider: @escaping () throws -> [HomeSeedItem],
+        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+    ) {
+        let asyncSeedProvider: () async throws -> [HomeSeedItem] = {
+            try seedProvider()
+        }
+        self.init(seedProvider: asyncSeedProvider, progressRepository: progressRepository, libraryRepository: libraryRepository)
+    }
+
+    public convenience init(
+        metadataService: any MetadataServiceProtocol,
+        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+    ) {
+        self.init(
+            seedProvider: {
+                try await TMDBHomeContentProvider(metadataService: metadataService).loadHomeItems()
+            },
+            progressRepository: progressRepository,
+            libraryRepository: libraryRepository
+        )
     }
 
     public var selectedFeaturedItem: HomeFeaturedItem? {
@@ -296,11 +333,21 @@ public final class HomeViewModel: ObservableObject {
         return featuredItems[selectedFeaturedIndex]
     }
 
+    public var prefetchArtworkURLs: [URL] {
+        sections.flatMap { section in
+            section.items.compactMap(\.artworkURL)
+        }
+    }
+
+    public var artworkPrefetchKey: String {
+        prefetchArtworkURLs.prefix(24).map(\.absoluteString).joined(separator: "|")
+    }
+
     public func load() async {
         state = .loading
 
         do {
-            let items = try seedProvider()
+            let items = try await seedProvider()
             guard !items.isEmpty else {
                 featuredItems = []
                 selectedFeaturedIndex = 0
@@ -316,7 +363,8 @@ public final class HomeViewModel: ObservableObject {
                     metadataLine: metadataLine(for: item),
                     overview: item.overview,
                     qualityBadge: item.quality,
-                    accentIndex: index
+                    accentIndex: index,
+                    backdropURL: item.backdropURL
                 )
             }
             selectedFeaturedIndex = 0
@@ -338,7 +386,10 @@ public final class HomeViewModel: ObservableObject {
     private func buildSections(from items: [HomeSeedItem]) async throws -> [HomeSection] {
         let continueItems: [CFMediaCardModel]
         if let progressRepository {
-            continueItems = try await progressRepository.continueWatching(includeCompleted: false).map(card(from:))
+            let progressRecords = try await progressRepository.continueWatching(includeCompleted: false)
+            let libraryItems = (try? await libraryRepository?.items()) ?? []
+            let mediaByID = Dictionary(uniqueKeysWithValues: libraryItems.map { ($0.id, $0) })
+            continueItems = progressRecords.map { card(from: $0, mediaItem: mediaByID[$0.mediaID]) }
         } else {
             continueItems = cards(from: items.filter { $0.progress != nil }, limit: 6)
         }
@@ -397,19 +448,21 @@ public final class HomeViewModel: ObservableObject {
                 metadata: metadataLine(for: item),
                 badge: item.quality,
                 progress: item.progress,
-                accentIndex: index
+                accentIndex: index,
+                artworkURL: item.artworkURL
             )
         }
     }
 
-    private func card(from progress: PlaybackProgress) -> CFMediaCardModel {
+    private func card(from progress: PlaybackProgress, mediaItem: MediaItem?) -> CFMediaCardModel {
         CFMediaCardModel(
             id: progress.episodeID ?? progress.mediaID,
-            title: progress.episodeID ?? progress.mediaID,
+            title: mediaItem?.displayTitle ?? progress.episodeID ?? progress.mediaID,
             metadata: "\(Int(progress.progressPercent.rounded()))% watched",
             badge: progress.releaseID,
             progress: progress.progressPercent / 100,
-            accentIndex: abs((progress.episodeID ?? progress.mediaID).hashValue)
+            accentIndex: abs((progress.episodeID ?? progress.mediaID).hashValue),
+            artworkURL: mediaItem?.bestBackdropURL ?? mediaItem?.bestPosterURL
         )
     }
 

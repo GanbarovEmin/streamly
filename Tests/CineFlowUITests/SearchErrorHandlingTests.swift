@@ -11,12 +11,12 @@ final class SearchErrorHandlingTests: XCTestCase {
 
         await viewModel.searchNow(query: "matrix")
 
-        XCTAssertEqual(viewModel.state, .failed("CineFlow cannot reach the network right now."))
+        XCTAssertEqual(viewModel.state, .failed("Streamly cannot reach the network right now."))
         XCTAssertEqual(viewModel.lastError?.category, .network)
         let events = await diagnostics.events()
         XCTAssertEqual(events.first?.level, .warning)
         XCTAssertEqual(events.first?.subsystem, .app)
-        XCTAssertEqual(events.first?.message, "CineFlow cannot reach the network right now.")
+        XCTAssertEqual(events.first?.message, "Streamly cannot reach the network right now.")
         XCTAssertTrue(events.first?.metadata["technicalDescription"]?.contains("notConnectedToInternet") == true)
     }
 

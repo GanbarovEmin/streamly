@@ -1,5 +1,7 @@
 import CineFlowCore
 import CineFlowDesignSystem
+import CineFlowSources
+import AppKit
 import SwiftUI
 
 public struct SettingsView: View {
@@ -8,6 +10,8 @@ public struct SettingsView: View {
     @State private var sourceUsername: [String: String] = [:]
     @State private var sourcePassword: [String: String] = [:]
     @State private var sourceCookies: [String: String] = [:]
+    @State private var tmdbReadAccessToken = ""
+    @State private var tmdbAPIKey = ""
 
     public init(viewModel: SettingsViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -92,7 +96,7 @@ public struct SettingsView: View {
                 set: { value in Task { await viewModel.updateLaunchAtLogin(value) } }
             ))
 
-            SettingsToggleRow(title: "Open last screen on launch", subtitle: "Restore the last active CineFlow area after restart.", isOn: Binding(
+            SettingsToggleRow(title: "Open last screen on launch", subtitle: "Restore the last active Streamly area after restart.", isOn: Binding(
                 get: { viewModel.settings.general.openLastScreenOnLaunch },
                 set: { value in Task { await viewModel.updateOpenLastScreenOnLaunch(value) } }
             ))
@@ -101,7 +105,7 @@ public struct SettingsView: View {
 
     private var appearanceSection: some View {
         SettingsCard {
-            SettingsToggleRow(title: "Dark Mode only", subtitle: "CineFlow is locked to the dark design system.", isOn: .constant(viewModel.settings.appearance.darkModeOnly))
+            SettingsToggleRow(title: "Dark Mode only", subtitle: "Streamly is locked to the dark design system.", isOn: .constant(viewModel.settings.appearance.darkModeOnly))
                 .disabled(true)
 
             SettingValueRow(title: "Accent color", value: "Neon purple locked")
@@ -115,8 +119,13 @@ public struct SettingsView: View {
 
     private var sourcesSection: some View {
         SettingsCard {
+            tmdbMetadataCredentials
+            Divider().overlay(CFColors.separatorSubtle)
+            torrentioConfiguration
+            Divider().overlay(CFColors.separatorSubtle)
+
             if viewModel.sourceRows.isEmpty {
-                EmptyState(title: "No sources configured", message: "Provider catalog is unavailable in this environment.", systemImage: "antenna.radiowaves.left.and.right.slash")
+                EmptyState(title: "No bundled media sources", message: "Streamly only plays local files and user-attached sources for this release.", systemImage: "externaldrive")
             } else {
                 ForEach(viewModel.sourceRows) { row in
                     VStack(alignment: .leading, spacing: CFSpacing.sm) {
@@ -171,6 +180,135 @@ public struct SettingsView: View {
                         }
                     }
                     .settingsDivider(unlessLast: row.id != viewModel.sourceRows.last?.id)
+                }
+            }
+        }
+    }
+
+    private var torrentioConfiguration: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Torrentio")
+                        .font(CFTypography.bodyEmphasis)
+                        .foregroundStyle(CFColors.textPrimary)
+                    Text("Configure the Stremio stream addon inside Streamly. Enable the source below when you want it used for movie releases.")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
+                Spacer()
+                SecondaryButton("Reset", systemImage: "arrow.counterclockwise") {
+                    Task { await viewModel.resetTorrentioSettings() }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Text("Providers")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                HStack(spacing: CFSpacing.sm) {
+                    ForEach(TorrentioProviderOption.allCases) { provider in
+                        Toggle(provider.displayName, isOn: Binding(
+                            get: { viewModel.torrentioSettings.providers.contains(provider) },
+                            set: { value in Task { await viewModel.updateTorrentioProvider(provider, isSelected: value) } }
+                        ))
+                    }
+                }
+            }
+
+            Picker("Priority language", selection: Binding(
+                get: { viewModel.torrentioSettings.priorityLanguage },
+                set: { value in Task { await viewModel.updateTorrentioPriorityLanguage(value) } }
+            )) {
+                ForEach(TorrentioPriorityLanguage.allCases) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Text("Excluded qualities")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: CFSpacing.sm)], alignment: .leading, spacing: CFSpacing.sm) {
+                    ForEach(TorrentioExcludedQuality.allCases) { quality in
+                        Toggle(quality.displayName, isOn: Binding(
+                            get: { viewModel.torrentioSettings.excludedQualities.contains(quality) },
+                            set: { value in Task { await viewModel.updateTorrentioExcludedQuality(quality, isExcluded: value) } }
+                        ))
+                    }
+                }
+            }
+
+            Stepper(
+                "Max results: \(viewModel.torrentioSettings.resultLimit ?? 10)",
+                value: Binding(
+                    get: { viewModel.torrentioSettings.resultLimit ?? 10 },
+                    set: { value in Task { await viewModel.updateTorrentioResultLimit(value) } }
+                ),
+                in: 1...50
+            )
+
+            HStack(alignment: .center, spacing: CFSpacing.sm) {
+                Text(viewModel.torrentioConfiguredManifestURL?.absoluteString ?? "Torrentio manifest is unavailable")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer()
+
+                SecondaryButton("Copy manifest", systemImage: "doc.on.doc") {
+                    copyToPasteboard(viewModel.torrentioConfiguredManifestURL?.absoluteString)
+                }
+            }
+        }
+    }
+
+    private var tmdbMetadataCredentials: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("TMDB metadata")
+                        .font(CFTypography.bodyEmphasis)
+                        .foregroundStyle(CFColors.textPrimary)
+                    Text(viewModel.tmdbCredentialSummary.statusText)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                    Text(viewModel.tmdbCredentialSummary.detailText)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
+                Spacer()
+                Image(systemName: viewModel.tmdbCredentialSummary.hasReadAccessToken || viewModel.tmdbCredentialSummary.hasAPIKey ? "checkmark.seal.fill" : "key.slash")
+                    .foregroundStyle(viewModel.tmdbCredentialSummary.hasReadAccessToken || viewModel.tmdbCredentialSummary.hasAPIKey ? CFColors.success : CFColors.warning)
+                    .font(.title3)
+            }
+
+            HStack(spacing: CFSpacing.sm) {
+                SecureField("TMDB Read Access Token", text: $tmdbReadAccessToken)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("TMDB API key", text: $tmdbAPIKey)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack(spacing: CFSpacing.sm) {
+                PrimaryButton("Save TMDB", systemImage: "key") {
+                    Task {
+                        await viewModel.saveTMDBCredentials(readAccessToken: tmdbReadAccessToken, apiKey: tmdbAPIKey)
+                        tmdbReadAccessToken = ""
+                        tmdbAPIKey = ""
+                    }
+                }
+                SecondaryButton("Test TMDB", systemImage: "network") {
+                    Task { await viewModel.validateTMDBCredentials() }
+                }
+                SecondaryButton("Clear TMDB", systemImage: "xmark.circle") {
+                    Task {
+                        await viewModel.clearTMDBCredentials()
+                        tmdbReadAccessToken = ""
+                        tmdbAPIKey = ""
+                    }
                 }
             }
         }
@@ -259,7 +397,8 @@ public struct SettingsView: View {
         SettingsCard {
             SettingValueRow(title: "Current version", value: viewModel.about.version)
             SettingValueRow(title: "Current build", value: viewModel.about.build)
-            SettingValueRow(title: "Appcast", value: "https://<github-pages-domain>/cineflow/appcast.xml")
+            SettingValueRow(title: "Appcast", value: "https://ganbarovemin.github.io/streamly/appcast.xml")
+            SettingValueRow(title: "Metadata attribution", value: "Movie and TV metadata is provided by TMDB.")
             SettingValueRow(title: "Last checked", value: lastUpdateCheckedText)
             SettingValueRow(title: "Sparkle status", value: viewModel.settings.updates.sparkleStatus)
             SettingValueRow(title: "Update status", value: updateStatusText)
@@ -333,7 +472,7 @@ public struct SettingsView: View {
         switch section {
         case .general: "Language, launch behavior and app startup preferences."
         case .appearance: "Dark visual system, accent color state and motion preference."
-        case .sources: "Provider availability, authentication status and Keychain-backed sessions."
+        case .sources: "TMDB metadata credentials and user-controlled playback source policy."
         case .playback: "Audio priority, resume behavior, acceleration and seeking."
         case .subtitles: "Subtitle language priority, loading behavior, size and timing."
         case .cache: "Local image, torrent and subtitle cache usage and cleanup."
@@ -349,6 +488,12 @@ public struct SettingsView: View {
             get: { dictionary.wrappedValue[key, default: ""] },
             set: { dictionary.wrappedValue[key] = $0 }
         )
+    }
+
+    private func copyToPasteboard(_ value: String?) {
+        guard let value, !value.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }
 

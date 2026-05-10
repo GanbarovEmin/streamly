@@ -1,0 +1,91 @@
+name: Release DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix"
+        required: true
+        default: "1.0.0"
+      build:
+        description: "CFBundleVersion"
+        required: true
+        default: "100"
+      prerelease:
+        description: "Mark the GitHub Release as prerelease"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Build unsigned Streamly DMG
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ inputs.version }}"
+            BUILD="${{ inputs.build }}"
+            PRERELEASE="${{ inputs.prerelease }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            BUILD="${GITHUB_RUN_NUMBER}"
+            PRERELEASE="false"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: swift test
+
+      - name: Build DMG
+        run: script/create_dmg.sh --version "${{ steps.version.outputs.version }}" --build "${{ steps.version.outputs.build }}" --unsigned
+
+      - name: Generate SHA-256
+        shell: bash
+        run: |
+          DMG="dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg"
+          (cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")") > "$DMG.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Streamly-${{ steps.version.outputs.version }}-dmg
+          path: |
+            dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg
+            dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Streamly ${{ steps.version.outputs.version }}
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg
+            dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg.sha256

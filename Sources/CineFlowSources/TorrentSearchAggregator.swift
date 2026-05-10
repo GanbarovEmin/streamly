@@ -90,7 +90,7 @@ private extension TorrentRelease {
         TorrentRelease(
             id: id,
             sourceId: sourceId,
-            sourceName: sourceName,
+            sourceName: self.sourceId == sourceId ? self.sourceName : sourceName,
             title: title,
             magnetURI: magnetURI,
             torrentFileURL: torrentFileURL,

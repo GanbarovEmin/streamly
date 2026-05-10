@@ -29,6 +29,36 @@ public struct MovieDetail: Identifiable, Equatable, Sendable {
     public let imdbRating: String
     public let overview: String
     public let backdropAccentIndex: Int
+    public let posterURL: URL?
+    public let backdropURL: URL?
+
+    public init(
+        id: String,
+        title: String,
+        originalTitle: String,
+        year: Int,
+        runtime: String,
+        genres: [String],
+        tmdbRating: String,
+        imdbRating: String,
+        overview: String,
+        backdropAccentIndex: Int,
+        posterURL: URL? = nil,
+        backdropURL: URL? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.originalTitle = originalTitle
+        self.year = year
+        self.runtime = runtime
+        self.genres = genres
+        self.tmdbRating = tmdbRating
+        self.imdbRating = imdbRating
+        self.overview = overview
+        self.backdropAccentIndex = backdropAccentIndex
+        self.posterURL = posterURL
+        self.backdropURL = backdropURL
+    }
 }
 
 public struct MovieCastMember: Identifiable, Equatable, Sendable {
@@ -163,6 +193,8 @@ public final class MovieDetailViewModel: ObservableObject {
     @Published public private(set) var userRating: Int?
     @Published public private(set) var lastPlayedReleaseID: String?
     @Published public private(set) var copiedMagnetURI: String?
+    @Published public private(set) var userSources: [UserMediaSource] = []
+    @Published public private(set) var selectedUserSourceID: String?
     @Published public var selectedTab: MovieDetailTab = .releases
 
     public let tabs: [MovieDetailTab] = MovieDetailTab.allCases
@@ -171,17 +203,20 @@ public final class MovieDetailViewModel: ObservableObject {
     private let provider: any MovieDetailProviderProtocol
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
 
     public init(
         mediaID: String,
         provider: any MovieDetailProviderProtocol = MockMovieDetailProvider(),
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
     ) {
         self.mediaID = mediaID
         self.provider = provider
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
+        self.userMediaSourceRepository = userMediaSourceRepository
     }
 
     public var hasContinueWatching: Bool {
@@ -217,6 +252,7 @@ public final class MovieDetailViewModel: ObservableObject {
             cast = response.cast
             progress = response.progress
             await refreshLibraryState()
+            await refreshUserSources()
             state = .loaded
         } catch {
             state = .failed(CineFlowError.from(error, fallbackCategory: .metadata).userMessage)
@@ -225,6 +261,23 @@ public final class MovieDetailViewModel: ObservableObject {
 
     public func play(_ release: TorrentRelease) {
         lastPlayedReleaseID = release.id
+    }
+
+    public func selectUserSource(_ source: UserMediaSource) {
+        selectedUserSourceID = source.id
+    }
+
+    public func addLocalSource(url: URL) async {
+        guard let userMediaSourceRepository else { return }
+        let source = UserMediaSource(
+            mediaID: mediaID,
+            displayName: url.deletingPathExtension().lastPathComponent,
+            kind: .localFile,
+            url: url
+        )
+        try? await userMediaSourceRepository.save(source)
+        selectedUserSourceID = source.id
+        await refreshUserSources()
     }
 
     public func continueWatching() {
@@ -299,6 +352,23 @@ public final class MovieDetailViewModel: ObservableObject {
             isInLibrary = false
             isFavorite = false
             userRating = nil
+        }
+    }
+
+    private func refreshUserSources() async {
+        guard let userMediaSourceRepository else {
+            userSources = []
+            selectedUserSourceID = nil
+            return
+        }
+        do {
+            userSources = try await userMediaSourceRepository.sources(for: mediaID)
+            if selectedUserSourceID == nil {
+                selectedUserSourceID = userSources.first?.id
+            }
+        } catch {
+            userSources = []
+            selectedUserSourceID = nil
         }
     }
 }

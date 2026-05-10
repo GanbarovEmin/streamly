@@ -98,10 +98,10 @@ public struct SettingsAboutInfo: Equatable, Sendable {
     public let licenses: String
 
     public init(
-        appName: String = "CineFlow",
+        appName: String = "Streamly",
         version: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
         build: String = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "dev",
-        credits: String = "CineFlow contributors",
+        credits: String = "Streamly contributors",
         licenses: String = "Open-source dependencies are listed in the package manifest."
     ) {
         self.appName = appName
@@ -109,6 +109,32 @@ public struct SettingsAboutInfo: Equatable, Sendable {
         self.build = build
         self.credits = credits
         self.licenses = licenses
+    }
+}
+
+public struct TMDBCredentialSummary: Equatable, Sendable {
+    public let hasReadAccessToken: Bool
+    public let hasAPIKey: Bool
+    public let lastValidation: String?
+
+    public init(hasReadAccessToken: Bool = false, hasAPIKey: Bool = false, lastValidation: String? = nil) {
+        self.hasReadAccessToken = hasReadAccessToken
+        self.hasAPIKey = hasAPIKey
+        self.lastValidation = lastValidation
+    }
+
+    public var statusText: String {
+        if hasReadAccessToken {
+            return "TMDB read access token saved"
+        }
+        if hasAPIKey {
+            return "TMDB API key saved"
+        }
+        return "TMDB credentials missing"
+    }
+
+    public var detailText: String {
+        lastValidation ?? "Metadata and artwork use TMDB. Save a read access token or v3 API key locally to enable live content."
     }
 }
 
@@ -122,6 +148,8 @@ public final class SettingsViewModel: ObservableObject {
     @Published public private(set) var sourceRows: [SettingsSourceRow] = []
     @Published public private(set) var cacheSummary = SettingsCacheSummary()
     @Published public private(set) var updateStatus: UpdateStatus = .idle
+    @Published public private(set) var tmdbCredentialSummary = TMDBCredentialSummary()
+    @Published public private(set) var torrentioSettings = TorrentioSettings.defaults
     @Published public private(set) var lastUpdateCheckedAt: Date?
     @Published public private(set) var diagnosticsExport: String?
     @Published public private(set) var operationMessage: String?
@@ -131,21 +159,31 @@ public final class SettingsViewModel: ObservableObject {
 
     private let environment: AppEnvironment
     private let sourceManager: SourceManager?
+    private let torrentioSettingsStore: any TorrentioSettingsStoreProtocol
+    private let torrentioURLBuilder: TorrentioConfigurationURLBuilder
     private let fileManager: FileManager
     private let cacheBaseURL: URL
 
     public init(
         environment: AppEnvironment,
         sourceManager: SourceManager? = nil,
+        torrentioSettingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore(),
+        torrentioURLBuilder: TorrentioConfigurationURLBuilder = TorrentioConfigurationURLBuilder(),
         fileManager: FileManager = .default,
         cacheBaseURL: URL? = nil,
         about: SettingsAboutInfo = SettingsAboutInfo()
     ) {
         self.environment = environment
         self.sourceManager = sourceManager
+        self.torrentioSettingsStore = torrentioSettingsStore
+        self.torrentioURLBuilder = torrentioURLBuilder
         self.fileManager = fileManager
         self.cacheBaseURL = cacheBaseURL ?? Self.defaultCacheBaseURL(fileManager: fileManager)
         self.about = about
+    }
+
+    public var torrentioConfiguredManifestURL: URL? {
+        try? torrentioURLBuilder.manifestURL(settings: torrentioSettings)
     }
 
     public func load() async {
@@ -154,6 +192,8 @@ public final class SettingsViewModel: ObservableObject {
         updateStatus = await environment.updateService.currentStatus
         settings.updates.automaticChecksEnabled = await environment.updateService.automaticallyChecksForUpdates
         lastUpdateCheckedAt = await environment.updateService.lastCheckedAt
+        await refreshTMDBCredentialSummary()
+        await refreshTorrentioSettings()
         await refreshSources()
         await refreshCacheSummary()
     }
@@ -236,7 +276,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func updateTorrentCacheFolder(_ url: URL) async {
         guard canUseFolder(url) else {
-            operationMessage = "CineFlow could not access this folder. Choose a readable location or grant macOS permission."
+            operationMessage = "Streamly could not access this folder. Choose a readable location or grant macOS permission."
             return
         }
         settings.storage.torrentCacheFolderPath = url.path
@@ -248,10 +288,50 @@ public final class SettingsViewModel: ObservableObject {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder for CineFlow torrent cache."
+        panel.message = "Choose a folder for Streamly torrent cache."
 
         if panel.runModal() == .OK, let url = panel.url {
             Task { await updateTorrentCacheFolder(url) }
+        }
+    }
+
+    public func saveTMDBCredentials(readAccessToken: String?, apiKey: String?) async {
+        await environment.settingsRepository.setMetadataCredential(
+            readAccessToken?.nilIfBlank,
+            forKey: MetadataCredentialKeys.tmdbReadAccessToken
+        )
+        await environment.settingsRepository.setMetadataCredential(
+            apiKey?.nilIfBlank,
+            forKey: MetadataCredentialKeys.tmdbAPIKey
+        )
+        operationMessage = "TMDB credentials saved locally."
+        await refreshTMDBCredentialSummary()
+    }
+
+    public func clearTMDBCredentials() async {
+        await environment.settingsRepository.setMetadataCredential(nil, forKey: MetadataCredentialKeys.tmdbReadAccessToken)
+        await environment.settingsRepository.setMetadataCredential(nil, forKey: MetadataCredentialKeys.tmdbAPIKey)
+        operationMessage = "TMDB credentials cleared."
+        await refreshTMDBCredentialSummary()
+    }
+
+    public func validateTMDBCredentials() async {
+        do {
+            _ = try await environment.metadataService.trending()
+            tmdbCredentialSummary = TMDBCredentialSummary(
+                hasReadAccessToken: tmdbCredentialSummary.hasReadAccessToken,
+                hasAPIKey: tmdbCredentialSummary.hasAPIKey,
+                lastValidation: "TMDB connection is valid."
+            )
+            operationMessage = "TMDB connection is valid."
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .authentication)
+            tmdbCredentialSummary = TMDBCredentialSummary(
+                hasReadAccessToken: tmdbCredentialSummary.hasReadAccessToken,
+                hasAPIKey: tmdbCredentialSummary.hasAPIKey,
+                lastValidation: cineFlowError.userMessage
+            )
+            operationMessage = cineFlowError.recoverySuggestion
         }
     }
 
@@ -311,6 +391,47 @@ public final class SettingsViewModel: ObservableObject {
         } catch {
             await handleSettingsError(error, operation: "clearSourceSession", category: .source, metadata: ["sourceID": sourceID])
         }
+    }
+
+    public func updateTorrentioProvider(_ provider: TorrentioProviderOption, isSelected: Bool) async {
+        var providers = torrentioSettings.providers
+        if isSelected {
+            providers.append(provider)
+        } else {
+            providers.removeAll { $0 == provider }
+        }
+        guard !providers.isEmpty else {
+            operationMessage = "Keep at least one Torrentio provider selected."
+            return
+        }
+        torrentioSettings.providers = unique(providers)
+        await persistTorrentioSettings()
+    }
+
+    public func updateTorrentioPriorityLanguage(_ language: TorrentioPriorityLanguage) async {
+        torrentioSettings.priorityLanguage = language
+        await persistTorrentioSettings()
+    }
+
+    public func updateTorrentioExcludedQuality(_ quality: TorrentioExcludedQuality, isExcluded: Bool) async {
+        var qualities = torrentioSettings.excludedQualities
+        if isExcluded {
+            qualities.append(quality)
+        } else {
+            qualities.removeAll { $0 == quality }
+        }
+        torrentioSettings.excludedQualities = unique(qualities)
+        await persistTorrentioSettings()
+    }
+
+    public func updateTorrentioResultLimit(_ limit: Int?) async {
+        torrentioSettings.resultLimit = limit.map { min(max($0, 1), 999) }
+        await persistTorrentioSettings()
+    }
+
+    public func resetTorrentioSettings() async {
+        torrentioSettings = .defaults
+        await persistTorrentioSettings()
     }
 
     public func refreshCacheSummary() async {
@@ -417,8 +538,36 @@ public final class SettingsViewModel: ObservableObject {
         sourceRows = rows
     }
 
+    private func refreshTMDBCredentialSummary() async {
+        let readAccessToken = await environment.settingsRepository.metadataCredential(forKey: MetadataCredentialKeys.tmdbReadAccessToken)
+        let apiKey = await environment.settingsRepository.metadataCredential(forKey: MetadataCredentialKeys.tmdbAPIKey)
+        tmdbCredentialSummary = TMDBCredentialSummary(
+            hasReadAccessToken: readAccessToken?.nilIfBlank != nil,
+            hasAPIKey: apiKey?.nilIfBlank != nil,
+            lastValidation: tmdbCredentialSummary.lastValidation
+        )
+    }
+
+    private func refreshTorrentioSettings() async {
+        do {
+            torrentioSettings = try await torrentioSettingsStore.settings()
+        } catch {
+            torrentioSettings = .defaults
+            await handleSettingsError(error, operation: "refreshTorrentioSettings", category: .source, metadata: ["sourceID": "torrentio"])
+        }
+    }
+
     private func persistSettings() async {
         await environment.settingsRepository.setAppSettings(settings)
+    }
+
+    private func persistTorrentioSettings() async {
+        do {
+            try await torrentioSettingsStore.save(torrentioSettings)
+            operationMessage = "Torrentio settings saved locally."
+        } catch {
+            await handleSettingsError(error, operation: "persistTorrentioSettings", category: .source, metadata: ["sourceID": "torrentio"])
+        }
     }
 
     private func normalizedLanguages(_ languages: [String]) -> [String] {
@@ -426,6 +575,11 @@ public final class SettingsViewModel: ObservableObject {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .filter { !$0.isEmpty }
         return normalized.isEmpty ? ["ru", "en"] : Array(NSOrderedSet(array: normalized)) as? [String] ?? normalized
+    }
+
+    private func unique<Value: Hashable>(_ values: [Value]) -> [Value] {
+        var seen = Set<Value>()
+        return values.filter { seen.insert($0).inserted }
     }
 
     private func directorySize(_ url: URL) -> Int64 {
@@ -479,8 +633,13 @@ public final class SettingsViewModel: ObservableObject {
             appropriateFor: nil,
             create: true
         )) ?? fileManager.temporaryDirectory
-        return base.appendingPathComponent("CineFlow", isDirectory: true)
+        return base.appendingPathComponent("Streamly", isDirectory: true)
     }
+}
+
+private enum MetadataCredentialKeys {
+    static let tmdbReadAccessToken = "tmdb_read_access_token"
+    static let tmdbAPIKey = "tmdb_api_key"
 }
 
 private extension String {

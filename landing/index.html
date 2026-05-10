@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Streamly - Native macOS streaming media client</title>
-    <meta name="description" content="Streamly is a native macOS streaming media client with a cinematic Netflix-like interface, local library, torrent streaming architecture, metadata, subtitles and Sparkle updates.">
+    <meta name="description" content="Streamly is a native macOS media client with TMDB metadata, local library, user-controlled playback sources and GitHub Releases downloads.">
     <meta name="theme-color" content="#0a0b0f">
     <link rel="canonical" href="https://ganbarovemin.github.io/streamly/">
     <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml">
@@ -16,7 +16,7 @@
     <meta property="og:url" content="https://ganbarovemin.github.io/streamly/">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Streamly">
-    <meta name="twitter:description" content="A native macOS streaming media client with a cinematic Netflix-like interface.">
+    <meta name="twitter:description" content="A native macOS media client for browsing TMDB metadata and watching your own sources.">
     <meta name="twitter:image" content="assets/mockups/og-image.png">
 
     <link rel="preload" as="image" href="assets/mockups/hero-app.png">
@@ -34,7 +34,7 @@
         <a href="#install">Install</a>
         <a href="#privacy">Privacy</a>
       </nav>
-      <a class="nav-cta" href="https://github.com/GanbarovEmin/streamly/releases/latest">Download</a>
+      <a class="nav-cta" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download</a>
     </header>
 
     <main id="top">
@@ -45,7 +45,6 @@
           <p class="hero-tagline">A native macOS streaming media client with a cinematic Netflix-like interface.</p>
           <p class="hero-description">Search, organize and watch your media in one elegant Apple Silicon app.</p>
           <div class="hero-actions">
-            <!-- Replace RELEASE_URL with a direct .dmg asset URL after the first signed release is published. -->
             <a class="button button-primary" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download .dmg</a>
             <a class="button button-secondary" href="https://github.com/GanbarovEmin/streamly">View on GitHub</a>
           </div>
@@ -115,9 +114,9 @@
           <article data-reveal><h3>Native macOS app</h3><p>SwiftUI interface designed for desktop-first browsing and playback.</p></article>
           <article data-reveal><h3>Apple Silicon optimized</h3><p>Targeted at M1 or newer Macs with macOS 13.0+.</p></article>
           <article data-reveal><h3>Netflix-like dark interface</h3><p>Graphite surfaces, cinematic shelves, soft glow and quiet controls.</p></article>
-          <article data-reveal><h3>Torrent streaming architecture</h3><p>Designed to stream without manual full-file downloads.</p></article>
-          <article data-reveal><h3>Embedded mpv playback</h3><p>Playback layer prepared around an embedded libmpv engine.</p></article>
-          <article data-reveal><h3>TMDB metadata</h3><p>Movies and series get metadata, posters, ratings and context.</p></article>
+          <article data-reveal><h3>User-owned sources</h3><p>Attach local files and your own source references without bundled content providers.</p></article>
+          <article data-reveal><h3>AVFoundation playback</h3><p>Local files play through the native macOS media stack in the first release.</p></article>
+          <article data-reveal><h3>TMDB metadata</h3><p>Movies and series get metadata, posters, ratings and context from TMDB.</p></article>
           <article data-reveal><h3>Continue Watching</h3><p>Resume later from local watch history and progress.</p></article>
           <article data-reveal><h3>Local Library</h3><p>Keep saved movies, series, favorites, ratings and lists on this Mac.</p></article>
           <article data-reveal><h3>User Lists</h3><p>Create watchlists and personal collections without cloud sync.</p></article>
@@ -133,9 +132,9 @@
           <h2 id="workflow-title">Four steps from discovery to playback.</h2>
         </div>
         <div class="steps">
-          <article data-reveal><span>01</span><h3>Search</h3><p>Find a movie or series with metadata and release context.</p></article>
-          <article data-reveal><span>02</span><h3>Choose best release</h3><p>Compare quality, seeders, size and source before playback.</p></article>
-          <article data-reveal><span>03</span><h3>Stream</h3><p>Start watching through the embedded playback architecture.</p></article>
+          <article data-reveal><span>01</span><h3>Search</h3><p>Find a movie or series with TMDB metadata, posters and cast context.</p></article>
+          <article data-reveal><span>02</span><h3>Attach source</h3><p>Add a local file or a user-owned source reference for the selected title.</p></article>
+          <article data-reveal><span>03</span><h3>Watch</h3><p>Start local-file playback through the native macOS playback layer.</p></article>
           <article data-reveal><span>04</span><h3>Continue later</h3><p>Return from Continue Watching, Library or personal lists.</p></article>
         </div>
       </section>
@@ -147,20 +146,21 @@
           <ul class="check-list">
             <li>macOS 13.0 or newer.</li>
             <li>Apple Silicon M1 or newer.</li>
-            <li>Internet connection for metadata, search, subtitles and updates.</li>
+            <li>Internet connection for TMDB metadata, search and release updates.</li>
             <li>Enough free disk space for temporary cache.</li>
           </ul>
         </div>
         <div class="download-panel" id="download" data-reveal>
           <p class="section-label">Download</p>
           <h2>Latest version</h2>
-          <p>The first public `.dmg` will be distributed through GitHub Releases.</p>
+          <p>The latest public `.dmg` is distributed through GitHub Releases.</p>
           <a class="button button-primary full" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download for macOS</a>
           <div class="download-links">
             <a href="https://github.com/GanbarovEmin/streamly/releases/latest">GitHub Releases</a>
             <a href="https://github.com/GanbarovEmin/streamly/blob/main/CHANGELOG.md">Release notes</a>
+            <a data-checksum-link href="https://github.com/GanbarovEmin/streamly/releases/latest" hidden>SHA-256</a>
           </div>
-          <p class="checksum">Checksum: available with signed release assets.</p>
+          <p class="checksum">Checksum: published beside every release DMG.</p>
         </div>
       </section>
 
@@ -171,7 +171,7 @@
         </div>
         <ol class="install-list">
           <li data-reveal><span>Download</span>Get the `.dmg` from the latest GitHub Release.</li>
-          <li data-reveal><span>Drag</span>Drag <code>CineFlow.app</code> to Applications until the bundle is renamed in a future task.</li>
+          <li data-reveal><span>Drag</span>Drag <code>Streamly.app</code> to Applications.</li>
           <li data-reveal><span>Open</span>Launch the app from Applications.</li>
           <li data-reveal><span>Allow</span>If macOS blocks an unsigned build, open it from Privacy &amp; Security with Open Anyway.</li>
         </ol>
@@ -195,6 +195,7 @@
             <li>Streamly does not host or provide media content.</li>
             <li>Users are responsible for content sources and rights.</li>
             <li>The app does not bypass DRM, paywalls or captcha.</li>
+            <li>Movie and TV metadata is provided by TMDB.</li>
           </ul>
         </article>
       </section>

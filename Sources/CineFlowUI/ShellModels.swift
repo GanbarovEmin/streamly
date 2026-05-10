@@ -12,7 +12,7 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
     case history
     case settings
     case mediaDetail(id: String)
-    case player(mediaID: String)
+    case player(mediaID: String, sourceID: String? = nil)
     case settingsSection(id: String)
 
     public var id: String {
@@ -37,8 +37,8 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             "settings"
         case .mediaDetail(let id):
             "mediaDetail:\(id)"
-        case .player(let mediaID):
-            "player:\(mediaID)"
+        case .player(let mediaID, let sourceID):
+            "player:\(mediaID):\(sourceID ?? "auto")"
         case .settingsSection(let id):
             "settingsSection:\(id)"
         }

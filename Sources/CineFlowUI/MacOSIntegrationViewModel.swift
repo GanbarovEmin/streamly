@@ -22,7 +22,7 @@ public final class MacOSIntegrationViewModel: ObservableObject {
         }
 
         guard url.isFileURL, url.pathExtension.lowercased() == "torrent" else {
-            permissionErrorMessage = "CineFlow can open only .torrent files or magnet links."
+            permissionErrorMessage = "Streamly can open only .torrent files or magnet links."
             return
         }
 
@@ -77,7 +77,7 @@ public final class MacOSIntegrationViewModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
-        panel.message = "Choose a .torrent file to open in CineFlow."
+        panel.message = "Choose a .torrent file to open in Streamly."
 
         if panel.runModal() == .OK, let url = panel.url {
             Task { await handleTorrentFile(url) }
@@ -87,7 +87,7 @@ public final class MacOSIntegrationViewModel: ObservableObject {
     public func promptForMagnetLink() {
         let alert = NSAlert()
         alert.messageText = "Open Magnet Link"
-        alert.informativeText = "Paste a magnet:? link to add it to CineFlow."
+        alert.informativeText = "Paste a magnet:? link to add it to Streamly."
         alert.addButton(withTitle: "Open")
         alert.addButton(withTitle: "Cancel")
 
@@ -132,7 +132,7 @@ public final class MacOSIntegrationViewModel: ObservableObject {
 
     private func message(for error: CineFlowError, original: Error) -> String {
         if let cocoaError = original as? CocoaError, cocoaError.code == .fileReadNoPermission || cocoaError.code == .fileWriteNoPermission {
-            return "CineFlow could not access this file or folder. Choose a readable location in Settings or grant macOS permission."
+            return "Streamly could not access this file or folder. Choose a readable location in Settings or grant macOS permission."
         }
 
         if case TorrentEngineError.invalidTorrentFile = original {

@@ -104,8 +104,8 @@ public struct PosterCard: View {
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
             }
-            .scaleEffect(isHovering ? CFMotion.hoverScale : 1)
-            .animation(CFMotion.spring, value: isHovering)
+            .scaleEffect(isHovering ? 1.012 : 1)
+            .animation(CFMotion.quick, value: isHovering)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -136,7 +136,7 @@ public struct PosterCard: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: CFRadius.poster, style: .continuous))
-            .cfShadow(isHovering ? .hover : .none)
+            .cfShadow(.none)
     }
 
     @ViewBuilder
@@ -221,8 +221,8 @@ public struct LandscapeCard: View {
                             .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
                     )
             )
-            .scaleEffect(isHovering ? CFMotion.hoverScale : 1)
-            .animation(CFMotion.spring, value: isHovering)
+            .scaleEffect(isHovering ? 1.008 : 1)
+            .animation(CFMotion.quick, value: isHovering)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -292,6 +292,22 @@ public struct MediaCarousel: View {
                 .padding(.horizontal, 1)
             }
             .scrollIndicators(.hidden)
+            .task(id: prefetchKey) {
+                await prefetchArtwork()
+            }
+        }
+    }
+
+    private var prefetchKey: String {
+        items.compactMap { $0.artworkURL?.absoluteString }.prefix(18).joined(separator: "|")
+    }
+
+    private func prefetchArtwork() async {
+        guard let imageDataLoader else { return }
+        let urls = items.compactMap(\.artworkURL).prefix(18)
+        for url in urls {
+            guard !Task.isCancelled else { return }
+            _ = try? await imageDataLoader(url)
         }
     }
 }
@@ -307,6 +323,7 @@ public struct CFCachedAsyncImage: View {
     private let url: URL?
     private let contentMode: ContentMode
     private let imageDataLoader: CFImageDataLoader?
+    private static let fallbackMemoryCache = NSCache<NSURL, NSData>()
 
     @State private var phase: Phase = .idle
 
@@ -393,7 +410,11 @@ public struct CFCachedAsyncImage: View {
     }
 
     private static func defaultImageDataLoader(url: URL) async throws -> Data {
+        if let cached = fallbackMemoryCache.object(forKey: url as NSURL) {
+            return cached as Data
+        }
         let (data, _) = try await URLSession.shared.data(from: url)
+        fallbackMemoryCache.setObject(data as NSData, forKey: url as NSURL)
         return data
     }
 }

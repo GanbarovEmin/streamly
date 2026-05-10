@@ -10,9 +10,7 @@ final class TMDBMetadataServiceTests: XCTestCase {
     }
 
     func testSearchMoviesMapsDTOToDomainMediaItemsAndCachesResponse() async throws {
-        let fixture = """
-        {"page":1,"results":[{"id":603,"title":"The Matrix","original_title":"The Matrix","overview":"Reality is simulated.","release_date":"1999-03-31","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","vote_average":8.2,"genre_ids":[28,878]}],"total_pages":1,"total_results":1}
-        """
+        let fixture = try TestFixtures.string("tmdb_search_movie_matrix.json")
         let database = try DatabaseManager.inMemory()
         let service = makeService(database: database) { request in
             XCTAssertEqual(request.url?.path, "/3/search/movie")
@@ -36,15 +34,9 @@ final class TMDBMetadataServiceTests: XCTestCase {
     }
 
     func testSearchSeriesAndMovieDetailMapNestedCreditsVideosAndRecommendations() async throws {
-        let seriesFixture = """
-        {"page":1,"results":[{"id":1399,"name":"Game of Thrones","original_name":"Game of Thrones","overview":"Noble families fight.","first_air_date":"2011-04-17","poster_path":"/tv.jpg","backdrop_path":"/tv-back.jpg","vote_average":8.4,"genre_ids":[18]}],"total_pages":1,"total_results":1}
-        """
-        let movieFixture = """
-        {"id":603,"imdb_id":"tt0133093","title":"The Matrix","original_title":"The Matrix","overview":"Reality is simulated.","release_date":"1999-03-31","runtime":136,"poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","vote_average":8.2,"genres":[{"id":28,"name":"Action"},{"id":878,"name":"Sci-Fi"}],"videos":{"results":[{"id":"v1","name":"Trailer","site":"YouTube","key":"abc","type":"Trailer"}]},"credits":{"cast":[{"id":1,"name":"Keanu Reeves","character":"Neo","profile_path":"/neo.jpg","order":0}]},"recommendations":{"results":[{"id":27205,"title":"Inception","original_title":"Inception","overview":"Dreams.","release_date":"2010-07-16","poster_path":null,"backdrop_path":null,"vote_average":8.3,"genre_ids":[878]}]}}
-        """
-        let recommendationsFixture = """
-        {"page":1,"results":[{"id":27205,"title":"Inception","original_title":"Inception","overview":"Dreams.","release_date":"2010-07-16","poster_path":null,"backdrop_path":null,"vote_average":8.3,"genre_ids":[878]}],"total_pages":1,"total_results":1}
-        """
+        let seriesFixture = try TestFixtures.string("tmdb_search_series_game_of_thrones.json")
+        let movieFixture = try TestFixtures.string("tmdb_movie_detail_matrix.json")
+        let recommendationsFixture = try TestFixtures.string("tmdb_movie_recommendations_matrix.json")
         let service = makeService { request in
             switch request.url?.path {
             case "/3/search/tv":
@@ -126,6 +118,26 @@ final class TMDBMetadataServiceTests: XCTestCase {
             XCTFail("Expected network unavailable")
         } catch let error as MetadataServiceError {
             XCTAssertEqual(error, .networkUnavailable)
+        }
+    }
+
+    func testMissingCredentialsFailBeforeNetworkRequest() async throws {
+        MockURLProtocol.requestHandler = { _ in
+            XCTFail("Missing credentials should not issue a TMDB request")
+            return (200, "{}")
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let service = TMDBMetadataService(
+            credentialProvider: StaticTMDBCredentialProvider(),
+            session: URLSession(configuration: configuration)
+        )
+
+        do {
+            _ = try await service.searchMovies(query: "matrix")
+            XCTFail("Expected missing credentials")
+        } catch let error as MetadataServiceError {
+            XCTAssertEqual(error, .missingCredentials)
         }
     }
 

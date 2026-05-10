@@ -370,6 +370,8 @@ public protocol SettingsRepositoryProtocol {
     func setAppSettings(_ settings: AppSettings) async
     func setSubtitleLanguagePriority(_ languages: [String]) async
     func setSubtitleSettings(_ settings: SubtitleSettings) async
+    func metadataCredential(forKey key: String) async -> String?
+    func setMetadataCredential(_ value: String?, forKey key: String) async
     func clearAllLocalData() async
 }
 
@@ -387,6 +389,12 @@ public extension SettingsRepositoryProtocol {
     func setSubtitleSettings(_ settings: SubtitleSettings) async {
         await setSubtitleLanguagePriority(settings.languagePreference.languageCodes)
     }
+
+    func metadataCredential(forKey key: String) async -> String? {
+        nil
+    }
+
+    func setMetadataCredential(_ value: String?, forKey key: String) async {}
 
     func clearAllLocalData() async {}
 }

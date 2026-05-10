@@ -15,7 +15,7 @@ public struct ImageCacheConfiguration: Sendable {
         let baseURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         return baseURL
-            .appendingPathComponent("CineFlow", isDirectory: true)
+            .appendingPathComponent("Streamly", isDirectory: true)
             .appendingPathComponent("ImageCache", isDirectory: true)
     }
 }

@@ -28,6 +28,32 @@ public struct SeriesDetail: Identifiable, Equatable, Sendable {
     public let genres: [String]
     public let overview: String
     public let backdropAccentIndex: Int
+    public let posterURL: URL?
+    public let backdropURL: URL?
+
+    public init(
+        id: String,
+        title: String,
+        yearRange: String,
+        seasonsCount: Int,
+        rating: String,
+        genres: [String],
+        overview: String,
+        backdropAccentIndex: Int,
+        posterURL: URL? = nil,
+        backdropURL: URL? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.yearRange = yearRange
+        self.seasonsCount = seasonsCount
+        self.rating = rating
+        self.genres = genres
+        self.overview = overview
+        self.backdropAccentIndex = backdropAccentIndex
+        self.posterURL = posterURL
+        self.backdropURL = backdropURL
+    }
 }
 
 public struct SeriesEpisode: Identifiable, Equatable, Sendable {
@@ -223,6 +249,8 @@ public final class SeriesDetailViewModel: ObservableObject {
     @Published public private(set) var isInLibrary = false
     @Published public private(set) var selectedListName: String?
     @Published public private(set) var lastPlayedEpisodeID: String?
+    @Published public private(set) var userSources: [UserMediaSource] = []
+    @Published public private(set) var selectedUserSourceID: String?
     @Published public var selectedTab: SeriesDetailTab = .seasons
 
     public let tabs: [SeriesDetailTab] = SeriesDetailTab.allCases
@@ -231,17 +259,20 @@ public final class SeriesDetailViewModel: ObservableObject {
     private let provider: any SeriesDetailProviderProtocol
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
 
     public init(
         seriesID: String,
         provider: any SeriesDetailProviderProtocol = MockSeriesDetailProvider(),
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
     ) {
         self.seriesID = seriesID
         self.provider = provider
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
+        self.userMediaSourceRepository = userMediaSourceRepository
     }
 
     public var selectedSeason: SeriesSeason? {
@@ -307,6 +338,7 @@ public final class SeriesDetailViewModel: ObservableObject {
             selectedEpisodeID = response.seasons.first?.episodes.first?.id
             releases = rankScopedReleases(response.releases)
             await refreshLibraryState()
+            await refreshUserSources()
             state = .loaded
         } catch {
             state = .failed(CineFlowError.from(error, fallbackCategory: .metadata).userMessage)
@@ -334,6 +366,23 @@ public final class SeriesDetailViewModel: ObservableObject {
                 try? await libraryRepository.markWatched(mediaItem, positionSeconds: 0)
             }
         }
+    }
+
+    public func selectUserSource(_ source: UserMediaSource) {
+        selectedUserSourceID = source.id
+    }
+
+    public func addLocalSource(url: URL) async {
+        guard let userMediaSourceRepository else { return }
+        let source = UserMediaSource(
+            mediaID: seriesID,
+            displayName: url.deletingPathExtension().lastPathComponent,
+            kind: .localFile,
+            url: url
+        )
+        try? await userMediaSourceRepository.save(source)
+        selectedUserSourceID = source.id
+        await refreshUserSources()
     }
 
     public func continueWatching() {
@@ -404,6 +453,23 @@ public final class SeriesDetailViewModel: ObservableObject {
             isInLibrary = items.contains { $0.id == mediaItem.id }
         } catch {
             isInLibrary = false
+        }
+    }
+
+    private func refreshUserSources() async {
+        guard let userMediaSourceRepository else {
+            userSources = []
+            selectedUserSourceID = nil
+            return
+        }
+        do {
+            userSources = try await userMediaSourceRepository.sources(for: seriesID)
+            if selectedUserSourceID == nil {
+                selectedUserSourceID = userSources.first?.id
+            }
+        } catch {
+            userSources = []
+            selectedUserSourceID = nil
         }
     }
 }

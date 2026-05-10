@@ -68,40 +68,45 @@ struct CineFlowApplication: App {
 
         let keychainService = KeychainService()
         self.keychainService = keychainService
+        let torrentioSettingsStore = UserDefaultsTorrentioSettingsStore()
         let diagnosticsService = LocalDiagnosticsService(
             settingsSummaryProvider: {
                 DiagnosticsSettingsSummary(
                     language: "system",
                     telemetryEnabled: false,
-                    sourceCount: SourceProviderCatalog.providers().providerIds.count
+                    sourceCount: SourceProviderCatalog.providers(
+                        featureFlags: SourceProviderFeatureFlags(mockProvider: false, rutorProvider: false, ruTrackerProvider: false, torrentioProvider: true),
+                        torrentioSettingsStore: torrentioSettingsStore
+                    ).providerIds.count
                 )
             },
             cacheSummaryProvider: {
                 DiagnosticsCacheSummary()
             },
             databaseSchemaVersionProvider: {
-                "v7_source_account_auth_metadata"
+                "v8_user_media_sources"
             }
         )
         let sourceManager = SourceManager.development(
-            credentialStore: KeychainSourceCredentialStore(keychainService: keychainService)
+            featureFlags: SourceProviderFeatureFlags(mockProvider: false, rutorProvider: false, ruTrackerProvider: false, torrentioProvider: true),
+            credentialStore: KeychainSourceCredentialStore(keychainService: keychainService),
+            torrentioSettingsStore: torrentioSettingsStore
         )
         self.sourceManager = sourceManager
-        searchProvider = SourceBackedSearchProvider(
-            mediaProvider: MockSearchProvider(),
-            torrentAggregator: TorrentSearchAggregator(sourceManager: sourceManager)
-        )
+        searchProvider = TMDBSearchProvider(metadataService: metadataService)
         playbackProgressRecorder = PlaybackProgressRecorder(
             store: playbackProgressRepository ?? InMemoryPlaybackProgressStore(),
             historyStore: watchHistoryRepository
         )
         let updateService = SparkleUpdateService()
         self.updateService = updateService
+        let userMediaSourceRepository = liveDatabaseManager
+            .map(DatabaseUserMediaSourceRepository.init(databaseManager:))
 
         let appEnvironment = AppEnvironment(
             metadataService: metadataService,
-            torrentEngine: MockTorrentEngine(),
-            playbackService: MockPlaybackService(),
+            torrentEngine: EmbeddedLibtorrentTorrentEngine(),
+            playbackService: AVFoundationPlaybackService(),
             subtitleService: MockSubtitleService(),
             libraryRepository: libraryRepository,
             settingsRepository: settingsRepository,
@@ -110,12 +115,13 @@ struct CineFlowApplication: App {
             imageCacheService: imageCacheService,
             playbackProgressRepository: playbackProgressRepository,
             watchHistoryRepository: watchHistoryRepository,
-            keychainService: keychainService
+            keychainService: keychainService,
+            userMediaSourceRepository: userMediaSourceRepository
         )
         environment = appEnvironment
         _macOSIntegrationViewModel = StateObject(wrappedValue: MacOSIntegrationViewModel(environment: appEnvironment))
         Task {
-            await diagnosticsService.log(level: .info, subsystem: .app, message: "CineFlow app launch", metadata: [:])
+            await diagnosticsService.log(level: .info, subsystem: .app, message: "Streamly app launch", metadata: [:])
         }
     }
 

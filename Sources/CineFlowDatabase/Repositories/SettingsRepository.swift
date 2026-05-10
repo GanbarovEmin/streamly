@@ -67,6 +67,7 @@ public final class DatabaseSettingsRepository: SettingsRepositoryProtocol {
             try db.execute(sql: "DELETE FROM playback_progress")
             try db.execute(sql: "DELETE FROM library_items")
             try db.execute(sql: "DELETE FROM torrent_releases")
+            try db.execute(sql: "DELETE FROM user_media_sources")
         }
     }
 
@@ -78,6 +79,19 @@ public final class DatabaseSettingsRepository: SettingsRepositoryProtocol {
 
     public func string(forKey key: String) async throws -> String? {
         try await value(forKey: key, as: String.self)
+    }
+
+    public func metadataCredential(forKey key: String) async -> String? {
+        try? await string(forKey: key)
+    }
+
+    public func setMetadataCredential(_ value: String?, forKey key: String) async {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let trimmed, !trimmed.isEmpty else {
+            try? await deleteValue(forKey: key)
+            return
+        }
+        try? await setString(trimmed, forKey: key)
     }
 
     public func setStringArray(_ value: [String], forKey key: String) async throws {
@@ -116,5 +130,11 @@ public final class DatabaseSettingsRepository: SettingsRepositoryProtocol {
                 """,
             arguments: [key, json, timestamp()]
         )
+    }
+
+    private func deleteValue(forKey key: String) async throws {
+        try databaseManager.write { db in
+            try db.execute(sql: "DELETE FROM app_settings WHERE key = ?", arguments: [key])
+        }
     }
 }

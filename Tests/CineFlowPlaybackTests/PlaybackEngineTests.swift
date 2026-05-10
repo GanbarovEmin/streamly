@@ -65,6 +65,35 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(stoppedStatus.state, .idle)
     }
 
+    @MainActor
+    func testAVFoundationPlaybackServiceTracksLocalFileStateChanges() async throws {
+        let service: any PlaybackServiceProtocol = AVFoundationPlaybackService()
+        let source = PlaybackMediaSource(
+            id: "tmdb:movie:603",
+            title: "The Matrix",
+            url: URL(fileURLWithPath: "/tmp/matrix.mp4"),
+            qualityLabel: "Local",
+            sourceName: "Local file"
+        )
+
+        try await service.play(source)
+        var status = await service.currentStatus
+        XCTAssertEqual(status.state, .playing)
+        XCTAssertEqual(status.media?.id, source.id)
+
+        try await service.pause()
+        status = await service.currentStatus
+        XCTAssertEqual(status.state, .paused)
+
+        try await service.resume()
+        status = await service.currentStatus
+        XCTAssertEqual(status.state, .playing)
+
+        try await service.stop()
+        status = await service.currentStatus
+        XCTAssertEqual(status.state, .idle)
+    }
+
     func testProgressRecorderPersistsEveryConfiguredInterval() async throws {
         let store = InMemoryPlaybackProgressStore()
         let recorder = PlaybackProgressRecorder(store: store, saveIntervalSeconds: 5)

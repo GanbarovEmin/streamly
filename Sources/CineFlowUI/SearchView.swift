@@ -205,7 +205,8 @@ public struct SearchView: View {
                                     id: item.id,
                                     title: item.title,
                                     metadata: item.metadata,
-                                    badge: item.quality
+                                    badge: item.quality,
+                                    artworkURL: item.artworkURL
                                 )
                             ) {
                                 navigationCoordinator.navigate(to: .mediaDetail(id: item.id))

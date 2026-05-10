@@ -5,7 +5,7 @@ Streamly uses Sparkle 2 for automatic updates.
 The app update flow is:
 
 ```text
-CineFlow.app -> Sparkle appcast -> GitHub Releases .dmg -> Sparkle update
+Streamly.app -> Sparkle appcast -> GitHub Releases .dmg -> Sparkle update
 ```
 
 ## GitHub Releases
@@ -13,26 +13,26 @@ CineFlow.app -> Sparkle appcast -> GitHub Releases .dmg -> Sparkle update
 Public releases are distributed as `.dmg` files through:
 
 ```text
-https://github.com/GanbarovEmin/Streamly/releases/latest
+https://github.com/GanbarovEmin/streamly/releases/latest
 ```
 
 Release assets should use predictable names such as:
 
 ```text
-CineFlow-1.0.0.dmg
+Streamly-1.0.0.dmg
 ```
 
 ## Appcast
 
 Sparkle reads update metadata from the appcast configured in `Configuration/CineFlow-Info.plist`.
 
-The current placeholder feed URL is:
+The current feed URL is:
 
 ```text
-https://<github-pages-domain>/cineflow/appcast.xml
+https://ganbarovemin.github.io/streamly/appcast.xml
 ```
 
-Before shipping, replace it with the production GitHub Pages or static hosting URL.
+The unsigned DMG workflow publishes GitHub Release assets; Sparkle appcast publishing remains a separate signing/update step.
 
 ## Release Relationship
 

@@ -69,10 +69,14 @@ public final class LibraryViewModel: ObservableObject {
     @Published public private(set) var sortOrder: LibrarySortOrder = .recentlyAdded
     @Published public private(set) var selectedListID: String?
     @Published public private(set) var errorMessage: String?
+    @Published public private(set) var visibleItems: [MediaItem] = []
     @Published public var searchQuery = ""
 
     private let repository: any LibraryRepositoryProtocol
     private var listItemsByID: [String: [MediaItem]] = [:]
+    private var favoriteIDs: Set<String> = []
+    private var ratingsByID: [String: Int] = [:]
+    private var progressByID: [String: Double] = [:]
 
     public init(repository: any LibraryRepositoryProtocol) {
         self.repository = repository
@@ -89,12 +93,16 @@ public final class LibraryViewModel: ObservableObject {
         )
     }
 
-    public var visibleItems: [MediaItem] {
-        sort(filter(baseItems(for: selectedSection)))
-    }
-
     public var isCurrentSectionEmpty: Bool {
         visibleItems.isEmpty
+    }
+
+    public var prefetchArtworkURLs: [URL] {
+        visibleItems.compactMap(\.bestPosterURL)
+    }
+
+    public var artworkPrefetchKey: String {
+        prefetchArtworkURLs.prefix(64).map(\.absoluteString).joined(separator: "|")
     }
 
     public func load() async {
@@ -119,11 +127,14 @@ public final class LibraryViewModel: ObservableObject {
                 loadedListItems[list.id] = try await repository.items(in: list.id)
             }
             listItemsByID = loadedListItems
+            rebuildLookupTables()
             selectedListID = selectedListID ?? lists.first?.id
+            rebuildVisibleItems()
             state = items.isEmpty && favorites.isEmpty && lists.isEmpty && watchedItems.isEmpty && ratedItems.isEmpty ? .empty : .loaded
         } catch {
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .database)
             errorMessage = cineFlowError.userMessage
+            visibleItems = []
             state = .failed(cineFlowError.userMessage)
         }
     }
@@ -133,23 +144,28 @@ public final class LibraryViewModel: ObservableObject {
         if section == .lists, selectedListID == nil {
             selectedListID = lists.first?.id
         }
+        rebuildVisibleItems()
     }
 
     public func updateSearchQuery(_ query: String) {
         searchQuery = query
+        rebuildVisibleItems()
     }
 
     public func setKindFilter(_ filter: LibraryKindFilter) {
         selectedKindFilter = filter
+        rebuildVisibleItems()
     }
 
     public func setSortOrder(_ order: LibrarySortOrder) {
         sortOrder = order
+        rebuildVisibleItems()
     }
 
     public func selectList(_ list: UserList) {
         selectedListID = list.id
         selectedSection = .lists
+        rebuildVisibleItems()
     }
 
     public func add(_ item: MediaItem) async throws {
@@ -203,11 +219,11 @@ public final class LibraryViewModel: ObservableObject {
     }
 
     public func rating(for mediaID: String) -> Int? {
-        ratedItems.first { $0.item.id == mediaID }?.rating
+        ratingsByID[mediaID]
     }
 
     public func isFavorite(_ mediaID: String) -> Bool {
-        favorites.contains { $0.id == mediaID }
+        favoriteIDs.contains(mediaID)
     }
 
     public func cardModel(for item: MediaItem) -> CFMediaCardModel {
@@ -243,6 +259,21 @@ public final class LibraryViewModel: ObservableObject {
         }
     }
 
+    private func rebuildVisibleItems() {
+        visibleItems = sort(filter(baseItems(for: selectedSection)))
+    }
+
+    private func rebuildLookupTables() {
+        favoriteIDs = Set(favorites.map(\.id))
+        ratingsByID = Dictionary(uniqueKeysWithValues: ratedItems.map { ($0.item.id, $0.rating) })
+        progressByID = Dictionary(
+            uniqueKeysWithValues: watchedItems.compactMap { watchedItem in
+                guard watchedItem.positionSeconds > 0 else { return nil }
+                return (watchedItem.item.id, min(watchedItem.positionSeconds / 7_200, 1))
+            }
+        )
+    }
+
     private func filter(_ baseItems: [MediaItem]) -> [MediaItem] {
         let kindFiltered = baseItems.filter { item in
             switch selectedKindFilter {
@@ -273,15 +304,12 @@ public final class LibraryViewModel: ObservableObject {
         case .yearDescending:
             baseItems.sorted { ($0.releaseYear ?? 0) > ($1.releaseYear ?? 0) }
         case .ratingDescending:
-            baseItems.sorted { (rating(for: $0.id) ?? 0) > (rating(for: $1.id) ?? 0) }
+            baseItems.sorted { (ratingsByID[$0.id] ?? 0) > (ratingsByID[$1.id] ?? 0) }
         }
     }
 
     private func progress(for mediaID: String) -> Double? {
-        guard let watchedItem = watchedItems.first(where: { $0.item.id == mediaID }), watchedItem.positionSeconds > 0 else {
-            return nil
-        }
-        return min(watchedItem.positionSeconds / 7_200, 1)
+        progressByID[mediaID]
     }
 
     private func kindTitle(for kind: MediaKind) -> String {

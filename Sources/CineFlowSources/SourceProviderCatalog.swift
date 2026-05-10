@@ -20,7 +20,10 @@ public struct SourceProviderCatalog {
 
     public static let mock = SourceProviderCatalog(providers: [MockTorrentSourceProvider()])
 
-    public static func providers(featureFlags: SourceProviderFeatureFlags = .development) -> SourceProviderCatalog {
+    public static func providers(
+        featureFlags: SourceProviderFeatureFlags = .development,
+        torrentioSettingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore()
+    ) -> SourceProviderCatalog {
         var providers: [any TorrentSourceProviderProtocol] = []
         if featureFlags.mockProvider {
             providers.append(MockTorrentSourceProvider())
@@ -30,6 +33,9 @@ public struct SourceProviderCatalog {
         }
         if featureFlags.ruTrackerProvider {
             providers.append(RuTrackerSourceProvider())
+        }
+        if featureFlags.torrentioProvider {
+            providers.append(TorrentioSourceProvider(settingsStore: torrentioSettingsStore))
         }
         return SourceProviderCatalog(providers: providers)
     }

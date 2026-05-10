@@ -4,7 +4,7 @@ Streamly is designed as a local-first macOS app.
 
 ## Stored Locally
 
-Streamly may store the following data under `~/Library/Application Support/CineFlow/`:
+Streamly may store the following data under `~/Library/Application Support/Streamly/`:
 
 - local library records;
 - watch history;
@@ -46,7 +46,7 @@ To remove local app data:
 2. Delete:
 
    ```text
-   ~/Library/Application Support/CineFlow/
+   ~/Library/Application Support/Streamly/
    ```
 
 3. Remove related credentials from macOS Keychain if desired.

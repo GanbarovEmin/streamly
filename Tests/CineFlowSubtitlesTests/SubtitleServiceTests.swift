@@ -79,7 +79,7 @@ final class SubtitleServiceTests: XCTestCase {
         XCTAssertEqual(track.source, .openSubtitles)
         XCTAssertEqual(String(data: cachedData, encoding: .utf8), "subtitle-body")
         XCTAssertTrue(SubtitleCache.defaultStorageURL().path.contains("Application Support"))
-        XCTAssertTrue(SubtitleCache.defaultStorageURL().path.contains("CineFlow/Subtitles"))
+        XCTAssertTrue(SubtitleCache.defaultStorageURL().path.contains("Streamly/Subtitles"))
     }
 
     func testMatchingLogicUsesTitleYearEpisodeHashAndLanguage() {

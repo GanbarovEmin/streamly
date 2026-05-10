@@ -76,6 +76,34 @@ final class LibraryViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.visibleItems.contains { $0.id == movie.id })
     }
 
+    @MainActor
+    func testLargeLibraryFilteringUsesCachedVisibleItemsAndArtworkPrefetchList() async {
+        let items = (0..<1_500).map { index in
+            MediaItem(
+                id: "tmdb:movie:\(index)",
+                title: index.isMultiple(of: 2) ? "Matrix \(index)" : "Arrival \(index)",
+                kind: .movie,
+                overview: "Fixture",
+                releaseYear: 1980 + (index % 40),
+                posterPath: "https://images.example.com/poster-\(index).jpg"
+            )
+        }
+        let repository = InMemoryLibraryRepository(items: items)
+        let viewModel = LibraryViewModel(repository: repository)
+
+        await viewModel.load()
+        viewModel.selectSection(.all)
+        XCTAssertEqual(viewModel.visibleItems.count, 1_500)
+
+        viewModel.updateSearchQuery("Matrix")
+        XCTAssertEqual(viewModel.visibleItems.count, 750)
+        XCTAssertEqual(viewModel.prefetchArtworkURLs.count, 750)
+        XCTAssertFalse(viewModel.artworkPrefetchKey.isEmpty)
+
+        viewModel.setSortOrder(.yearDescending)
+        XCTAssertGreaterThanOrEqual(viewModel.visibleItems.first?.releaseYear ?? 0, viewModel.visibleItems.last?.releaseYear ?? 0)
+    }
+
     private static func movie(id: String, title: String, year: Int) -> MediaItem {
         MediaItem(id: id, title: title, kind: .movie, overview: "Fixture", releaseYear: year, posterPath: nil)
     }

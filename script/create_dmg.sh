@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="CineFlow"
+APP_NAME="Streamly"
 INFO_PLIST="$ROOT_DIR/Configuration/CineFlow-Info.plist"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
@@ -22,7 +22,7 @@ Options:
   --build BUILD_NUMBER    Override CFBundleVersion in the staged app.
   --sign IDENTITY         Pass Developer ID identity to build_release.sh.
   --unsigned              Build without codesigning.
-  --skip-build            Reuse dist/release/CineFlow.app.
+  --skip-build            Reuse dist/release/Streamly.app.
   --output PATH           Write DMG to PATH.
   -h, --help              Show this help.
 USAGE
@@ -94,13 +94,13 @@ mkdir -p "$DMG_ROOT" "$DMG_DIR"
 /usr/bin/ditto --noextattr --norsrc "$APP_BUNDLE" "$DMG_ROOT/$APP_NAME.app"
 ln -s /Applications "$DMG_ROOT/Applications"
 cat > "$DMG_ROOT/README.txt" <<'README'
-Install CineFlow
+Install Streamly
 
-Drag CineFlow.app to the Applications shortcut.
+Drag Streamly.app to the Applications shortcut.
 
 If this build is not signed and notarized with Developer ID, macOS may block
 the first launch. Open System Settings -> Privacy & Security and choose Open
-Anyway for CineFlow, or Control-click CineFlow.app and choose Open.
+Anyway for Streamly, or Control-click Streamly.app and choose Open.
 README
 
 if find "$DMG_ROOT" \( -name '*.local.json' -o -name '*.ed25519' -o -name '*.sparkle-private-key' -o -name '.env' \) -print -quit | grep -q .; then
@@ -116,6 +116,11 @@ hdiutil create \
     -imagekey zlib-level=9 \
     "$DMG_PATH" >/dev/null
 
+(
+    cd "$(dirname "$DMG_PATH")"
+    shasum -a 256 "$(basename "$DMG_PATH")"
+) > "$DMG_PATH.sha256"
+
 MOUNT_POINT="$(mktemp -d "$DIST_DIR/dmg-mount.XXXXXX")"
 cleanup() {
     hdiutil detach "$MOUNT_POINT" >/dev/null 2>&1 || true
@@ -130,3 +135,5 @@ test -f "$MOUNT_POINT/README.txt"
 
 echo "DMG created:"
 echo "$DMG_PATH"
+echo "Checksum created:"
+echo "$DMG_PATH.sha256"

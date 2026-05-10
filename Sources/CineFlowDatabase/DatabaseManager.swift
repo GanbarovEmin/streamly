@@ -2,7 +2,8 @@ import Foundation
 import GRDB
 
 public final class DatabaseManager {
-    public static let fileName = "CineFlow.sqlite"
+    public static let fileName = "Streamly.sqlite"
+    private static let legacyFileName = "CineFlow.sqlite"
 
     let databaseQueue: DatabaseQueue
 
@@ -50,6 +51,28 @@ public final class DatabaseManager {
             appropriateFor: nil,
             create: true
         )
-        return baseURL.appendingPathComponent("CineFlow", isDirectory: true)
+        try migrateLegacyApplicationSupportIfNeeded(baseURL: baseURL)
+        return baseURL.appendingPathComponent("Streamly", isDirectory: true)
+    }
+
+    static func migrateLegacyApplicationSupportIfNeeded(baseURL: URL, fileManager: FileManager = .default) throws {
+        let legacyDirectory = baseURL.appendingPathComponent("CineFlow", isDirectory: true)
+        let streamlyDirectory = baseURL.appendingPathComponent("Streamly", isDirectory: true)
+        let legacyDatabaseInOldDirectory = legacyDirectory.appendingPathComponent(legacyFileName)
+        let legacyDatabaseInNewDirectory = streamlyDirectory.appendingPathComponent(legacyFileName)
+        let streamlyDatabase = streamlyDirectory.appendingPathComponent(fileName)
+
+        if fileManager.fileExists(atPath: legacyDirectory.path), !fileManager.fileExists(atPath: streamlyDirectory.path) {
+            try fileManager.moveItem(at: legacyDirectory, to: streamlyDirectory)
+        }
+
+        if fileManager.fileExists(atPath: legacyDatabaseInOldDirectory.path), !fileManager.fileExists(atPath: streamlyDatabase.path) {
+            try fileManager.createDirectory(at: streamlyDirectory, withIntermediateDirectories: true)
+            try fileManager.copyItem(at: legacyDatabaseInOldDirectory, to: streamlyDatabase)
+        }
+
+        if fileManager.fileExists(atPath: legacyDatabaseInNewDirectory.path), !fileManager.fileExists(atPath: streamlyDatabase.path) {
+            try fileManager.moveItem(at: legacyDatabaseInNewDirectory, to: streamlyDatabase)
+        }
     }
 }

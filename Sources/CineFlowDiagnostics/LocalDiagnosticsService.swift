@@ -125,7 +125,7 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
         )
         try encoder.encode(summary).write(to: stagingURL.appendingPathComponent("summary.json"))
 
-        let zipURL = exportsDirectory.appendingPathComponent("CineFlow-Diagnostics-\(Self.timestamp()).zip")
+        let zipURL = exportsDirectory.appendingPathComponent("Streamly-Diagnostics-\(Self.timestamp()).zip")
         try? fileManager.removeItem(at: zipURL)
         try zip(stagingURL: stagingURL, outputURL: zipURL)
         return zipURL
@@ -186,7 +186,7 @@ public actor LocalDiagnosticsService: DiagnosticsServiceProtocol {
     private static func defaultBaseDirectory(fileManager: FileManager = .default) -> URL {
         let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
-        return applicationSupport.appendingPathComponent("CineFlow", isDirectory: true)
+        return applicationSupport.appendingPathComponent("Streamly", isDirectory: true)
     }
 
     private static var architecture: String {

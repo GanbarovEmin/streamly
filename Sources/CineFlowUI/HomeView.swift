@@ -5,11 +5,13 @@ import SwiftUI
 public struct HomeView: View {
     @ObservedObject private var viewModel: HomeViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
+    @ObservedObject private var imagePipeline: CineFlowImagePipeline
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
-    public init(viewModel: HomeViewModel, navigationCoordinator: NavigationCoordinator) {
+    public init(viewModel: HomeViewModel, navigationCoordinator: NavigationCoordinator, imagePipeline: CineFlowImagePipeline) {
         self.viewModel = viewModel
         self.navigationCoordinator = navigationCoordinator
+        self.imagePipeline = imagePipeline
     }
 
     public var body: some View {
@@ -58,13 +60,16 @@ public struct HomeView: View {
                     watchTitle: t(.homeWatch),
                     libraryTitle: t(.homeAddToLibrary),
                     onWatch: {
-                        navigationCoordinator.navigate(to: .player(mediaID: item.id))
+                        navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
                     },
                     onLibrary: {
                         navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
                     },
                     onSelectFeatured: { id in
                         viewModel.selectFeaturedItem(id: id)
+                    },
+                    imageDataLoader: { url in
+                        try await imagePipeline.data(for: url)
                     }
                 )
             }
@@ -76,11 +81,18 @@ public struct HomeView: View {
                     MediaCarousel(
                         title: localizedSectionTitle(section.kind),
                         items: section.items,
-                        cardStyle: section.cardStyle
-                    ) { item in
-                        navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
-                    }
+                        cardStyle: section.cardStyle,
+                        action: { item in
+                            navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+                        },
+                        imageDataLoader: { url in
+                            try await imagePipeline.data(for: url)
+                        }
+                    )
                 }
+            }
+            .task(id: viewModel.artworkPrefetchKey) {
+                await imagePipeline.prefetch(viewModel.prefetchArtworkURLs)
             }
         }
     }
@@ -117,11 +129,12 @@ private struct HomeHeroView: View {
     let onWatch: () -> Void
     let onLibrary: () -> Void
     let onSelectFeatured: (String) -> Void
+    let imageDataLoader: CFImageDataLoader?
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .bottomLeading) {
-                HomeBackdrop(item: item)
+                HomeBackdrop(item: item, imageDataLoader: imageDataLoader)
 
                 LinearGradient(
                     colors: [
@@ -210,6 +223,7 @@ private struct HomeHeroView: View {
 
 private struct HomeBackdrop: View {
     let item: HomeFeaturedItem
+    let imageDataLoader: CFImageDataLoader?
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -245,6 +259,13 @@ private struct HomeBackdrop: View {
                 .blur(radius: 12)
                 .opacity(0.68)
                 .offset(x: -220, y: 170)
+        }
+        .overlay {
+            if let backdropURL = item.backdropURL {
+                CFCachedAsyncImage(url: backdropURL, contentMode: .fill, imageDataLoader: imageDataLoader)
+                    .opacity(0.38)
+                    .overlay(CFColors.backgroundPrimary.opacity(0.26))
+            }
         }
     }
 }

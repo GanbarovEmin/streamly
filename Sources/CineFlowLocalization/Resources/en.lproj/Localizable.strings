@@ -25,7 +25,7 @@
 "topControl.profile" = "Profile";
 "search.placeholder" = "Search movies, series, releases";
 "search.title" = "Search";
-"search.subtitle" = "Find movies, series, and torrent releases across normalized mock providers.";
+"search.subtitle" = "Find movies and series through TMDB metadata. Playback uses only sources you add.";
 "search.filters" = "Filters";
 "search.sort" = "Sort";
 "search.state.idle.title" = "Search Streamly";
@@ -92,8 +92,8 @@
 "series.release.scope.episode" = "Episode";
 
 "sidebar.tagline" = "Cinema Center";
-"sidebar.runtime.title" = "Mock runtime";
-"sidebar.runtime.message" = "No external APIs or engines are active";
+"sidebar.runtime.title" = "Local-first runtime";
+"sidebar.runtime.message" = "TMDB metadata active; playback uses your sources";
 
 "hero.metric.bestRelease" = "Best release";
 "hero.metric.mode" = "Mode";
@@ -106,7 +106,7 @@
 "home.action.addToLibrary" = "In Library";
 "home.state.loading" = "Preparing your home screen";
 "home.state.empty.title" = "Your home screen is empty";
-"home.state.empty.message" = "Add movies or series to the seed layer to populate Streamly.";
+"home.state.empty.message" = "Add TMDB credentials in Settings or local config to populate Streamly.";
 "home.state.error.title" = "Home screen unavailable";
 "home.section.continueWatching" = "Continue Watching";
 "home.section.popularMovies" = "Popular - Movies";
@@ -115,13 +115,13 @@
 "home.section.recommended" = "Recommended";
 "home.section.topQuality" = "Top Quality";
 "hero.subtitle.nativeShell" = "Native macOS media shell";
-"hero.subtitle.noMetadata" = "No mock metadata available";
-"hero.subtitle.loadFailed" = "Mock environment failed to load";
+"hero.subtitle.noMetadata" = "Metadata is not loaded yet";
+"hero.subtitle.loadFailed" = "Metadata could not be loaded";
 "hero.unknownYear" = "Unknown";
 
 "mediaKind.movie" = "Movie";
 "mediaKind.series" = "Series";
-"release.unavailable" = "No mock releases";
+"release.unavailable" = "No user sources";
 "release.best.format" = "%@ · %d seeders";
 "subtitle.language.format" = "Subtitles: %@";
 "subtitle.language.unavailable" = "Subtitles: not configured";

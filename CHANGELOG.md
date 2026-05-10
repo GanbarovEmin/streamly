@@ -8,18 +8,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- Public GitHub repository documentation.
-- Security, contribution, privacy, legal, installation and updates documentation.
-- Placeholder product screenshots for the README.
-- GitHub issue templates, pull request template and CI placeholder.
+- Post-RC bug fixes and release documentation updates will be listed here.
 
-## [1.0.0] - Placeholder
+## [1.0.0-rc.1] - 2026-05-10
 
 ### Added
 
-- Planned first public macOS release.
-- Native SwiftUI app shell.
-- Local library, playback, metadata, subtitles, source provider architecture and Sparkle update model.
+- Native macOS SwiftUI app shell with search, detail pages, release selection and playback surfaces.
+- Local library, user lists, continue watching, watch history and settings flows.
+- Source provider, torrent, playback, subtitle, metadata, cache, database, diagnostics and update service layers.
+- Sparkle 2 integration through Swift Package Manager with appcast and EdDSA signing documentation.
+- DMG release scripts for local archive creation and public GitHub Releases distribution.
+- Unified user-facing error layer with reusable SwiftUI error states and diagnostics logging.
+- Image cache, poster/backdrop prefetching and optional performance debug overlay.
+- Baseline unit and integration tests for ranking, repositories, settings, metadata mapping, playback progress, watch completion, cache behavior and view models.
+- CI placeholder workflow for build and test.
 
-[Unreleased]: https://github.com/GanbarovEmin/Streamly/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/GanbarovEmin/Streamly/releases/tag/v1.0.0
+### Changed
+
+- Release candidate version is `1.0.0` with build `100`.
+- Release documentation now separates DMG packaging, Sparkle updates and final RC validation.
+
+### Security
+
+- Private Sparkle signing keys, local provider config, cookies, tokens and API keys are excluded from source control and release packaging.
+
+## [1.0.0] - Planned
+
+### Added
+
+- First stable public macOS release, promoted from the v1.0 release candidate after manual distribution validation.
+
+[Unreleased]: https://github.com/GanbarovEmin/streamly/compare/v1.0.0-rc.1...HEAD
+[1.0.0-rc.1]: https://github.com/GanbarovEmin/streamly/releases/tag/v1.0.0-rc.1
+[1.0.0]: https://github.com/GanbarovEmin/streamly/releases/tag/v1.0.0

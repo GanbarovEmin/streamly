@@ -319,6 +319,23 @@ extension DatabaseManager {
             }
         }
 
+        migrator.registerMigration("v8_user_media_sources") { db in
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS user_media_sources (
+                    id TEXT PRIMARY KEY,
+                    media_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK (kind IN ('localFile', 'magnet', 'torrentFile')),
+                    url TEXT,
+                    magnet_uri TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_user_media_sources_media ON user_media_sources(media_id, updated_at DESC);
+                """)
+        }
+
         return migrator
     }
 }

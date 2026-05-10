@@ -1,7 +1,9 @@
 import CineFlowCore
 import CineFlowDesignSystem
 import CineFlowLocalization
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 public struct MovieDetailView: View {
     @StateObject private var viewModel: MovieDetailViewModel
@@ -11,9 +13,16 @@ public struct MovieDetailView: View {
     public init(
         mediaID: String,
         navigationCoordinator: NavigationCoordinator,
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        detailProvider: (any MovieDetailProviderProtocol)? = nil,
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
     ) {
-        _viewModel = StateObject(wrappedValue: MovieDetailViewModel(mediaID: mediaID, libraryRepository: libraryRepository))
+        _viewModel = StateObject(wrappedValue: MovieDetailViewModel(
+            mediaID: mediaID,
+            provider: detailProvider ?? MockMovieDetailProvider(),
+            libraryRepository: libraryRepository,
+            userMediaSourceRepository: userMediaSourceRepository
+        ))
         self.navigationCoordinator = navigationCoordinator
     }
 
@@ -57,7 +66,7 @@ public struct MovieDetailView: View {
     private func hero(_ movie: MovieDetail) -> some View {
         GeometryReader { proxy in
             ZStack(alignment: .bottomLeading) {
-                MovieBackdrop(accentIndex: movie.backdropAccentIndex, title: movie.title)
+                MovieBackdrop(accentIndex: movie.backdropAccentIndex, title: movie.title, backdropURL: movie.backdropURL)
 
                 LinearGradient(
                     colors: [CFColors.clear, CFColors.backgroundPrimary.opacity(0.48), CFColors.backgroundPrimary.opacity(0.92)],
@@ -92,9 +101,13 @@ public struct MovieDetailView: View {
                 )
             )
             .overlay {
-                Text(String(movie.title.prefix(1)))
-                    .font(.system(size: 86, weight: .black, design: .rounded))
-                    .foregroundStyle(CFColors.textPrimary.opacity(0.22))
+                if let posterURL = movie.posterURL {
+                    CFCachedAsyncImage(url: posterURL, contentMode: .fill)
+                } else {
+                    Text(String(movie.title.prefix(1)))
+                        .font(.system(size: 86, weight: .black, design: .rounded))
+                        .foregroundStyle(CFColors.textPrimary.opacity(0.22))
+                }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
@@ -131,23 +144,23 @@ public struct MovieDetailView: View {
                 .lineLimit(compact ? 3 : 4)
                 .frame(maxWidth: 760, alignment: .leading)
 
-            if viewModel.hasContinueWatching {
-                VStack(alignment: .leading, spacing: CFSpacing.xs) {
-                    ProgressBar(value: viewModel.progressValue)
-                        .frame(maxWidth: 420)
-                    SecondaryButton(t(.detailContinue), systemImage: "play.fill") {
-                        viewModel.continueWatching()
-                        navigationCoordinator.navigate(to: .player(mediaID: movie.id))
+                    if viewModel.hasContinueWatching {
+                        VStack(alignment: .leading, spacing: CFSpacing.xs) {
+                            ProgressBar(value: viewModel.progressValue)
+                                .frame(maxWidth: 420)
+                            SecondaryButton(t(.detailContinue), systemImage: "play.fill") {
+                                viewModel.continueWatching()
+                                playMovie(movie)
+                            }
+                        }
                     }
-                }
-            }
 
             HStack(spacing: CFSpacing.md) {
                 PrimaryButton(t(.detailWatch), systemImage: "play.fill") {
                     if let release = viewModel.releases.first?.release {
                         viewModel.play(release)
                     }
-                    navigationCoordinator.navigate(to: .player(mediaID: movie.id))
+                    playMovie(movie)
                 }
                 SecondaryButton(t(.detailLibrary), systemImage: "plus") {
                     viewModel.addToLibrary()
@@ -161,6 +174,32 @@ public struct MovieDetailView: View {
             }
         }
         .frame(maxWidth: 820, alignment: .leading)
+    }
+
+    private func playMovie(_ movie: MovieDetail) {
+        if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
+            viewModel.selectUserSource(source)
+            navigationCoordinator.navigate(to: .player(mediaID: movie.id, sourceID: source.id))
+            return
+        }
+        openLocalMediaPanel(mediaID: movie.id)
+    }
+
+    private func openLocalMediaPanel(mediaID: String) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .video, .mpeg4Movie, .quickTimeMovie]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.message = "Choose a local video file for Streamly playback."
+
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            Task { @MainActor in
+                await viewModel.addLocalSource(url: url)
+                navigationCoordinator.navigate(to: .player(mediaID: mediaID, sourceID: viewModel.selectedUserSourceID))
+            }
+        }
     }
 
     private var tabs: some View {
@@ -184,7 +223,7 @@ public struct MovieDetailView: View {
             MediaCarousel(
                 title: t(.detailTabSimilar),
                 items: viewModel.similar.map {
-                    CFMediaCardModel(id: $0.id, title: $0.title, metadata: $0.metadata, badge: $0.quality)
+                    CFMediaCardModel(id: $0.id, title: $0.title, metadata: $0.metadata, badge: $0.quality, artworkURL: $0.artworkURL)
                 }
             ) { item in
                 navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
@@ -318,6 +357,7 @@ struct DetailTabButton: View {
 struct MovieBackdrop: View {
     let accentIndex: Int
     let title: String
+    let backdropURL: URL?
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -342,6 +382,13 @@ struct MovieBackdrop: View {
                 .font(.system(size: 280, weight: .black, design: .rounded))
                 .foregroundStyle(CFColors.textPrimary.opacity(0.05))
                 .offset(x: -70, y: -20)
+        }
+        .overlay {
+            if let backdropURL {
+                CFCachedAsyncImage(url: backdropURL, contentMode: .fill)
+                    .opacity(0.36)
+                    .overlay(CFColors.backgroundPrimary.opacity(0.30))
+            }
         }
     }
 }
@@ -371,7 +418,7 @@ private struct MovieReleaseRow: View {
                     }
                     CFBadge(ranked.release.codec.rawValue, tone: .source)
                     SeedersBadge(ranked.release.seeders)
-                    SourceBadge(ranked.release.sourceName)
+                SourceBadge(ranked.release.sourceName)
                     CFBadge(ranked.release.humanReadableSize, tone: .source)
                 }
 

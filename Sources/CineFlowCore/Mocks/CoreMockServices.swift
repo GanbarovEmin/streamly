@@ -261,11 +261,13 @@ public final class CoreMockSettingsRepository: SettingsRepositoryProtocol {
     private var settings: AppSettings
     private var subtitleSettingsValue: SubtitleSettings
     private var languages: [String]
+    private var metadataCredentials: [String: String]
 
     public init(settings: AppSettings = AppSettings(), languages: [String] = ["ru", "en"]) {
         self.settings = settings
         subtitleSettingsValue = SubtitleSettings(languagePreference: SubtitleLanguagePreference(languages))
         self.languages = languages
+        metadataCredentials = [:]
     }
 
     public var appSettings: AppSettings {
@@ -294,10 +296,24 @@ public final class CoreMockSettingsRepository: SettingsRepositoryProtocol {
         languages = settings.languagePreference.languageCodes
     }
 
+    public func metadataCredential(forKey key: String) async -> String? {
+        metadataCredentials[key]
+    }
+
+    public func setMetadataCredential(_ value: String?, forKey key: String) async {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            metadataCredentials[key] = trimmed
+        } else {
+            metadataCredentials.removeValue(forKey: key)
+        }
+    }
+
     public func clearAllLocalData() async {
         settings = AppSettings()
         subtitleSettingsValue = SubtitleSettings()
         languages = ["ru", "en"]
+        metadataCredentials.removeAll()
     }
 }
 
@@ -307,12 +323,12 @@ public struct CoreMockDiagnosticsService: DiagnosticsServiceProtocol {
     public func log(level: DiagnosticsLogLevel, subsystem: DiagnosticsSubsystem, message: String, metadata: [String: String]) async {}
 
     public func exportDiagnostics() async -> String {
-        "CineFlow diagnostics: mock environment, no external engines initialized."
+        "Streamly diagnostics: mock environment, no external engines initialized."
     }
 
     public func exportDiagnosticsPackage() async throws -> URL {
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("CineFlow-CoreMock-Diagnostics")
+            .appendingPathComponent("Streamly-CoreMock-Diagnostics")
             .appendingPathExtension("zip")
         try Data("core mock diagnostics".utf8).write(to: url)
         return url

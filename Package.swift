@@ -85,7 +85,12 @@ let package = Package(
         .testTarget(name: "CineFlowCoreTests", dependencies: ["CineFlowCore"], swiftSettings: arm64OnlySwiftSettings),
         .testTarget(name: "CineFlowLocalizationTests", dependencies: ["CineFlowLocalization"], swiftSettings: arm64OnlySwiftSettings),
         .testTarget(name: "CineFlowDesignSystemTests", dependencies: ["CineFlowDesignSystem", "CineFlowLocalization"], swiftSettings: arm64OnlySwiftSettings),
-        .testTarget(name: "CineFlowMetadataTests", dependencies: ["CineFlowMetadata", "CineFlowDatabase"], swiftSettings: arm64OnlySwiftSettings),
+        .testTarget(
+            name: "CineFlowMetadataTests",
+            dependencies: ["CineFlowMetadata", "CineFlowDatabase"],
+            resources: [.copy("Fixtures")],
+            swiftSettings: arm64OnlySwiftSettings
+        ),
         .testTarget(name: "CineFlowPlaybackTests", dependencies: ["CineFlowPlayback"], swiftSettings: arm64OnlySwiftSettings),
         .testTarget(name: "CineFlowSourcesTests", dependencies: ["CineFlowSources"], swiftSettings: arm64OnlySwiftSettings),
         .testTarget(name: "CineFlowSubtitlesTests", dependencies: ["CineFlowSubtitles"], swiftSettings: arm64OnlySwiftSettings),

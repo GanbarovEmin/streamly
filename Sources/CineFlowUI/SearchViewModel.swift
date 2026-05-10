@@ -58,6 +58,7 @@ public struct SearchMediaResult: Identifiable, Equatable, Sendable {
     public let metadata: String
     public let overview: String
     public let quality: String
+    public let artworkURL: URL?
 
     public init(item: HomeSeedItem) {
         self.id = item.id
@@ -67,6 +68,27 @@ public struct SearchMediaResult: Identifiable, Equatable, Sendable {
         self.metadata = "\(item.year) · \(item.rating) · \(item.runtime) · \(item.genre)"
         self.overview = item.overview
         self.quality = item.quality
+        self.artworkURL = item.artworkURL
+    }
+
+    public init(mediaItem: MediaItem) {
+        self.id = mediaItem.id
+        self.title = mediaItem.displayTitle
+        self.kind = mediaItem.kind == .series ? .series : .movie
+        self.year = mediaItem.metadata?.year ?? mediaItem.releaseYear ?? 0
+        self.overview = mediaItem.metadata?.overview ?? mediaItem.overview
+        self.quality = mediaItem.kind == .series ? "Series" : "Movie"
+        self.artworkURL = mediaItem.bestPosterURL
+
+        let genres = mediaItem.metadata?.genres.prefix(2).joined(separator: ", ")
+        let rating = mediaItem.metadata?.rating.map { String(format: "TMDB %.1f", $0) }
+        self.metadata = [
+            year > 0 ? String(year) : nil,
+            genres?.isEmpty == false ? genres : nil,
+            rating
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
     }
 }
 

@@ -13,6 +13,7 @@ public struct AppEnvironment {
     public let playbackProgressRepository: (any PlaybackProgressRepositoryProtocol)?
     public let watchHistoryRepository: (any WatchHistoryRepositoryProtocol)?
     public let keychainService: (any KeychainServiceProtocol)?
+    public let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
 
     public init(
         metadataService: any MetadataServiceProtocol,
@@ -26,7 +27,8 @@ public struct AppEnvironment {
         imageCacheService: (any ImageCacheServiceProtocol)? = nil,
         playbackProgressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
         watchHistoryRepository: (any WatchHistoryRepositoryProtocol)? = nil,
-        keychainService: (any KeychainServiceProtocol)? = nil
+        keychainService: (any KeychainServiceProtocol)? = nil,
+        userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil
     ) {
         self.metadataService = metadataService
         self.torrentEngine = torrentEngine
@@ -40,5 +42,6 @@ public struct AppEnvironment {
         self.playbackProgressRepository = playbackProgressRepository
         self.watchHistoryRepository = watchHistoryRepository
         self.keychainService = keychainService
+        self.userMediaSourceRepository = userMediaSourceRepository
     }
 }

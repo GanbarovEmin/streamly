@@ -2,6 +2,7 @@ import CineFlowCore
 import CineFlowDesignSystem
 import CineFlowPlayback
 import AppKit
+import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -16,7 +17,7 @@ public struct PlayerView: View {
 
     public var body: some View {
         ZStack(alignment: .bottom) {
-            MPVRenderView()
+            playerRenderSurface
                 .overlay(renderOverlay)
                 .ignoresSafeArea()
 
@@ -37,6 +38,15 @@ public struct PlayerView: View {
         }
         .focusable()
         .keyboardShortcut(.space, modifiers: [])
+    }
+
+    @ViewBuilder
+    private var playerRenderSurface: some View {
+        if let player = viewModel.avPlayer {
+            AVPlayerRenderView(player: player)
+        } else {
+            MPVRenderView()
+        }
     }
 
     private var renderOverlay: some View {
@@ -222,5 +232,21 @@ public struct PlayerView: View {
             guard response == .OK, let url = panel.url else { return }
             Task { await viewModel.loadLocalSubtitle(url: url) }
         }
+    }
+}
+
+private struct AVPlayerRenderView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .none
+        view.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.player = player
     }
 }
