@@ -1,0 +1,43 @@
+name: Source or search issue
+description: Report search, metadata, source provider or release ranking problems.
+title: "[Source/Search]: "
+labels: ["source", "search"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App version/build
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Search results
+        - TMDB metadata
+        - Release ranking
+        - Source provider configuration
+        - Authentication
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: query
+    attributes:
+      label: Search query or source behavior
+      description: Do not include credentials, cookies or private tokens.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true

@@ -1,0 +1,14 @@
+.build/
+dist/
+*.dmg
+*.xcarchive
+*.dSYM.zip
+.DS_Store
+DerivedData/
+*.xcuserdata/
+*.xcuserstate
+.cineflow/
+Configuration/*.local.json
+sparkle_keys/
+*.ed25519
+*.sparkle-private-key

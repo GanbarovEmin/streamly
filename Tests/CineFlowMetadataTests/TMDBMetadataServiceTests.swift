@@ -1,0 +1,223 @@
+import XCTest
+@testable import CineFlowCore
+@testable import CineFlowDatabase
+@testable import CineFlowMetadata
+
+final class TMDBMetadataServiceTests: XCTestCase {
+    override func tearDown() {
+        MockURLProtocol.reset()
+        super.tearDown()
+    }
+
+    func testSearchMoviesMapsDTOToDomainMediaItemsAndCachesResponse() async throws {
+        let fixture = """
+        {"page":1,"results":[{"id":603,"title":"The Matrix","original_title":"The Matrix","overview":"Reality is simulated.","release_date":"1999-03-31","poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","vote_average":8.2,"genre_ids":[28,878]}],"total_pages":1,"total_results":1}
+        """
+        let database = try DatabaseManager.inMemory()
+        let service = makeService(database: database) { request in
+            XCTAssertEqual(request.url?.path, "/3/search/movie")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer dev-token")
+            return (200, fixture)
+        }
+
+        let results = try await service.searchMovies(query: "matrix")
+
+        XCTAssertEqual(results.map(\.id), ["tmdb:movie:603"])
+        XCTAssertEqual(results.first?.metadata?.title, "The Matrix")
+        XCTAssertEqual(results.first?.metadata?.posterURL?.absoluteString, "https://image.tmdb.org/t/p/w500/poster.jpg")
+
+        MockURLProtocol.requestHandler = { _ in
+            XCTFail("Expected cache hit, not a second network request")
+            return (200, "{}")
+        }
+
+        let cached = try await service.searchMovies(query: "matrix")
+        XCTAssertEqual(cached.map(\.id), ["tmdb:movie:603"])
+    }
+
+    func testSearchSeriesAndMovieDetailMapNestedCreditsVideosAndRecommendations() async throws {
+        let seriesFixture = """
+        {"page":1,"results":[{"id":1399,"name":"Game of Thrones","original_name":"Game of Thrones","overview":"Noble families fight.","first_air_date":"2011-04-17","poster_path":"/tv.jpg","backdrop_path":"/tv-back.jpg","vote_average":8.4,"genre_ids":[18]}],"total_pages":1,"total_results":1}
+        """
+        let movieFixture = """
+        {"id":603,"imdb_id":"tt0133093","title":"The Matrix","original_title":"The Matrix","overview":"Reality is simulated.","release_date":"1999-03-31","runtime":136,"poster_path":"/poster.jpg","backdrop_path":"/backdrop.jpg","vote_average":8.2,"genres":[{"id":28,"name":"Action"},{"id":878,"name":"Sci-Fi"}],"videos":{"results":[{"id":"v1","name":"Trailer","site":"YouTube","key":"abc","type":"Trailer"}]},"credits":{"cast":[{"id":1,"name":"Keanu Reeves","character":"Neo","profile_path":"/neo.jpg","order":0}]},"recommendations":{"results":[{"id":27205,"title":"Inception","original_title":"Inception","overview":"Dreams.","release_date":"2010-07-16","poster_path":null,"backdrop_path":null,"vote_average":8.3,"genre_ids":[878]}]}}
+        """
+        let recommendationsFixture = """
+        {"page":1,"results":[{"id":27205,"title":"Inception","original_title":"Inception","overview":"Dreams.","release_date":"2010-07-16","poster_path":null,"backdrop_path":null,"vote_average":8.3,"genre_ids":[878]}],"total_pages":1,"total_results":1}
+        """
+        let service = makeService { request in
+            switch request.url?.path {
+            case "/3/search/tv":
+                return (200, seriesFixture)
+            case "/3/movie/603":
+                return (200, movieFixture)
+            case "/3/movie/603/recommendations":
+                return (200, recommendationsFixture)
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (404, #"{"status_message":"Not found"}"#)
+            }
+        }
+
+        let series = try await service.searchSeries(query: "game")
+        let movie = try await service.movieDetail(tmdbID: 603)
+        let recommendations = try await service.recommendations(for: "tmdb:movie:603")
+
+        XCTAssertEqual(series.first?.id, "tmdb:tv:1399")
+        XCTAssertEqual(series.first?.kind, .series)
+        XCTAssertEqual(movie.metadata.genres, ["Action", "Sci-Fi"])
+        XCTAssertEqual(movie.metadata.trailerURLs.map(\.absoluteString), ["https://www.youtube.com/watch?v=abc"])
+        XCTAssertEqual(movie.metadata.cast.first?.name, "Keanu Reeves")
+        XCTAssertEqual(recommendations.map(\.id), ["tmdb:movie:27205"])
+    }
+
+    func testSeasonEpisodePopularTrendingSimilarVideosCreditsAndImageBuilder() async throws {
+        let service = makeService { request in
+            switch request.url?.path {
+            case "/3/tv/1399/season/1":
+                return (200, #"{"id":10,"season_number":1,"name":"Season 1","overview":"Start","episodes":[{"id":101,"episode_number":1,"name":"Winter Is Coming","overview":"Pilot","runtime":62,"air_date":"2011-04-17"}]}"#)
+            case "/3/tv/1399/season/1/episode/1":
+                return (200, #"{"id":101,"episode_number":1,"name":"Winter Is Coming","overview":"Pilot","runtime":62,"air_date":"2011-04-17"}"#)
+            case "/3/movie/popular", "/3/tv/popular", "/3/trending/all/week", "/3/movie/603/similar":
+                return (200, #"{"page":1,"results":[],"total_pages":1,"total_results":0}"#)
+            case "/3/movie/603/videos":
+                return (200, #"{"id":603,"results":[{"id":"v1","name":"Trailer","site":"YouTube","key":"abc","type":"Trailer"}]}"#)
+            case "/3/movie/603/credits":
+                return (200, #"{"id":603,"cast":[{"id":1,"name":"Keanu Reeves","character":"Neo","profile_path":"/neo.jpg","order":0}]}"#)
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (404, #"{}"#)
+            }
+        }
+
+        let season = try await service.seasonDetail(seriesTMDBID: 1399, seasonNumber: 1)
+        let episode = try await service.episodeDetail(seriesTMDBID: 1399, seasonNumber: 1, episodeNumber: 1)
+        _ = try await service.popularMovies()
+        _ = try await service.popularSeries()
+        _ = try await service.trending()
+        _ = try await service.similar(to: "tmdb:movie:603")
+        let videos = try await service.videos(for: "tmdb:movie:603")
+        let credits = try await service.credits(for: "tmdb:movie:603")
+
+        XCTAssertEqual(season.id, "tmdb:tv:1399:season:1")
+        XCTAssertEqual(season.episodes.first?.title, "Winter Is Coming")
+        XCTAssertEqual(episode.id, "tmdb:tv:1399:season:1:episode:1")
+        XCTAssertEqual(videos.first?.url.absoluteString, "https://www.youtube.com/watch?v=abc")
+        XCTAssertEqual(credits.first?.profileURL?.absoluteString, "https://image.tmdb.org/t/p/w185/neo.jpg")
+        XCTAssertEqual(TMDBImageURLBuilder().url(path: "/poster.jpg", size: .poster)?.absoluteString, "https://image.tmdb.org/t/p/w500/poster.jpg")
+    }
+
+    func testErrorMappingForInvalidAPIKeyRateLimitNotFoundAndNetworkUnavailable() async throws {
+        for (status, expected) in [(401, MetadataServiceError.invalidAPIKey), (404, .notFound), (429, .rateLimited)] {
+            let service = makeService { _ in (status, #"{"status_message":"error"}"#) }
+
+            do {
+                _ = try await service.searchMovies(query: "matrix")
+                XCTFail("Expected \(expected)")
+            } catch let error as MetadataServiceError {
+                XCTAssertEqual(error, expected)
+            }
+        }
+
+        let service = makeService { _ in throw URLError(.notConnectedToInternet) }
+
+        do {
+            _ = try await service.searchMovies(query: "matrix")
+            XCTFail("Expected network unavailable")
+        } catch let error as MetadataServiceError {
+            XCTAssertEqual(error, .networkUnavailable)
+        }
+    }
+
+    func testCredentialProvidersUseSettingsAndLocalConfigWithoutHardcodingSecrets() async throws {
+        let database = try DatabaseManager.inMemory()
+        let settings = DatabaseSettingsRepository(databaseManager: database)
+        try await settings.setString("settings-token", forKey: TMDBSettingsKeys.readAccessToken)
+
+        let settingsProvider = DatabaseTMDBCredentialProvider(settingsRepository: settings)
+        let settingsToken = await settingsProvider.readAccessToken
+        XCTAssertEqual(settingsToken, "settings-token")
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        try #"{"readAccessToken":"file-token","apiKey":"file-key"}"#.write(to: tempURL, atomically: true, encoding: .utf8)
+        let localProvider = LocalTMDBCredentialProvider(configURL: tempURL, environment: [:])
+
+        let localToken = await localProvider.readAccessToken
+        let localAPIKey = await localProvider.apiKey
+        XCTAssertEqual(localToken, "file-token")
+        XCTAssertEqual(localAPIKey, "file-key")
+    }
+
+    func testCompositeCredentialProviderPrefersSettingsAndFallsBackToLocalConfig() async throws {
+        let database = try DatabaseManager.inMemory()
+        let settings = DatabaseSettingsRepository(databaseManager: database)
+        let settingsProvider = DatabaseTMDBCredentialProvider(settingsRepository: settings)
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        try #"{"readAccessToken":"file-token","apiKey":"file-key"}"#.write(to: tempURL, atomically: true, encoding: .utf8)
+        let localProvider = LocalTMDBCredentialProvider(configURL: tempURL, environment: [:])
+
+        let fallbackProvider = CompositeTMDBCredentialProvider([settingsProvider, localProvider])
+        let fallbackToken = await fallbackProvider.readAccessToken
+        XCTAssertEqual(fallbackToken, "file-token")
+
+        try await settings.setString("settings-token", forKey: TMDBSettingsKeys.readAccessToken)
+        let settingsToken = await fallbackProvider.readAccessToken
+        XCTAssertEqual(settingsToken, "settings-token")
+    }
+
+    private func makeService(
+        database: DatabaseManager? = nil,
+        handler: @escaping @Sendable (URLRequest) throws -> (Int, String)
+    ) -> TMDBMetadataService {
+        MockURLProtocol.requestHandler = handler
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        return TMDBMetadataService(
+            credentialProvider: StaticTMDBCredentialProvider(readAccessToken: "dev-token"),
+            cacheRepository: database.map(CacheRepository.init(databaseManager:)),
+            session: session
+        )
+    }
+}
+
+private final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+    static var requestHandler: (@Sendable (URLRequest) throws -> (Int, String))?
+
+    static func reset() {
+        requestHandler = nil
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (status, body) = try requestHandler(request)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: status,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}

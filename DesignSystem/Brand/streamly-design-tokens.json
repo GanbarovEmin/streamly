@@ -1,0 +1,76 @@
+{
+  "colors": {
+    "background": {
+      "obsidian": "#0A0B0F",
+      "carbon": "#111318",
+      "midnightNavy": "#0E1626",
+      "deepIndigo": "#1B1E3F"
+    },
+    "accent": {
+      "electricBlue": "#2563FF",
+      "neonViolet": "#7B3DFF",
+      "accentMagenta": "#FF2DB2"
+    },
+    "text": {
+      "primary": "#F2F4F8",
+      "secondary": "#A7ADB8",
+      "muted": "rgba(242, 244, 248, 0.56)"
+    },
+    "border": {
+      "default": "rgba(242, 244, 248, 0.10)",
+      "strong": "rgba(242, 244, 248, 0.18)"
+    },
+    "surface": {
+      "primary": "rgba(17, 19, 24, 0.96)",
+      "secondary": "rgba(27, 30, 63, 0.72)",
+      "elevated": "rgba(242, 244, 248, 0.06)"
+    }
+  },
+  "gradient": {
+    "primary": "linear-gradient(135deg, #2563FF 0%, #7B3DFF 48%, #FF2DB2 100%)"
+  },
+  "radius": {
+    "sm": 8,
+    "md": 12,
+    "lg": 18,
+    "xl": 24,
+    "poster": 14
+  },
+  "spacing": {
+    "xs": 4,
+    "sm": 8,
+    "md": 16,
+    "lg": 24,
+    "xl": 32,
+    "xxl": 48
+  },
+  "typography": {
+    "fontFamily": "SF Pro Display, SF Pro Text, -apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+    "hero": {
+      "size": 64,
+      "lineHeight": 72,
+      "weight": 700,
+      "letterSpacing": "-0.5%"
+    },
+    "h1": {
+      "size": 48,
+      "lineHeight": 56,
+      "weight": 700
+    },
+    "h2": {
+      "size": 32,
+      "lineHeight": 40,
+      "weight": 600
+    },
+    "body": {
+      "size": 17,
+      "lineHeight": 26,
+      "weight": 400
+    },
+    "caption": {
+      "size": 13,
+      "lineHeight": 18,
+      "weight": 400
+    }
+  }
+}

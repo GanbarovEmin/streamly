@@ -1,0 +1,53 @@
+name: Bug report
+description: Report an app bug or regression.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a Streamly bug. Please remove secrets from logs before attaching them.
+  - type: input
+    id: version
+    attributes:
+      label: App version/build
+      placeholder: "0.1.0 (1)"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 14.6"
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: Mac model
+      placeholder: "MacBook Pro M2"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open...\n2. Click...\n3. See..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Remove credentials, tokens, cookies and local private paths before sharing.

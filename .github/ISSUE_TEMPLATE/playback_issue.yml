@@ -1,0 +1,50 @@
+name: Playback issue
+description: Report playback, subtitle, torrent streaming or player problems.
+title: "[Playback]: "
+labels: ["playback"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App version/build
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: "macOS 14.6, Mac mini M2"
+    validations:
+      required: true
+  - type: dropdown
+    id: issue_type
+    attributes:
+      label: Issue type
+      options:
+        - Playback does not start
+        - Playback freezes
+        - Audio/video sync
+        - Subtitles
+        - Seeking
+        - Torrent buffering
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: media
+    attributes:
+      label: Media/release details
+      description: Do not include copyrighted files or private source credentials.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Remove credentials, tokens, cookies and local private paths before sharing.
