@@ -34,6 +34,10 @@ jobs:
   build-release:
     name: Build unsigned Streamly DMG
     runs-on: macos-15
+    env:
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: submodule.SQLiteCustom/src.update
+      GIT_CONFIG_VALUE_0: none
 
     steps:
       - name: Checkout
