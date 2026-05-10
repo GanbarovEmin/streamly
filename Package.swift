@@ -1,10 +1,20 @@
 // swift-tools-version: 5.9
 
 import PackageDescription
+import Foundation
 
 let arm64OnlySwiftSettings: [SwiftSetting] = [
     .unsafeFlags(["-target", "arm64-apple-macosx13.0"], .when(platforms: [.macOS]))
 ]
+
+let nativeLibtorrentXCFrameworkPath = "Vendor/CineFlowLibtorrentNative.xcframework"
+let hasNativeLibtorrentXCFramework = FileManager.default.fileExists(atPath: nativeLibtorrentXCFrameworkPath)
+let cineFlowTorrentDependencies: [Target.Dependency] = hasNativeLibtorrentXCFramework
+    ? ["CineFlowCore", "CineFlowLibtorrentNative"]
+    : ["CineFlowCore"]
+let nativeLibtorrentTargets: [Target] = hasNativeLibtorrentXCFramework
+    ? [.binaryTarget(name: "CineFlowLibtorrentNative", path: nativeLibtorrentXCFrameworkPath)]
+    : []
 
 let package = Package(
     name: "CineFlow",
@@ -68,7 +78,7 @@ let package = Package(
             swiftSettings: arm64OnlySwiftSettings
         ),
         .target(name: "CineFlowMetadata", dependencies: ["CineFlowCore", "CineFlowDatabase"], swiftSettings: arm64OnlySwiftSettings),
-        .target(name: "CineFlowTorrent", dependencies: ["CineFlowCore"], swiftSettings: arm64OnlySwiftSettings),
+        .target(name: "CineFlowTorrent", dependencies: cineFlowTorrentDependencies, swiftSettings: arm64OnlySwiftSettings),
         .target(name: "CineFlowPlayback", dependencies: ["CineFlowCore"], swiftSettings: arm64OnlySwiftSettings),
         .target(name: "CineFlowSubtitles", dependencies: ["CineFlowCore"], swiftSettings: arm64OnlySwiftSettings),
         .target(name: "CineFlowSources", dependencies: ["CineFlowCore"], swiftSettings: arm64OnlySwiftSettings),
@@ -121,5 +131,5 @@ let package = Package(
             ],
             swiftSettings: arm64OnlySwiftSettings
         )
-    ]
+    ] + nativeLibtorrentTargets
 )

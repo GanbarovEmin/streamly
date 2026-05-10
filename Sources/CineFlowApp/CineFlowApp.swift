@@ -28,7 +28,7 @@ struct CineFlowApplication: App {
     private let playbackProgressRepository: (any PlaybackProgressRepositoryProtocol)?
     private let watchHistoryRepository: (any WatchHistoryRepositoryProtocol)?
     private let keychainService: any KeychainServiceProtocol
-    private let updateService: SparkleUpdateService
+    private let updateService: GitHubReleaseUpdateService
 
     init() {
         let liveDatabaseManager = try? DatabaseManager.live()
@@ -98,14 +98,14 @@ struct CineFlowApplication: App {
             store: playbackProgressRepository ?? InMemoryPlaybackProgressStore(),
             historyStore: watchHistoryRepository
         )
-        let updateService = SparkleUpdateService()
+        let updateService = GitHubReleaseUpdateService()
         self.updateService = updateService
         let userMediaSourceRepository = liveDatabaseManager
             .map(DatabaseUserMediaSourceRepository.init(databaseManager:))
 
         let appEnvironment = AppEnvironment(
             metadataService: metadataService,
-            torrentEngine: EmbeddedLibtorrentTorrentEngine(),
+            torrentEngine: EmbeddedLibtorrentTorrentEngine(bridge: NativeLibtorrentBridge()),
             playbackService: AVFoundationPlaybackService(),
             subtitleService: MockSubtitleService(),
             libraryRepository: libraryRepository,
@@ -141,7 +141,6 @@ struct CineFlowApplication: App {
                 .onOpenURL { url in
                     Task { await macOSIntegrationViewModel.handleOpenURL(url) }
                 }
-                .task { updateService.startUpdaterIfNeeded() }
         }
         .windowStyle(.hiddenTitleBar)
         .commands {

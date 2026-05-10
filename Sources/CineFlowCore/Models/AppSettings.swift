@@ -112,7 +112,7 @@ public struct UpdateSettings: Codable, Equatable, Sendable {
 
     public init(
         automaticChecksEnabled: Bool = true,
-        sparkleStatus: String = "Ready for Sparkle integration"
+        sparkleStatus: String = "GitHub Releases status checks"
     ) {
         self.automaticChecksEnabled = automaticChecksEnabled
         self.sparkleStatus = sparkleStatus

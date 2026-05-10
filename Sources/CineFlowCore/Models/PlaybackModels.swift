@@ -77,6 +77,13 @@ public struct PlaybackMediaSource: Codable, Equatable, Sendable {
     }
 }
 
+public extension URL {
+    var isCineFlowPlayableMediaURL: Bool {
+        guard let scheme = scheme?.lowercased() else { return isFileURL }
+        return isFileURL || scheme == "http" || scheme == "https"
+    }
+}
+
 public struct PlaybackStatus: Codable, Equatable, Sendable {
     public let media: PlaybackMediaSource?
     public let state: PlaybackRunState

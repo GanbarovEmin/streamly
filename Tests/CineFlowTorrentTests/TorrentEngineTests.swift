@@ -95,7 +95,7 @@ final class TorrentEngineTests: XCTestCase {
         XCTAssertGreaterThan(cleanup.freedBytes, 0)
     }
 
-    func testEmbeddedLibtorrentEngineUsesSwiftBoundaryAndTorrentCachePath() async throws {
+    func testEmbeddedLibtorrentEngineSurfacesUnavailableWhenPlaceholderBridgeIsInjected() async throws {
         let engine = EmbeddedLibtorrentTorrentEngine(bridge: PlaceholderLibtorrentBridge())
         let cacheURL = engine.temporaryStorageURL
 
@@ -104,7 +104,7 @@ final class TorrentEngineTests: XCTestCase {
 
         do {
             _ = try await engine.addMagnet(uri: "magnet:?xt=urn:btih:placeholder")
-            XCTFail("Placeholder bridge should not perform real libtorrent work.")
+            XCTFail("Placeholder bridge should remain an explicit unavailable fallback.")
         } catch TorrentEngineError.libtorrentUnavailable {
             XCTAssertTrue(true)
         }

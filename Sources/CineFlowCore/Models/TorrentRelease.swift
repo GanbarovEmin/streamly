@@ -1,6 +1,6 @@
 import Foundation
 
-public enum ReleaseQuality: Int, Codable, Comparable, Sendable {
+public enum ReleaseQuality: Int, Codable, Comparable, Hashable, Sendable {
     case unknown = 0
     case standardDefinition = 1
     case hd = 2
@@ -27,7 +27,7 @@ public enum ReleaseQuality: Int, Codable, Comparable, Sendable {
     }
 }
 
-public enum VideoCodec: String, Codable, Equatable, Sendable {
+public enum VideoCodec: String, Codable, Equatable, Hashable, Sendable {
     case h264 = "H264"
     case h265 = "H265"
     case hevc = "HEVC"
@@ -36,14 +36,14 @@ public enum VideoCodec: String, Codable, Equatable, Sendable {
     case unknown
 }
 
-public enum HDRFormat: String, Codable, Equatable, Sendable {
+public enum HDRFormat: String, Codable, Equatable, Hashable, Sendable {
     case none
     case hdr10 = "HDR10"
     case dolbyVision = "DolbyVision"
     case unknown
 }
 
-public struct TorrentRelease: Identifiable, Codable, Equatable, Sendable {
+public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let id: String
     public let sourceId: String
     public let sourceName: String

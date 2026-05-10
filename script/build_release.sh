@@ -5,6 +5,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Streamly"
 PRODUCT_NAME="CineFlow"
 INFO_PLIST="$ROOT_DIR/Configuration/CineFlow-Info.plist"
+APP_ICON="$ROOT_DIR/Configuration/Streamly.icns"
+NATIVE_LIBTORRENT_XCFRAMEWORK="$ROOT_DIR/Vendor/CineFlowLibtorrentNative.xcframework"
+NATIVE_LIBTORRENT_FRAMEWORK_NAME="CineFlowLibtorrentNative.framework"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASE_DIR="$DIST_DIR/release"
 APP_BUNDLE="$RELEASE_DIR/$APP_NAME.app"
@@ -92,6 +95,12 @@ mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources" "$APP_BUN
 /usr/bin/ditto --noextattr --norsrc "$EXECUTABLE" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 chmod 755 "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 /usr/bin/ditto --noextattr --norsrc "$INFO_PLIST" "$APP_BUNDLE/Contents/Info.plist"
+if [[ -f "$APP_ICON" ]]; then
+    /usr/bin/ditto --noextattr --norsrc "$APP_ICON" "$APP_BUNDLE/Contents/Resources/Streamly.icns"
+else
+    echo "Missing app icon at $APP_ICON" >&2
+    exit 70
+fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP_BUNDLE/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP_BUNDLE/Contents/Info.plist"
 printf 'APPL????' > "$APP_BUNDLE/Contents/PkgInfo"
@@ -105,6 +114,24 @@ if [[ -d "$BIN_DIR/Sparkle.framework" ]]; then
 else
     echo "Sparkle.framework was not found in $BIN_DIR" >&2
     exit 67
+fi
+
+NATIVE_LIBTORRENT_COPIED=0
+if [[ -d "$NATIVE_LIBTORRENT_XCFRAMEWORK" ]]; then
+    NATIVE_LIBTORRENT_FRAMEWORK_SRC="$(find "$NATIVE_LIBTORRENT_XCFRAMEWORK" -type d -name "$NATIVE_LIBTORRENT_FRAMEWORK_NAME" -print -quit)"
+    if [[ -z "$NATIVE_LIBTORRENT_FRAMEWORK_SRC" ]]; then
+        echo "Missing native libtorrent framework: $NATIVE_LIBTORRENT_FRAMEWORK_NAME was not found inside $NATIVE_LIBTORRENT_XCFRAMEWORK" >&2
+        exit 72
+    fi
+    /usr/bin/ditto --noextattr --norsrc "$NATIVE_LIBTORRENT_FRAMEWORK_SRC" "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME"
+    if [[ ! -x "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME/CineFlowLibtorrentNative" ]]; then
+        echo "Native libtorrent framework is missing executable payload in Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME" >&2
+        exit 73
+    fi
+    NATIVE_LIBTORRENT_COPIED=1
+else
+    echo "Native libtorrent framework not found at $NATIVE_LIBTORRENT_XCFRAMEWORK."
+    echo "Packaging Streamly without torrent playback; torrent routes will surface the unavailable bridge state."
 fi
 
 if ! otool -l "$APP_BUNDLE/Contents/MacOS/$APP_NAME" | grep -q '@executable_path/../Frameworks'; then
@@ -127,6 +154,9 @@ if [[ "$SKIP_SIGN" -eq 0 ]]; then
     echo "Codesigning with identity: $SIGN_IDENTITY"
     SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
     SIGN_ARGS+=(--options runtime --timestamp)
+    if [[ "$NATIVE_LIBTORRENT_COPIED" -eq 1 ]]; then
+        codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME"
+    fi
     codesign "${SIGN_ARGS[@]}" --deep "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
     codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE"
 else

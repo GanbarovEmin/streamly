@@ -78,6 +78,19 @@ public struct MovieDetailView: View {
                     poster(movie)
                     heroCopy(movie, compact: proxy.size.width < 920)
                     Spacer(minLength: 0)
+                    SourceRail(
+                        releases: viewModel.releases,
+                        copyTitle: t(.detailCopyMagnet),
+                        playTitle: t(.detailWatch),
+                        onPlay: { release in
+                            viewModel.play(release)
+                            navigationCoordinator.navigate(to: .player(mediaID: movie.id, release: release))
+                        },
+                        onCopy: { release in
+                            viewModel.copyMagnet(release)
+                        }
+                    )
+                    .frame(width: proxy.size.width < 1100 ? 330 : 390)
                 }
                 .padding(30)
             }
@@ -128,6 +141,18 @@ public struct MovieDetailView: View {
                 .font(CFTypography.bodyEmphasis)
                 .foregroundStyle(CFColors.textSecondary)
 
+            Label(viewModel.sourceSummary, systemImage: "dot.radiowaves.left.and.right")
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textSecondary)
+                .lineLimit(1)
+                .padding(.horizontal, CFSpacing.md)
+                .frame(height: 28)
+                .background(
+                    Capsule()
+                        .fill(CFColors.surfaceOverlay.opacity(0.72))
+                        .overlay(Capsule().stroke(CFColors.separator, lineWidth: CFSeparators.width))
+                )
+
             HStack(spacing: CFSpacing.sm) {
                 CFBadge(String(movie.year), tone: .source)
                 CFBadge(movie.runtime, tone: .source)
@@ -159,8 +184,10 @@ public struct MovieDetailView: View {
                 PrimaryButton(t(.detailWatch), systemImage: "play.fill") {
                     if let release = viewModel.releases.first?.release {
                         viewModel.play(release)
+                        navigationCoordinator.navigate(to: .player(mediaID: movie.id, release: release))
+                    } else {
+                        playMovie(movie)
                     }
-                    playMovie(movie)
                 }
                 SecondaryButton(t(.detailLibrary), systemImage: "plus") {
                     viewModel.addToLibrary()
@@ -177,6 +204,11 @@ public struct MovieDetailView: View {
     }
 
     private func playMovie(_ movie: MovieDetail) {
+        if let release = viewModel.releases.first?.release {
+            viewModel.play(release)
+            navigationCoordinator.navigate(to: .player(mediaID: movie.id, release: release))
+            return
+        }
         if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
             viewModel.selectUserSource(source)
             navigationCoordinator.navigate(to: .player(mediaID: movie.id, sourceID: source.id))
@@ -263,7 +295,7 @@ public struct MovieDetailView: View {
                         onPlay: {
                             viewModel.play(ranked.release)
                             if let movieID = viewModel.movie?.id {
-                                navigationCoordinator.navigate(to: .player(mediaID: movieID))
+                                navigationCoordinator.navigate(to: .player(mediaID: movieID, release: ranked.release))
                             }
                         },
                         onCopy: {
@@ -390,6 +422,163 @@ struct MovieBackdrop: View {
                     .overlay(CFColors.backgroundPrimary.opacity(0.30))
             }
         }
+    }
+}
+
+private struct SourceRail: View {
+    let releases: [RankedRelease]
+    let copyTitle: String
+    let playTitle: String
+    let onPlay: (TorrentRelease) -> Void
+    let onCopy: (TorrentRelease) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Sources")
+                        .font(CFTypography.bodyEmphasis)
+                        .foregroundStyle(CFColors.textPrimary)
+                    Text(releases.isEmpty ? "No active sources" : "\(releases.count) ranked releases")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
+
+                Spacer()
+
+                if let best = releases.first?.release {
+                    CFBadge(best.qualityLabel, tone: .quality)
+                }
+            }
+
+            if releases.isEmpty {
+                VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                    Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                        .font(.system(size: 24, weight: .semibold))
+                        .foregroundStyle(CFColors.textMuted)
+                    Text("Enable Torrentio in Settings or attach a local file.")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, minHeight: 180, alignment: .center)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        ForEach(releases, id: \.release.id) { ranked in
+                            SourceRailRow(
+                                ranked: ranked,
+                                playTitle: playTitle,
+                                copyTitle: copyTitle,
+                                onPlay: { onPlay(ranked.release) },
+                                onCopy: { onCopy(ranked.release) }
+                            )
+                        }
+                    }
+                }
+                .scrollIndicators(.visible)
+            }
+        }
+        .padding(CFSpacing.lg)
+        .frame(maxHeight: 380)
+        .background(
+            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                .fill(CFColors.backgroundPrimary.opacity(0.78))
+                .overlay(
+                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                )
+        )
+        .cfShadow(.elevated)
+    }
+}
+
+private struct SourceRailRow: View {
+    let ranked: RankedRelease
+    let playTitle: String
+    let copyTitle: String
+    let onPlay: () -> Void
+    let onCopy: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: CFSpacing.md) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(ranked.release.sourceName)
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textPrimary)
+                    .lineLimit(1)
+                Text(sourceSubtitle)
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textSecondary)
+                    .lineLimit(2)
+            }
+            .frame(width: 86, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(ranked.release.title)
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textPrimary)
+                    .lineLimit(1)
+
+                HStack(spacing: 6) {
+                    Label("\(ranked.release.seeders)", systemImage: "person.fill")
+                    Label(ranked.release.humanReadableSize, systemImage: "externaldrive.fill")
+                }
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textSecondary)
+                .lineLimit(1)
+
+                Text(languageLine)
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+
+            if ranked.release.magnetURI != nil {
+                Button(action: onCopy) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(CFColors.textSecondary)
+                .help(copyTitle)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isHovering ? CFColors.hoverFill : CFColors.surfaceOverlay.opacity(0.56))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(isHovering ? CFColors.focusRing.opacity(0.34) : CFColors.separator, lineWidth: CFSeparators.width)
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture(perform: onPlay)
+        .onHover { isHovering = $0 }
+        .help(playTitle)
+    }
+
+    private var sourceSubtitle: String {
+        var values = [ranked.release.qualityLabel]
+        if ranked.release.hdr != .none, ranked.release.hdr != .unknown {
+            values.append(ranked.release.hdr.rawValue)
+        }
+        if ranked.release.codec != .unknown {
+            values.append(ranked.release.codec.rawValue)
+        }
+        return values.joined(separator: " | ")
+    }
+
+    private var languageLine: String {
+        let audio = ranked.release.audioLanguages.isEmpty ? "audio n/a" : ranked.release.audioLanguages.joined(separator: "/")
+        let subtitles = ranked.release.subtitleLanguages.isEmpty ? "subs n/a" : ranked.release.subtitleLanguages.joined(separator: "/")
+        return "\(audio) · \(subtitles)"
     }
 }
 

@@ -40,6 +40,25 @@ final class PlayerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPlayerViewModelAcceptsLocalHTTPStreamingURL() async throws {
+        let service = MockPlaybackService()
+        let source = PlaybackMediaSource(
+            id: "tmdb:movie:603",
+            title: "The Matrix",
+            url: URL(string: "http://127.0.0.1:49152/stream.mkv")!,
+            qualityLabel: "2160p",
+            sourceName: "Torrentio"
+        )
+        let viewModel = PlayerViewModel(service: service, mediaSource: source)
+
+        await viewModel.start()
+
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertEqual(viewModel.status.state, .playing)
+        XCTAssertEqual(viewModel.status.media?.url, source.url)
+    }
+
+    @MainActor
     func testPlayerViewModelCanFindOnlineLoadLocalAndDisableSubtitles() async throws {
         let service = MockPlaybackService()
         let subtitleService = SubtitleService(

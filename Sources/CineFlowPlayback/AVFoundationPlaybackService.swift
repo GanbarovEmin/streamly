@@ -27,7 +27,7 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
     }
 
     public func play(_ source: PlaybackMediaSource) async throws {
-        guard source.url.isFileURL else {
+        guard source.url.isCineFlowPlayableMediaURL else {
             throw PlaybackServiceError.invalidMediaURL
         }
 

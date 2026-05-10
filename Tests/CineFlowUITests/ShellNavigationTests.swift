@@ -36,6 +36,24 @@ final class ShellNavigationTests: XCTestCase {
     }
 
     @MainActor
+    func testNavigationCoordinatorCanOpenPlayerForTorrentRelease() {
+        let coordinator = NavigationCoordinator()
+        let release = TorrentRelease(
+            id: "torrentio:tt0133093:hash:0",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "The Matrix 2160p",
+            magnetURI: "magnet:?xt=urn:btih:hash",
+            quality: .ultraHD,
+            seeders: 334
+        )
+
+        coordinator.navigate(to: .player(mediaID: "tmdb:movie:603", release: release))
+
+        XCTAssertEqual(coordinator.currentRoute, .player(mediaID: "tmdb:movie:603", release: release))
+    }
+
+    @MainActor
     func testSidebarNavigationPreservesDeepLinkBackStackRoot() {
         let coordinator = NavigationCoordinator()
 

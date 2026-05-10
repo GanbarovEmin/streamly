@@ -397,13 +397,13 @@ public struct SettingsView: View {
         SettingsCard {
             SettingValueRow(title: "Current version", value: viewModel.about.version)
             SettingValueRow(title: "Current build", value: viewModel.about.build)
-            SettingValueRow(title: "Appcast", value: "https://ganbarovemin.github.io/streamly/appcast.xml")
+            SettingValueRow(title: "Release source", value: "https://github.com/GanbarovEmin/streamly/releases/latest")
             SettingValueRow(title: "Metadata attribution", value: "Movie and TV metadata is provided by TMDB.")
             SettingValueRow(title: "Last checked", value: lastUpdateCheckedText)
-            SettingValueRow(title: "Sparkle status", value: viewModel.settings.updates.sparkleStatus)
+            SettingValueRow(title: "Updater status", value: viewModel.settings.updates.sparkleStatus)
             SettingValueRow(title: "Update status", value: updateStatusText)
 
-            SettingsToggleRow(title: "Automatic update checks", subtitle: "Sparkle can check the hosted appcast on its schedule.", isOn: Binding(
+            SettingsToggleRow(title: "Automatic update checks", subtitle: "Streamly checks the latest GitHub Release on its schedule.", isOn: Binding(
                 get: { viewModel.settings.updates.automaticChecksEnabled },
                 set: { value in Task { await viewModel.updateAutomaticUpdateChecks(value) } }
             ))

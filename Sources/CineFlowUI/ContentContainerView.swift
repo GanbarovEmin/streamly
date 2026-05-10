@@ -178,10 +178,11 @@ public struct ContentContainerView: View {
             ) {
                 navigationCoordinator.navigate(to: .player(mediaID: id))
             }
-        case .player(let mediaID, let sourceID):
+        case .player(let mediaID, let sourceID, let release):
             PlayerRouteView(
                 mediaID: mediaID,
                 sourceID: sourceID,
+                release: release,
                 environment: environment,
                 playbackService: viewModel.playbackService,
                 playbackProgressRecorder: playbackProgressRecorder
@@ -339,6 +340,7 @@ public struct ContentContainerView: View {
 private struct PlayerRouteView: View {
     let mediaID: String
     let sourceID: String?
+    let release: TorrentRelease?
     let environment: AppEnvironment
     let playbackService: any PlaybackServiceProtocol
     let playbackProgressRecorder: PlaybackProgressRecorder?
@@ -365,6 +367,12 @@ private struct PlayerRouteView: View {
                     message: "\(title) is saved, but torrent streaming requires the production libtorrent bridge. Local files are playable now."
                 )
                 .padding(30)
+            case .torrentFailed(let message):
+                ErrorState(
+                    title: "Torrent source is not ready",
+                    message: message
+                )
+                .padding(30)
             case .ready(let source):
                 PlayerView(
                     viewModel: PlayerViewModel(
@@ -379,12 +387,17 @@ private struct PlayerRouteView: View {
                 )
             }
         }
-        .task(id: "\(mediaID):\(sourceID ?? "auto")") {
+        .task(id: "\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release")") {
             await load()
         }
     }
 
     private func load() async {
+        if let release {
+            await loadTorrentRelease(release)
+            return
+        }
+
         guard let repository = environment.userMediaSourceRepository else {
             state = .missingSource
             return
@@ -413,10 +426,36 @@ private struct PlayerRouteView: View {
         }
     }
 
+    private func loadTorrentRelease(_ release: TorrentRelease) async {
+        do {
+            let session = try await environment.torrentEngine.startStreaming(release)
+            let files = try await environment.torrentEngine.getFileList(sessionId: session.id)
+            if session.selectedFileId == nil,
+               let mediaFile = files.first(where: \.isMediaFile) {
+                try await environment.torrentEngine.selectMediaFile(sessionId: session.id, fileId: mediaFile.id)
+            }
+            let streamingURL = try await environment.torrentEngine.getStreamingURL(sessionId: session.id)
+            state = .ready(
+                PlaybackMediaSource(
+                    id: mediaID,
+                    title: release.title,
+                    url: streamingURL,
+                    release: release,
+                    qualityLabel: release.qualityLabel,
+                    sourceName: release.sourceName
+                )
+            )
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .torrent)
+            state = .torrentFailed(cineFlowError.userMessage)
+        }
+    }
+
     private enum RouteState: Equatable {
         case loading
         case missingSource
         case unsupportedSource(String)
+        case torrentFailed(String)
         case ready(PlaybackMediaSource)
     }
 }

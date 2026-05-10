@@ -101,7 +101,7 @@ public actor MPVPlaybackService: PlaybackServiceProtocol {
     }
 
     public func play(_ source: PlaybackMediaSource) async throws {
-        guard source.url.isFileURL else {
+        guard source.url.isCineFlowPlayableMediaURL else {
             throw PlaybackServiceError.invalidMediaURL
         }
         try await bridge.configure(options: options)

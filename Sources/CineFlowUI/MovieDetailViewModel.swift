@@ -228,6 +228,17 @@ public final class MovieDetailViewModel: ObservableObject {
         return min(max(progress.positionSeconds / durationSeconds, 0), 1)
     }
 
+    public var sourceSummary: String {
+        guard !releases.isEmpty else {
+            return userSources.isEmpty ? "No sources selected" : "\(userSources.count) local source\(userSources.count == 1 ? "" : "s")"
+        }
+
+        let best = releases[0].release
+        let quality = best.qualityLabel
+        let providerCount = Set(releases.map(\.release.sourceName)).count
+        return "\(releases.count) sources · best \(quality) · \(best.seeders) seeders · \(providerCount) provider\(providerCount == 1 ? "" : "s")"
+    }
+
     public func load() async {
         state = .loading
 

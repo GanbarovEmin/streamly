@@ -1,3 +1,4 @@
+import CineFlowCore
 import CineFlowLocalization
 import Foundation
 
@@ -12,7 +13,7 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
     case history
     case settings
     case mediaDetail(id: String)
-    case player(mediaID: String, sourceID: String? = nil)
+    case player(mediaID: String, sourceID: String? = nil, release: TorrentRelease? = nil)
     case settingsSection(id: String)
 
     public var id: String {
@@ -37,8 +38,8 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             "settings"
         case .mediaDetail(let id):
             "mediaDetail:\(id)"
-        case .player(let mediaID, let sourceID):
-            "player:\(mediaID):\(sourceID ?? "auto")"
+        case .player(let mediaID, let sourceID, let release):
+            "player:\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release")"
         case .settingsSection(let id):
             "settingsSection:\(id)"
         }
