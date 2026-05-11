@@ -101,9 +101,9 @@ jobs:
             dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg.sha256
 
       - name: Generate Sparkle appcast
-        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
         shell: bash
         run: |
+          test -n "$SPARKLE_PRIVATE_KEY"
           DMG="dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg"
           SPARKLE_DIR="dist/sparkle"
           SPARKLE_KEY="$RUNNER_TEMP/sparkle_private_key"
@@ -118,7 +118,6 @@ jobs:
           test -f "$SPARKLE_DIR/appcast.xml"
 
       - name: Stage Pages with appcast
-        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
         shell: bash
         run: |
           mkdir -p dist/pages
@@ -126,11 +125,9 @@ jobs:
           cp dist/sparkle/appcast.xml dist/pages/appcast.xml
 
       - name: Upload Pages artifact
-        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist/pages
 
       - name: Deploy Pages appcast
-        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
         uses: actions/deploy-pages@v4
