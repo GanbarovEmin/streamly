@@ -25,4 +25,6 @@ public enum CFMotion {
     )
     public static let hoverScale: CGFloat = 1.02
     public static let activeScale: CGFloat = 0.98
+    public static let reducedHoverScale: CGFloat = 1
+    public static let reducedActiveScale: CGFloat = 1
 }

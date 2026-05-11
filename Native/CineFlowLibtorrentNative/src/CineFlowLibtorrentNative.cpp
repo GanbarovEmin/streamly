@@ -402,6 +402,11 @@ int32_t cf_libtorrent_set_priority(void *raw_engine, const char *handle, const c
     return control_call(static_cast<Engine *>(raw_engine), "/set_priority", body, error);
 }
 
+int32_t cf_libtorrent_set_bandwidth_limits(void *raw_engine, const char *handle, int64_t download_bytes_per_second, int64_t upload_bytes_per_second, char **error) {
+    std::string body = "{\"handle\":\"" + escape_json(handle) + "\",\"downloadBytesPerSecond\":" + std::to_string(download_bytes_per_second) + ",\"uploadBytesPerSecond\":" + std::to_string(upload_bytes_per_second) + "}";
+    return control_call(static_cast<Engine *>(raw_engine), "/set_bandwidth_limits", body, error);
+}
+
 char *cf_libtorrent_streaming_url(void *raw_engine, const char *handle, char **error) {
     return string_call(static_cast<Engine *>(raw_engine), "/streaming_url", handle_body(handle), error);
 }

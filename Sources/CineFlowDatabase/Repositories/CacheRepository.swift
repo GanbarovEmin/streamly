@@ -17,6 +17,20 @@ public struct CachedImageRecord: Equatable, Sendable {
     }
 }
 
+public struct MetadataCacheRecord: Equatable, Sendable {
+    public let cacheKey: String
+    public let provider: String
+    public let payloadSize: Int64
+    public let updatedAt: String
+
+    public init(cacheKey: String, provider: String, payloadSize: Int64, updatedAt: String) {
+        self.cacheKey = cacheKey
+        self.provider = provider
+        self.payloadSize = payloadSize
+        self.updatedAt = updatedAt
+    }
+}
+
 public final class CacheRepository {
     private let databaseManager: DatabaseManager
 
@@ -150,6 +164,52 @@ public final class CacheRepository {
         }
     }
 
+    public func metadataCacheSizeBytes() async throws -> Int64 {
+        try databaseManager.read { db in
+            try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(LENGTH(payload_json)), 0) FROM metadata_cache") ?? 0
+        }
+    }
+
+    public func metadataCacheRecords() async throws -> [MetadataCacheRecord] {
+        try databaseManager.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT cache_key, provider, LENGTH(payload_json) AS payload_size, updated_at
+                    FROM metadata_cache
+                    ORDER BY updated_at ASC
+                    """
+            ).map(makeMetadataCacheRecord(from:))
+        }
+    }
+
+    public func metadataCacheRecordsUnused(before timestamp: String) async throws -> [MetadataCacheRecord] {
+        try databaseManager.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT cache_key, provider, LENGTH(payload_json) AS payload_size, updated_at
+                    FROM metadata_cache
+                    WHERE updated_at < ?
+                    ORDER BY updated_at ASC
+                    """,
+                arguments: [timestamp]
+            ).map(makeMetadataCacheRecord(from:))
+        }
+    }
+
+    public func removeMetadata(cacheKey: String) async throws {
+        try databaseManager.write { db in
+            try db.execute(sql: "DELETE FROM metadata_cache WHERE cache_key = ?", arguments: [cacheKey])
+        }
+    }
+
+    public func clearMetadataCache() async throws {
+        try databaseManager.write { db in
+            try db.execute(sql: "DELETE FROM metadata_cache")
+        }
+    }
+
     public func removeCachedImage(url: String) async throws {
         try databaseManager.write { db in
             try db.execute(sql: "DELETE FROM cached_images WHERE url = ?", arguments: [url])
@@ -170,5 +230,14 @@ private func makeCachedImageRecord(from row: Row) -> CachedImageRecord {
         fileSize: row["file_size"],
         createdAt: row["created_at"],
         lastAccessedAt: row["last_accessed_at"]
+    )
+}
+
+private func makeMetadataCacheRecord(from row: Row) -> MetadataCacheRecord {
+    MetadataCacheRecord(
+        cacheKey: row["cache_key"],
+        provider: row["provider"],
+        payloadSize: row["payload_size"],
+        updatedAt: row["updated_at"]
     )
 }

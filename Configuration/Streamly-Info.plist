@@ -34,7 +34,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.02</string>
+	<string>1.0.03</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -47,7 +47,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1002</string>
+	<string>1003</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -55,6 +55,6 @@
 	<key>SUFeedURL</key>
 	<string>https://ganbarovemin.github.io/streamly/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY</string>
+	<string>PKAI8Uk3C8q+402JfU5cDMeSWjlOIIVge9Cn7kQ/goE=</string>
 </dict>
 </plist>

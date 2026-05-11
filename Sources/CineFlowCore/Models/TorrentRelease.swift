@@ -43,6 +43,44 @@ public enum HDRFormat: String, Codable, Equatable, Hashable, Sendable {
     case unknown
 }
 
+public enum ReleaseHealth: String, Codable, Equatable, Hashable, Sendable {
+    case excellent
+    case good
+    case weak
+    case noSeeders
+    case unknown
+
+    public var healthScore: Double {
+        switch self {
+        case .excellent:
+            900
+        case .good:
+            420
+        case .weak:
+            -450
+        case .noSeeders:
+            -2_400
+        case .unknown:
+            -150
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .excellent:
+            "Excellent"
+        case .good:
+            "Good"
+        case .weak:
+            "Weak"
+        case .noSeeders:
+            "No Seeders"
+        case .unknown:
+            "Unknown"
+        }
+    }
+}
+
 public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendable {
     public let id: String
     public let sourceId: String
@@ -62,6 +100,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
     public let trustedUploader: Bool?
     public let rankScore: Double
     public let preferredFileIndex: Int?
+    public let availability: Double?
 
     public init(
         id: String,
@@ -81,6 +120,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
         uploadDate: Date? = nil,
         trustedUploader: Bool? = nil,
         preferredFileIndex: Int? = nil,
+        availability: Double? = nil,
         rankScore: Double? = nil
     ) {
         self.id = id
@@ -100,6 +140,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
         self.uploadDate = uploadDate
         self.trustedUploader = trustedUploader
         self.preferredFileIndex = preferredFileIndex
+        self.availability = availability
         self.rankScore = rankScore ?? Self.defaultRankScore(quality: quality, seeders: seeders, trustedUploader: trustedUploader)
     }
 
@@ -121,6 +162,20 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
 
         let value = bytes / unit.value
         return "\(String(format: "%.2f", value)) \(unit.label)"
+    }
+
+    public var releaseHealth: ReleaseHealth {
+        guard seeders >= 0 else { return .unknown }
+        if seeders == 0 { return .noSeeders }
+
+        let availabilityValue = availability ?? (seeders > 0 ? 1 : 0)
+        if seeders >= 80 && availabilityValue >= 1 {
+            return .excellent
+        }
+        if seeders >= 25 || availabilityValue >= 0.6 {
+            return .good
+        }
+        return .weak
     }
 
     private static func defaultRankScore(quality: ReleaseQuality, seeders: Int, trustedUploader: Bool?) -> Double {

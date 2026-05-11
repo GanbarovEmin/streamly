@@ -25,6 +25,7 @@ char *cf_libtorrent_files_json(void *engine, const char *handle, char **error);
 int32_t cf_libtorrent_select_file(void *engine, const char *handle, const char *file_id, char **error);
 int32_t cf_libtorrent_set_sequential(void *engine, const char *handle, bool enabled, char **error);
 int32_t cf_libtorrent_set_priority(void *engine, const char *handle, const char *file_id, int32_t priority, char **error);
+int32_t cf_libtorrent_set_bandwidth_limits(void *engine, const char *handle, int64_t download_bytes_per_second, int64_t upload_bytes_per_second, char **error);
 
 char *cf_libtorrent_streaming_url(void *engine, const char *handle, char **error);
 

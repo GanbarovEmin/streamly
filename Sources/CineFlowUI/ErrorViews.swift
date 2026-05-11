@@ -50,11 +50,13 @@ public struct ErrorBanner: View {
 public struct ErrorCard: View {
     private let title: String
     private let error: CineFlowError
+    private let retryTitle: String?
     private let onRetry: (() -> Void)?
 
-    public init(title: String, error: CineFlowError, onRetry: (() -> Void)? = nil) {
+    public init(title: String, error: CineFlowError, retryTitle: String? = nil, onRetry: (() -> Void)? = nil) {
         self.title = title
         self.error = error
+        self.retryTitle = retryTitle
         self.onRetry = onRetry
     }
 
@@ -78,14 +80,14 @@ public struct ErrorCard: View {
                 .foregroundStyle(CFColors.textMuted)
 
             if let onRetry {
-                RetryButton(action: onRetry)
+                RetryButton(title: retryTitle ?? "Retry", action: onRetry)
             }
         }
         .padding(CFSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                         .stroke(CFColors.error.opacity(0.24), lineWidth: CFSeparators.width)

@@ -110,6 +110,182 @@ final class ReleaseRankingEngineTests: XCTestCase {
         XCTAssertEqual(releases.sortedByCineFlowRank().map(\.id), ["2160p", "1080p"])
     }
 
+    func testReleaseHealthLabelsUseSeedersAndAvailability() {
+        XCTAssertEqual(
+            release(id: "excellent", quality: .fullHD, seeders: 500, sizeGB: 8, availability: 1.2).releaseHealth,
+            .excellent
+        )
+        XCTAssertEqual(
+            release(id: "good", quality: .fullHD, seeders: 80, sizeGB: 8, availability: 0.8).releaseHealth,
+            .good
+        )
+        XCTAssertEqual(
+            release(id: "weak", quality: .fullHD, seeders: 3, sizeGB: 8, availability: 0.3).releaseHealth,
+            .weak
+        )
+        XCTAssertEqual(
+            release(id: "dead", quality: .fullHD, seeders: 0, sizeGB: 8, availability: 0).releaseHealth,
+            .noSeeders
+        )
+        XCTAssertEqual(
+            release(id: "unknown", quality: .fullHD, seeders: -1, sizeGB: 8, availability: nil).releaseHealth,
+            .unknown
+        )
+    }
+
+    func testReleaseHealthAffectsRankingInsideComparableQuality() {
+        let noSeeders = release(id: "dead", quality: .ultraHD, seeders: 0, sizeGB: 24, availability: 0)
+        let weak = release(id: "weak", quality: .ultraHD, seeders: 8, sizeGB: 24, availability: 0.2)
+        let excellent = release(id: "excellent", quality: .ultraHD, seeders: 100, sizeGB: 24, availability: 1.0)
+
+        let ranked = ReleaseRankingEngine().rank([weak, noSeeders, excellent])
+
+        XCTAssertEqual(ranked.map(\.release.id), ["excellent", "weak", "dead"])
+        XCTAssertTrue(ranked[0].reasons.contains(.releaseHealth(.excellent)))
+        XCTAssertTrue(ranked[2].reasons.contains(.releaseHealth(.noSeeders)))
+    }
+
+    func testFallbackPlannerOffersNextBestReleaseWithoutSelectedRelease() {
+        let selected = release(id: "selected", quality: .fullHD, seeders: 0, sizeGB: 8)
+        let weak = release(id: "weak", quality: .fullHD, seeders: 3, sizeGB: 8)
+        let best = release(id: "best", quality: .fullHD, seeders: 120, sizeGB: 8, audioLanguages: ["ru"])
+        let lowerQuality = release(id: "lower-quality", quality: .hd, seeders: 400, sizeGB: 4)
+
+        let suggestion = ReleaseFallbackPlanner.suggestion(
+            for: selected,
+            in: [selected, weak, best, lowerQuality],
+            reason: .noSeeders,
+            preferences: RankingPreferences(preferredAudioLanguages: ["ru"])
+        )
+
+        XCTAssertEqual(suggestion?.reason, .noSeeders)
+        XCTAssertEqual(suggestion?.nextBestRelease?.release.id, "best")
+        XCTAssertEqual(suggestion?.candidates.map(\.release.id), ["best", "weak", "lower-quality"])
+        XCTAssertFalse(suggestion?.candidates.contains(where: { $0.release.id == selected.id }) == true)
+    }
+
+    func testMediaFileSelectorPrefersExplicitIndexThenLargestRealVideo() {
+        let releaseWithPreferredFile = release(
+            id: "preferred",
+            quality: .fullHD,
+            seeders: 40,
+            sizeGB: 8,
+            preferredFileIndex: 2
+        )
+        let files = [
+            TorrentFile(id: "0", path: "Extras/sample.mkv", name: "sample.mkv", lengthBytes: 80_000_000, isMediaFile: true),
+            TorrentFile(id: "1", path: "Movie/CD1.mkv", name: "CD1.mkv", lengthBytes: 2_000_000_000, isMediaFile: true),
+            TorrentFile(id: "2", path: "Movie/CD2.mkv", name: "CD2.mkv", lengthBytes: 2_100_000_000, isMediaFile: true)
+        ]
+
+        XCTAssertEqual(TorrentMediaFileSelector.selection(for: releaseWithPreferredFile, files: files)?.selectedFile.id, "2")
+
+        let releaseWithoutPreference = release(id: "largest", quality: .fullHD, seeders: 40, sizeGB: 8)
+        let selection = TorrentMediaFileSelector.selection(for: releaseWithoutPreference, files: files)
+
+        XCTAssertEqual(selection?.selectedFile.id, "2")
+        XCTAssertEqual(selection?.manualOptions.map(\.file.id), ["2", "1"])
+        XCTAssertFalse(selection?.manualOptions.contains(where: { $0.file.id == "0" }) == true)
+    }
+
+    func testPreferredQualityAndMaxFileSizeAffectRanking() {
+        let releases = [
+            release(id: "2160p-large", quality: .ultraHD, seeders: 220, sizeGB: 28),
+            release(id: "1080p-fit", quality: .fullHD, seeders: 150, sizeGB: 8),
+            release(id: "720p-small", quality: .hd, seeders: 300, sizeGB: 3)
+        ]
+        let preferences = RankingPreferences(
+            preferredQuality: .p1080,
+            maxFileSizeBytes: 10_000_000_000
+        )
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.map(\.release.id), ["1080p-fit", "720p-small", "2160p-large"])
+        XCTAssertTrue(ranked[0].reasons.contains(.preferredQuality(.p1080)))
+        XCTAssertTrue(ranked[2].reasons.contains(.maxFileSizeLimit(10_000_000_000)))
+    }
+
+    func testHighSeedersPreferenceCanOutrankHigherQuality() {
+        let releases = [
+            release(id: "2160p-low-seeders", quality: .ultraHD, seeders: 8, sizeGB: 24),
+            release(id: "1080p-many-seeders", quality: .fullHD, seeders: 1_200, sizeGB: 8)
+        ]
+        let preferences = RankingPreferences(preferHighSeedersOverHighestQuality: true)
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.first?.release.id, "1080p-many-seeders")
+        XCTAssertTrue(ranked.first?.reasons.contains(.highSeedersPreference) == true)
+    }
+
+    func testHDRAndCodecPreferencesAffectRanking() {
+        let releases = [
+            release(id: "hdr-av1", quality: .fullHD, codec: .av1, hdr: .hdr10, seeders: 300, sizeGB: 8),
+            release(id: "sdr-hevc", quality: .fullHD, codec: .hevc, hdr: .none, seeders: 260, sizeGB: 8)
+        ]
+
+        let avoidRanked = ReleaseRankingEngine(preferences: RankingPreferences(
+            hdrPreference: .avoidHDR,
+            codecPreference: .avoidUnsupportedAV1
+        )).rank(releases)
+        XCTAssertEqual(avoidRanked.first?.release.id, "sdr-hevc")
+        XCTAssertTrue(avoidRanked.first?.reasons.contains(.codecPreference(.avoidUnsupportedAV1)) == true)
+
+        let preferRanked = ReleaseRankingEngine(preferences: RankingPreferences(
+            hdrPreference: .preferHDR,
+            codecPreference: .preferHEVC
+        )).rank([
+            release(id: "hdr-hevc", quality: .fullHD, codec: .hevc, hdr: .hdr10, seeders: 240, sizeGB: 8),
+            release(id: "sdr-h264", quality: .fullHD, codec: .h264, hdr: .none, seeders: 300, sizeGB: 8)
+        ])
+        XCTAssertEqual(preferRanked.first?.release.id, "hdr-hevc")
+        XCTAssertTrue(preferRanked.first?.reasons.contains(.hdrPreference(.preferHDR)) == true)
+        XCTAssertTrue(preferRanked.first?.reasons.contains(.codecPreference(.preferHEVC)) == true)
+    }
+
+    func testRankedReleaseExposesUserFacingLabelsReasonsAndAdvancedDetails() {
+        let best = release(
+            id: "best-4k-ru",
+            quality: .ultraHD,
+            codec: .hevc,
+            hdr: .hdr10,
+            seeders: 800,
+            sizeGB: 18,
+            audioLanguages: ["ru", "en"],
+            subtitleLanguages: ["en"],
+            trustedUploader: true,
+            availability: 1.0
+        )
+        let fastest = release(id: "fastest-1080p", quality: .fullHD, seeders: 1_400, sizeGB: 9)
+        let smallest = release(id: "smallest-720p", quality: .hd, seeders: 120, sizeGB: 3)
+
+        let ranked = ReleaseRankingEngine(preferences: RankingPreferences(
+            preferredAudioLanguages: ["ru"],
+            preferredSubtitleLanguages: ["en"],
+            supportsHDR: true,
+            maxFileSizeBytes: 20_000_000_000
+        )).rank([smallest, fastest, best])
+
+        XCTAssertEqual(ranked.first?.release.id, "best-4k-ru")
+        XCTAssertTrue(ranked[0].labels.contains(.best))
+        XCTAssertTrue(ranked[0].labels.contains(.best4K))
+        XCTAssertTrue(ranked[0].labels.contains(.bestRussianAudio))
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("4K quality") == true)
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("Russian audio") == true)
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("English subtitles") == true)
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("HDR") == true)
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("trusted source") == true)
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("fits size preference") == true)
+        XCTAssertTrue(ranked.first?.conciseReasons.contains("HEVC codec") == true)
+        XCTAssertTrue(ranked.first?.tooltipExplanation.contains("Why this release") == true)
+        XCTAssertTrue(ranked.first?.advancedDetails.contains(where: { $0.contains("Score") }) == true)
+        XCTAssertTrue(ranked.first?.advancedDetails.contains(where: { $0.contains("Source") }) == true)
+        XCTAssertTrue(ranked.first?.advancedDetails.contains(where: { $0.contains("Size") }) == true)
+        XCTAssertTrue(ranked.first(where: { $0.release.id == "fastest-1080p" })?.labels.contains(.fastest) == true)
+        XCTAssertTrue(ranked.first(where: { $0.release.id == "smallest-720p" })?.labels.contains(.smallest) == true)
+    }
+
     private func release(
         id: String,
         quality: ReleaseQuality,
@@ -119,7 +295,9 @@ final class ReleaseRankingEngineTests: XCTestCase {
         sizeGB: Double,
         audioLanguages: [String] = ["en"],
         subtitleLanguages: [String] = ["en"],
-        trustedUploader: Bool? = nil
+        trustedUploader: Bool? = nil,
+        preferredFileIndex: Int? = nil,
+        availability: Double? = nil
     ) -> TorrentRelease {
         TorrentRelease(
             id: id,
@@ -131,7 +309,9 @@ final class ReleaseRankingEngineTests: XCTestCase {
             subtitleLanguages: subtitleLanguages,
             seeders: seeders,
             sizeBytes: Int64(sizeGB * 1_000_000_000),
-            trustedUploader: trustedUploader
+            trustedUploader: trustedUploader,
+            preferredFileIndex: preferredFileIndex,
+            availability: availability
         )
     }
 }

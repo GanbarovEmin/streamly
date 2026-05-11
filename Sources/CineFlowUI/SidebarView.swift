@@ -5,6 +5,7 @@ import SwiftUI
 public struct SidebarView: View {
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
+    @Environment(\.cfReduceMotion) private var reduceMotion
 
     public init(navigationCoordinator: NavigationCoordinator) {
         self.navigationCoordinator = navigationCoordinator
@@ -37,10 +38,12 @@ public struct SidebarView: View {
                             systemImage: item.systemImage,
                             isSelected: item == navigationCoordinator.selectedSidebarRoute
                         ) {
-                            withAnimation(CFMotion.spring) {
+                            withAnimation(reduceMotion ? nil : CFMotion.spring) {
                                 navigationCoordinator.selectSidebarRoute(item)
                             }
                         }
+                        .help(L10n.string(item.titleKey, language: languageSettingsStore.selectedLanguage))
+                        .accessibilityLabel(L10n.string(item.titleKey, language: languageSettingsStore.selectedLanguage))
                     }
                 }
                 .padding(.horizontal, 16)
@@ -107,11 +110,11 @@ public struct SidebarView: View {
                 .lineLimit(2)
                 .foregroundStyle(CFColors.textMuted)
         }
-        .padding(14)
+        .padding(CFSpacing.md)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)

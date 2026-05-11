@@ -6,6 +6,7 @@ public struct SidebarItem: View {
     private let isSelected: Bool
     private let action: () -> Void
 
+    @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     public init(title: String, systemImage: String, isSelected: Bool, action: @escaping () -> Void) {
@@ -37,7 +38,7 @@ public struct SidebarItem: View {
                         RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                             .stroke(isSelected ? CFColors.focusRing.opacity(0.34) : .clear, lineWidth: CFSeparators.width)
                     )
-                    .cfShadow(isSelected ? .hover : .none)
+                    .cfShadow(isSelected && !reduceMotion ? .hover : .none)
             )
             .overlay(alignment: .bottomLeading) {
                 if isSelected {
@@ -48,12 +49,15 @@ public struct SidebarItem: View {
                         .padding(.bottom, 4)
                 }
             }
-            .scaleEffect(isHovering ? CFMotion.hoverScale : 1)
-            .animation(CFMotion.spring, value: isHovering)
-            .animation(CFMotion.spring, value: isSelected)
+            .scaleEffect(reduceMotion ? 1 : (isHovering ? CFMotion.hoverScale : 1))
+            .cfAnimation(CFMotion.spring, value: isHovering, reduceMotion: reduceMotion)
+            .cfAnimation(CFMotion.spring, value: isSelected, reduceMotion: reduceMotion)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .onHover { isHovering = $0 }
         .cfFocusRing()
     }

@@ -40,6 +40,110 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertTrue(result.sourceErrors.isEmpty)
     }
 
+    func testAggregatorTimesOutOneSourceRetriesSafelyAndKeepsOtherResults() async throws {
+        let slow = ControlledTorrentSourceProvider(
+            sourceId: "slow",
+            displayName: "Slow Source",
+            outcomes: [
+                .delayThenFail(nanoseconds: 200_000_000, SourceProviderError.providerUnavailable(sourceId: "slow", reason: "socket hung")),
+                .success([
+                    TorrentRelease(id: "slow-result", sourceId: "slow", sourceName: "Slow Source", title: "Matrix slow", quality: .fullHD, seeders: 20)
+                ])
+            ]
+        )
+        let healthy = ControlledTorrentSourceProvider(
+            sourceId: "healthy",
+            displayName: "Healthy Source",
+            outcomes: [
+                .success([
+                    TorrentRelease(id: "healthy-result", sourceId: "healthy", sourceName: "Healthy Source", title: "Matrix healthy", quality: .ultraHD, seeders: 50)
+                ])
+            ]
+        )
+        let manager = SourceManager(
+            providers: [slow, healthy],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        try await manager.updateSourcePolicy(sourceId: "slow", requestTimeoutSeconds: 0.03, maxRetryCount: 1)
+
+        let result = try await TorrentSearchAggregator(sourceManager: manager).search(query: "matrix")
+        let slowSettings = try await manager.settings(for: "slow")
+        let healthySettings = try await manager.settings(for: "healthy")
+
+        XCTAssertEqual(result.rankedReleases.map(\.release.id), ["healthy-result", "slow-result"])
+        XCTAssertTrue(result.sourceErrors.isEmpty)
+        let slowCallCount = await slow.recordedSearchCallCount()
+        XCTAssertEqual(slowCallCount, 2)
+        XCTAssertEqual(slowSettings.healthStatus, .healthy)
+        XCTAssertEqual(healthySettings.healthStatus, .healthy)
+    }
+
+    func testAggregatorReportsTimedOutSourceWithoutBreakingOtherSources() async throws {
+        let timedOut = ControlledTorrentSourceProvider(
+            sourceId: "timeout",
+            displayName: "Timeout Source",
+            outcomes: [.delayThenSuccess(nanoseconds: 300_000_000, [])]
+        )
+        let healthy = ControlledTorrentSourceProvider(
+            sourceId: "healthy",
+            displayName: "Healthy Source",
+            outcomes: [
+                .success([
+                    TorrentRelease(id: "healthy-result", sourceId: "healthy", sourceName: "Healthy Source", title: "Matrix healthy", quality: .fullHD, seeders: 40)
+                ])
+            ]
+        )
+        let manager = SourceManager(
+            providers: [timedOut, healthy],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        try await manager.updateSourcePolicy(sourceId: "timeout", requestTimeoutSeconds: 0.03, maxRetryCount: 0)
+
+        let result = try await TorrentSearchAggregator(sourceManager: manager).search(query: "matrix")
+        let timedOutSettings = try await manager.settings(for: "timeout")
+
+        XCTAssertEqual(result.rankedReleases.map(\.release.id), ["healthy-result"])
+        XCTAssertEqual(result.sourceErrors.map(\.sourceId), ["timeout"])
+        XCTAssertEqual(result.sourceErrors.first?.message, "This source took too long to respond.")
+        XCTAssertEqual(timedOutSettings.healthStatus, .degraded)
+        XCTAssertEqual(timedOutSettings.sourceStatus, .slow)
+        XCTAssertEqual(timedOutSettings.errorState?.message, "This source took too long to respond.")
+        XCTAssertEqual(timedOutSettings.successRate, 0)
+    }
+
+    func testSourceHealthTracksResponseTimeSuccessRateAndStatus() async throws {
+        let source = ControlledTorrentSourceProvider(
+            sourceId: "measured",
+            displayName: "Measured Source",
+            outcomes: [
+                .success([
+                    TorrentRelease(id: "measured-result", sourceId: "measured", sourceName: "Measured Source", title: "Matrix", quality: .fullHD, seeders: 12)
+                ])
+            ]
+        )
+        let manager = SourceManager(
+            providers: [source],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        try await manager.updateSourcePolicy(sourceId: "measured", requestTimeoutSeconds: 2, maxRetryCount: 0)
+
+        _ = try await TorrentSearchAggregator(sourceManager: manager).search(query: "matrix")
+        let online = try await manager.settings(for: "measured")
+
+        XCTAssertEqual(online.sourceStatus, .online)
+        XCTAssertEqual(online.successRate, 1)
+        XCTAssertNotNil(online.averageResponseTimeMilliseconds)
+
+        try await manager.recordError(sourceId: "measured", message: "Manual health check failed")
+        let errored = try await manager.settings(for: "measured")
+
+        XCTAssertEqual(errored.sourceStatus, .error)
+        XCTAssertEqual(errored.successRate, 0.5, accuracy: 0.001)
+    }
+
     func testSourceManagerSettingsEnableAndDisableSources() async throws {
         let manager = SourceManager(
             providers: [MockTorrentSourceProvider()],
@@ -218,6 +322,76 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertFalse(String(describing: settings).contains("secret-password"))
     }
 
+    func testInvalidCredentialsAreNotLeftInCredentialStoreAndSourceNeedsAuthentication() async throws {
+        let credentialStore = InMemorySourceCredentialStore()
+        let manager = SourceManager(
+            providers: [
+                ControlledTorrentSourceProvider(
+                    sourceId: "private",
+                    displayName: "Private Source",
+                    requiresAuthentication: true,
+                    authenticationResult: .invalid(reason: "bad password")
+                )
+            ],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: credentialStore
+        )
+
+        do {
+            try await manager.authenticate(
+                sourceId: "private",
+                credentials: SourceCredentials(username: "user", password: "wrong-password")
+            )
+            XCTFail("Expected invalid credentials to fail authentication.")
+        } catch SourceProviderError.authenticationRequired(let sourceId) {
+            XCTAssertEqual(sourceId, "private")
+        }
+
+        let settings = try await manager.settings(for: "private")
+        let storedCredentials = try await credentialStore.credentials(for: "private")
+
+        XCTAssertNil(storedCredentials)
+        XCTAssertNil(settings.credentialKeychainID)
+        XCTAssertEqual(settings.authenticationStatus, .invalid(reason: "bad password"))
+        XCTAssertEqual(settings.healthStatus, .needsAuthentication)
+        XCTAssertEqual(settings.sourceStatus, .authRequired)
+        XCTAssertFalse(String(describing: settings).contains("wrong-password"))
+    }
+
+    func testExpiredSessionDisablesActiveProviderUntilUserSignsInAgain() async throws {
+        let credentialStore = InMemorySourceCredentialStore()
+        let manager = SourceManager(
+            providers: [
+                ControlledTorrentSourceProvider(
+                    sourceId: "private",
+                    displayName: "Private Source",
+                    requiresAuthentication: true,
+                    authenticationResult: .authenticated(username: "user"),
+                    validationResult: .invalid(reason: "session expired")
+                )
+            ],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: credentialStore
+        )
+
+        try await manager.authenticate(
+            sourceId: "private",
+            credentials: SourceCredentials(username: "user", password: "secret")
+        )
+        let status = try await manager.testConnection(sourceId: "private")
+        let activeProviders = try await manager.activeProviders()
+        let settings = try await manager.settings(for: "private")
+        let storedCredentials = try await credentialStore.credentials(for: "private")
+
+        XCTAssertEqual(status, .invalid(reason: "session expired"))
+        XCTAssertTrue(activeProviders.isEmpty)
+        XCTAssertNil(storedCredentials)
+        XCTAssertNil(settings.credentialKeychainID)
+        XCTAssertEqual(settings.healthStatus, .needsAuthentication)
+        XCTAssertEqual(settings.sourceStatus, .authRequired)
+        XCTAssertEqual(settings.errorState?.message, "Sign in again for this source.")
+    }
+
     func testSourceCredentialStoreUsesKeychainServiceWithoutExposingSecretsInSettings() async throws {
         let keychain = MockKeychainService()
         let credentialStore = KeychainSourceCredentialStore(keychainService: keychain)
@@ -250,6 +424,75 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertFalse(String(describing: settings).contains("source-password"))
         XCTAssertFalse(String(describing: settings).contains("source-token"))
         XCTAssertFalse(String(describing: settings).contains("cookie-secret"))
+    }
+}
+
+private actor ControlledTorrentSourceProvider: TorrentSourceProviderProtocol {
+    enum Outcome: Sendable {
+        case success([TorrentRelease])
+        case delayThenSuccess(nanoseconds: UInt64, [TorrentRelease])
+        case delayThenFail(nanoseconds: UInt64, Error)
+        case failure(Error)
+    }
+
+    let sourceId: String
+    let displayName: String
+    let requiresAuthentication: Bool
+    let isEnabled: Bool
+    private let authenticationResult: SourceAuthenticationStatus
+    private let validationResult: SourceAuthenticationStatus
+    private var outcomes: [Outcome]
+    private(set) var searchCallCount = 0
+
+    init(
+        sourceId: String,
+        displayName: String,
+        requiresAuthentication: Bool = false,
+        isEnabled: Bool = true,
+        authenticationResult: SourceAuthenticationStatus = .notRequired,
+        validationResult: SourceAuthenticationStatus = .notRequired,
+        outcomes: [Outcome] = [.success([])]
+    ) {
+        self.sourceId = sourceId
+        self.displayName = displayName
+        self.requiresAuthentication = requiresAuthentication
+        self.isEnabled = isEnabled
+        self.authenticationResult = authenticationResult
+        self.validationResult = validationResult
+        self.outcomes = outcomes
+    }
+
+    func search(query: String, filters: TorrentSourceSearchFilters) async throws -> [TorrentRelease] {
+        searchCallCount += 1
+        let outcome = outcomes.isEmpty ? Outcome.success([]) : outcomes.removeFirst()
+        switch outcome {
+        case .success(let releases):
+            return releases
+        case .delayThenSuccess(let nanoseconds, let releases):
+            try await Task.sleep(nanoseconds: nanoseconds)
+            return releases
+        case .delayThenFail(let nanoseconds, let error):
+            try await Task.sleep(nanoseconds: nanoseconds)
+            throw error
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func fetchDetails(releaseId: String) async throws -> TorrentReleaseDetails {
+        throw SourceProviderError.releaseNotFound(sourceId: sourceId, releaseId: releaseId)
+    }
+
+    func authenticate(credentials: SourceCredentials) async throws -> SourceAuthenticationStatus {
+        authenticationResult
+    }
+
+    func validateSession() async throws -> SourceAuthenticationStatus {
+        validationResult
+    }
+
+    func recordedSearchCallCount() -> Int {
+        searchCallCount
     }
 }
 

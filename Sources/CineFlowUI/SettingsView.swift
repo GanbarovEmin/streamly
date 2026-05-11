@@ -1,5 +1,6 @@
 import CineFlowCore
 import CineFlowDesignSystem
+import CineFlowLocalization
 import CineFlowSources
 import AppKit
 import SwiftUI
@@ -12,6 +13,7 @@ public struct SettingsView: View {
     @State private var sourceCookies: [String: String] = [:]
     @State private var tmdbReadAccessToken = ""
     @State private var tmdbAPIKey = ""
+    @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
     public init(viewModel: SettingsViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -125,7 +127,15 @@ public struct SettingsView: View {
             Divider().overlay(CFColors.separatorSubtle)
 
             if viewModel.sourceRows.isEmpty {
-                EmptyState(title: "No bundled media sources", message: "Streamly only plays local files and user-attached sources for this release.", systemImage: "externaldrive")
+                EmptyState(
+                    title: t(.sourcesEmptyTitle),
+                    message: t(.sourcesEmptyMessage),
+                    systemImage: "externaldrive",
+                    actionTitle: t(.sourcesEmptyAction),
+                    actionSystemImage: "arrow.counterclockwise"
+                ) {
+                    Task { await viewModel.resetTorrentioSettings() }
+                }
             } else {
                 ForEach(viewModel.sourceRows) { row in
                     VStack(alignment: .leading, spacing: CFSpacing.sm) {
@@ -250,7 +260,7 @@ public struct SettingsView: View {
             )
 
             HStack(alignment: .center, spacing: CFSpacing.sm) {
-                Text(viewModel.torrentioConfiguredManifestURL?.absoluteString ?? "Torrentio manifest is unavailable")
+                Text(viewModel.torrentioConfiguredManifestURL == nil ? "Манифест источника недоступен" : "Манифест источника собран и готов для копирования")
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
                     .lineLimit(1)
@@ -324,6 +334,40 @@ public struct SettingsView: View {
                 Text("English -> Russian").tag("en,ru")
             }
 
+            Picker("Preferred quality", selection: Binding(
+                get: { viewModel.settings.playback.preferredQuality },
+                set: { value in Task { await viewModel.updatePreferredQuality(value) } }
+            )) {
+                ForEach(PreferredQuality.allCases) { quality in
+                    Text(quality.title).tag(quality)
+                }
+            }
+
+            Picker("HDR preference", selection: Binding(
+                get: { viewModel.settings.playback.hdrPreference },
+                set: { value in Task { await viewModel.updateHDRPreference(value) } }
+            )) {
+                ForEach(HDRPreference.allCases) { preference in
+                    Text(preference.title).tag(preference)
+                }
+            }
+
+            Picker("Codec preference", selection: Binding(
+                get: { viewModel.settings.playback.codecPreference },
+                set: { value in Task { await viewModel.updateCodecPreference(value) } }
+            )) {
+                ForEach(CodecPreference.allCases) { preference in
+                    Text(preference.title).tag(preference)
+                }
+            }
+
+            Stepper(maxFileSizeStepperTitle, value: maxFileSizeGBBinding, in: 0...100, step: 1)
+
+            SettingsToggleRow(title: "Prefer high seeders", subtitle: "Choose a healthier release over the absolute highest quality when the network looks stronger.", isOn: Binding(
+                get: { viewModel.settings.playback.preferHighSeedersOverHighestQuality },
+                set: { value in Task { await viewModel.updatePreferHighSeedersOverHighestQuality(value) } }
+            ))
+
             SettingsToggleRow(title: "Hardware acceleration", subtitle: "Prefer GPU decoding when the playback backend supports it.", isOn: Binding(
                 get: { viewModel.settings.playback.hardwareAccelerationEnabled },
                 set: { value in Task { await viewModel.updateHardwareAcceleration(value) } }
@@ -342,6 +386,24 @@ public struct SettingsView: View {
                 set: { value in Task { await viewModel.updateSeekStep(value) } }
             ), in: 5...60, step: 5)
         }
+    }
+
+    private var maxFileSizeLabel: String {
+        guard let bytes = viewModel.settings.playback.maxFileSizeBytes, bytes > 0 else {
+            return "Unlimited"
+        }
+        return "\(bytes / 1_000_000_000) GB"
+    }
+
+    private var maxFileSizeStepperTitle: String {
+        "Max file size: \(maxFileSizeLabel)"
+    }
+
+    private var maxFileSizeGBBinding: Binding<Int> {
+        Binding(
+            get: { Int(viewModel.settings.playback.maxFileSizeBytes.map { $0 / 1_000_000_000 } ?? 0) },
+            set: { value in Task { await viewModel.updateMaxFileSizeGB(value == 0 ? nil : Double(value)) } }
+        )
     }
 
     private var subtitlesSection: some View {
@@ -377,45 +439,172 @@ public struct SettingsView: View {
 
     private var cacheSection: some View {
         SettingsCard {
-            SettingValueRow(title: "Image cache", value: viewModel.cacheLabel(viewModel.cacheSummary.imageBytes))
-            SettingValueRow(title: "Torrent cache", value: viewModel.cacheLabel(viewModel.cacheSummary.torrentBytes))
-            SettingValueRow(title: "Subtitles cache", value: viewModel.cacheLabel(viewModel.cacheSummary.subtitleBytes))
-            SettingValueRow(title: "Total", value: viewModel.cacheLabel(viewModel.cacheSummary.totalBytes))
+            if viewModel.cacheSummary.isAlmostFull {
+                CacheWarningBanner(
+                    total: viewModel.cacheLabel(viewModel.cacheSummary.totalBytes),
+                    limit: viewModel.cacheLabel(viewModel.cacheSummary.maxSizeBytes)
+                )
+            }
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: CFSpacing.md)], alignment: .leading, spacing: CFSpacing.md) {
+                ForEach(viewModel.cacheSummary.buckets) { bucket in
+                    CacheBucketCard(
+                        title: cacheCategoryTitle(bucket.category),
+                        systemImage: cacheCategoryIcon(bucket.category),
+                        size: viewModel.cacheLabel(bucket.sizeBytes),
+                        itemCount: bucket.itemCount,
+                        path: bucket.path
+                    ) {
+                        Task { await clearCache(bucket.category) }
+                    }
+                    .help(cacheCategoryHelp(bucket.category))
+                }
+            }
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            VStack(alignment: .leading, spacing: CFSpacing.md) {
+                Text("Auto-clean rules")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+
+                Picker("Remove cache older than", selection: Binding(
+                    get: { viewModel.settings.storage.cacheRetentionDays },
+                    set: { value in Task { await viewModel.updateCacheRetentionDays(value) } }
+                )) {
+                    Text("7 days").tag(7)
+                    Text("14 days").tag(14)
+                    Text("30 days").tag(30)
+                }
+                .pickerStyle(.segmented)
+
+                Stepper(
+                    "Max cache size: \(maxCacheSizeGB) GB",
+                    value: Binding(
+                        get: { maxCacheSizeGB },
+                        set: { value in Task { await viewModel.updateMaxCacheSizeGB(value) } }
+                    ),
+                    in: 1...512,
+                    step: 5
+                )
+
+                SettingsToggleRow(title: "Keep unfinished downloads", subtitle: "Active and incomplete torrent data is protected from cleanup.", isOn: Binding(
+                    get: { viewModel.settings.storage.keepUnfinishedCache },
+                    set: { value in Task { await viewModel.updateKeepUnfinishedCache(value) } }
+                ))
+
+                SettingsToggleRow(title: "Remove completed downloads", subtitle: "Completed torrent cache can be cleaned when retention or size rules apply.", isOn: Binding(
+                    get: { viewModel.settings.storage.removeCompletedCache },
+                    set: { value in Task { await viewModel.updateRemoveCompletedCache(value) } }
+                ))
+
+                Picker("Download bandwidth", selection: Binding(
+                    get: { bandwidthMBps(viewModel.settings.storage.torrentDownloadLimitBytesPerSecond) },
+                    set: { value in Task { await viewModel.updateTorrentDownloadLimitMBps(value == 0 ? nil : value) } }
+                )) {
+                    Text("Unlimited").tag(0)
+                    Text("5 MB/s").tag(5)
+                    Text("10 MB/s").tag(10)
+                    Text("25 MB/s").tag(25)
+                    Text("50 MB/s").tag(50)
+                }
+                .pickerStyle(.segmented)
+                .help("Limit torrent download speed for new streaming sessions.")
+
+                Picker("Upload bandwidth", selection: Binding(
+                    get: { bandwidthMBps(viewModel.settings.storage.torrentUploadLimitBytesPerSecond) },
+                    set: { value in Task { await viewModel.updateTorrentUploadLimitMBps(value == 0 ? nil : value) } }
+                )) {
+                    Text("Unlimited").tag(0)
+                    Text("1 MB/s").tag(1)
+                    Text("5 MB/s").tag(5)
+                    Text("10 MB/s").tag(10)
+                }
+                .pickerStyle(.segmented)
+                .help("Optionally limit torrent upload speed for new streaming sessions.")
+            }
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            SettingValueRow(title: "Total cache", value: "\(viewModel.cacheLabel(viewModel.cacheSummary.totalBytes)) / \(viewModel.cacheLabel(viewModel.cacheSummary.maxSizeBytes))")
             SettingValueRow(title: "Torrent cache folder", value: viewModel.settings.storage.torrentCacheFolderPath)
             SettingValueRow(title: "Downloads folder", value: viewModel.settings.storage.downloadsFolderPath ?? "Default system downloads")
 
             HStack(spacing: CFSpacing.sm) {
                 SecondaryButton("Choose cache folder", systemImage: "folder") { viewModel.chooseTorrentCacheFolder() }
-                SecondaryButton("Clear image cache", systemImage: "photo") { Task { await viewModel.clearImageCache() } }
-                SecondaryButton("Clear torrent cache", systemImage: "arrow.down.doc") { Task { await viewModel.clearTorrentCache() } }
+                    .help(t(.tooltipCache))
+                SecondaryButton("Run auto-clean", systemImage: "wand.and.stars") { Task { await viewModel.runCacheAutoClean() } }
+                    .help("Apply retention, completed-download and max-size rules now.")
                 SecondaryButton("Clear all cache", systemImage: "trash") { Task { await viewModel.clearAllCache() } }
+                    .help(t(.tooltipCache))
+            }
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Text("Per-title cache")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+
+                if viewModel.cacheSummary.titleItems.isEmpty {
+                    EmptyState(
+                        title: "No cached titles",
+                        message: "Streamly will show cached torrents, subtitles and metadata here after playback or browsing.",
+                        systemImage: "externaldrive",
+                        actionTitle: "Refresh",
+                        actionSystemImage: "arrow.clockwise"
+                    ) {
+                        Task { await viewModel.refreshCacheSummary() }
+                    }
+                } else {
+                    ForEach(viewModel.cacheSummary.titleItems) { item in
+                        CacheTitleRow(
+                            item: item,
+                            sizeLabel: viewModel.cacheLabel(item.sizeBytes),
+                            categoryTitle: cacheCategoryTitle(item.category)
+                        ) {
+                            Task { await viewModel.setTitleCacheKeepForLater(itemID: item.id, keep: !item.isKeptForLater) }
+                        } clearAction: {
+                            Task { await viewModel.clearTitleCache(itemID: item.id) }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private var maxCacheSizeGB: Int {
+        max(1, Int(viewModel.settings.storage.maxCacheSizeBytes / (1_024 * 1_024 * 1_024)))
+    }
+
+    private func bandwidthMBps(_ bytesPerSecond: Int64?) -> Int {
+        guard let bytesPerSecond, bytesPerSecond > 0 else { return 0 }
+        return Int(bytesPerSecond / (1_024 * 1_024))
     }
 
     private var updatesSection: some View {
         SettingsCard {
             SettingValueRow(title: "Current version", value: viewModel.about.version)
             SettingValueRow(title: "Current build", value: viewModel.about.build)
-            SettingValueRow(title: "Release source", value: "https://github.com/GanbarovEmin/streamly/releases/latest")
+            SettingValueRow(title: "Release source", value: "GitHub Releases + Sparkle appcast")
             SettingValueRow(title: "Metadata attribution", value: "Movie and TV metadata is provided by TMDB and Cinemeta/Stremio.")
             SettingValueRow(title: "Last checked", value: lastUpdateCheckedText)
             SettingValueRow(title: "Updater status", value: viewModel.settings.updates.sparkleStatus)
             SettingValueRow(title: "Update status", value: updateStatusText)
 
-            SettingsToggleRow(title: "Automatic update checks", subtitle: "Streamly checks the latest GitHub Release on its schedule.", isOn: Binding(
+            SettingsToggleRow(title: "Automatic update checks", subtitle: "Sparkle checks the appcast, offers the update and relaunches after install.", isOn: Binding(
                 get: { viewModel.settings.updates.automaticChecksEnabled },
                 set: { value in Task { await viewModel.updateAutomaticUpdateChecks(value) } }
             ))
+            .help(t(.tooltipAutoUpdates))
 
             SecondaryButton("Check for updates", systemImage: "arrow.triangle.2.circlepath") {
                 Task { await viewModel.checkForUpdates() }
             }
+            .help(t(.tooltipAutoUpdates))
         }
     }
 
     private var lastUpdateCheckedText: String {
-        guard let lastUpdateCheckedAt = viewModel.lastUpdateCheckedAt else { return "Not checked yet" }
+        guard let lastUpdateCheckedAt = viewModel.lastUpdateCheckedAt else { return t(.settingsUpdateNotChecked) }
         return lastUpdateCheckedAt.formatted(date: .abbreviated, time: .shortened)
     }
 
@@ -423,8 +612,11 @@ public struct SettingsView: View {
         SettingsCard {
             HStack(spacing: CFSpacing.sm) {
                 SecondaryButton("Export diagnostics", systemImage: "square.and.arrow.up") { Task { await viewModel.exportDiagnostics() } }
+                    .help(t(.tooltipDiagnostics))
                 SecondaryButton("Open logs folder", systemImage: "folder") { viewModel.openLogsFolder() }
+                    .help(t(.tooltipDiagnostics))
                 SecondaryButton("Clear logs", systemImage: "trash") { viewModel.clearLogs() }
+                    .help(t(.tooltipDiagnostics))
             }
 
             if let diagnosticsExport = viewModel.diagnosticsExport {
@@ -460,11 +652,16 @@ public struct SettingsView: View {
 
     private var updateStatusText: String {
         switch viewModel.updateStatus {
-        case .idle: "Idle"
-        case .checking: "Checking"
-        case .updateAvailable(let version): "Update available: \(version)"
-        case .upToDate: "Up to date"
-        case .failed(let message): message
+        case .idle:
+            t(.settingsUpdateIdle)
+        case .checking:
+            t(.settingsUpdateChecking)
+        case .updateAvailable(let version):
+            L10n.format(.settingsUpdateAvailableFormat, language: selectedLanguage, version)
+        case .upToDate:
+            t(.settingsUpdateUpToDate)
+        case .failed:
+            t(.settingsUpdateFailed)
         }
     }
 
@@ -476,7 +673,7 @@ public struct SettingsView: View {
         case .playback: "Audio priority, resume behavior, acceleration and seeking."
         case .subtitles: "Subtitle language priority, loading behavior, size and timing."
         case .cache: "Local image, torrent and subtitle cache usage and cleanup."
-        case .updates: "Version information and Sparkle-ready update controls."
+        case .updates: "Version information and production Sparkle update controls."
         case .diagnostics: "Export diagnostics, inspect logs and clear log files."
         case .privacy: "Local-only data handling, telemetry default and local reset."
         case .about: "Application identity, credits and license information."
@@ -495,6 +692,54 @@ public struct SettingsView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
     }
+
+    private func clearCache(_ category: SmartCacheCategory) async {
+        switch category {
+        case .images:
+            await viewModel.clearImageCache()
+        case .torrents:
+            await viewModel.clearTorrentCache()
+        case .subtitles:
+            await viewModel.clearSubtitlesCache()
+        case .metadata:
+            await viewModel.clearMetadataCache()
+        }
+    }
+
+    private func cacheCategoryTitle(_ category: SmartCacheCategory) -> String {
+        switch category {
+        case .images: "Image cache"
+        case .torrents: "Torrent cache"
+        case .subtitles: "Subtitles cache"
+        case .metadata: "Metadata cache"
+        }
+    }
+
+    private func cacheCategoryIcon(_ category: SmartCacheCategory) -> String {
+        switch category {
+        case .images: "photo.on.rectangle"
+        case .torrents: "arrow.down.doc"
+        case .subtitles: "captions.bubble"
+        case .metadata: "database"
+        }
+    }
+
+    private func cacheCategoryHelp(_ category: SmartCacheCategory) -> String {
+        switch category {
+        case .images: "Artwork files cached locally for faster browsing."
+        case .torrents: "Torrent data is cleaned without touching active playback."
+        case .subtitles: "Downloaded subtitle files stored locally."
+        case .metadata: "Local provider responses used for faster detail screens."
+        }
+    }
+
+    private var selectedLanguage: AppLanguage {
+        languageSettingsStore.selectedLanguage
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: selectedLanguage)
+    }
 }
 
 private struct SettingsCard<Content: View>: View {
@@ -506,14 +751,162 @@ private struct SettingsCard<Content: View>: View {
         }
         .padding(CFSpacing.lg)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.elevatedFill)
-                .overlay(
-                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                )
+        .cfPanelBackground(fill: CFColors.panelFill, shadow: .panel)
+    }
+}
+
+private struct CacheWarningBanner: View {
+    let total: String
+    let limit: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: CFSpacing.sm) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .font(.title3)
+                .foregroundStyle(CFColors.warning)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Cache is almost full")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+                Text("\(total) used from \(limit). Run auto-clean or increase the cache limit.")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+            }
+        }
+        .padding(CFSpacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CFColors.warning.opacity(0.12), in: RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                .stroke(CFColors.warning.opacity(0.32), lineWidth: 1)
         )
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct CacheBucketCard: View {
+    let title: String
+    let systemImage: String
+    let size: String
+    let itemCount: Int
+    let path: String?
+    let clearAction: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.sm) {
+            HStack {
+                Image(systemName: systemImage)
+                    .font(.title3)
+                    .foregroundStyle(CFColors.accentSecondary)
+                    .frame(width: 24)
+                Spacer()
+                Button(action: clearAction) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(CFColors.textMuted)
+                .help("Clear \(title.lowercased())")
+                .accessibilityLabel("Clear \(title)")
+            }
+
+            Text(title)
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textMuted)
+            Text(size)
+                .font(CFTypography.sectionTitle)
+                .foregroundStyle(CFColors.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(itemCount == 1 ? "1 item" : "\(itemCount) items")
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textMuted)
+            if let path {
+                Text(path)
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(CFSpacing.md)
+        .frame(minHeight: 146, alignment: .topLeading)
+        .background(CFColors.elevatedFill, in: RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                .stroke(CFColors.separatorSubtle, lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(size), \(itemCount) items")
+    }
+}
+
+private struct CacheTitleRow: View {
+    let item: SmartTitleCacheItem
+    let sizeLabel: String
+    let categoryTitle: String
+    let keepAction: () -> Void
+    let clearAction: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: CFSpacing.md) {
+            Image(systemName: item.isActive ? "play.circle.fill" : "externaldrive")
+                .foregroundStyle(item.isActive ? CFColors.success : CFColors.textMuted)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: CFSpacing.xs) {
+                    Text(item.title)
+                        .font(CFTypography.bodyEmphasis)
+                        .foregroundStyle(CFColors.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if item.isActive {
+                        CacheMiniBadge("Active")
+                    }
+                    if !item.isCompleted {
+                        CacheMiniBadge("Unfinished")
+                    }
+                }
+                Text("\(categoryTitle) • \(sizeLabel)")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Toggle("Keep", isOn: Binding(
+                get: { item.isKeptForLater },
+                set: { _ in keepAction() }
+            ))
+            .toggleStyle(.checkbox)
+            .help("Keep this cached data during automatic cleanup.")
+
+            SecondaryButton("Clear", systemImage: "trash") {
+                clearAction()
+            }
+            .disabled(item.isActive || item.isKeptForLater)
+            .help(item.isActive ? "Active playback cache is protected." : "Clear cached data for this item.")
+        }
+        .padding(.vertical, CFSpacing.xs)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct CacheMiniBadge: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(CFTypography.overline)
+            .foregroundStyle(CFColors.textPrimary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(CFColors.accentSecondary.opacity(0.22), in: Capsule())
     }
 }
 
@@ -533,6 +926,9 @@ private struct SettingsToggleRow: View {
                     .foregroundStyle(CFColors.textMuted)
             }
         }
+        .help(subtitle)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
     }
 }
 
@@ -550,7 +946,11 @@ private struct SettingValueRow: View {
                 .font(CFTypography.bodyEmphasis)
                 .foregroundStyle(CFColors.textPrimary)
                 .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .truncationMode(.middle)
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title): \(value)")
     }
 }
 

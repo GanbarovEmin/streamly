@@ -28,7 +28,7 @@ struct CineFlowApplication: App {
     private let playbackProgressRepository: (any PlaybackProgressRepositoryProtocol)?
     private let watchHistoryRepository: (any WatchHistoryRepositoryProtocol)?
     private let keychainService: any KeychainServiceProtocol
-    private let updateService: GitHubReleaseUpdateService
+    private let updateService: SparkleUpdateService
     private static let environment = ProcessInfo.processInfo.environment
 
     init() {
@@ -68,6 +68,8 @@ struct CineFlowApplication: App {
         }
         let imageCacheService: ImageCacheServiceProtocol? = liveDatabaseManager
             .map { ImageCacheService(cacheRepository: CacheRepository(databaseManager: $0)) }
+        let smartCacheManager: SmartCacheManagerProtocol? = liveDatabaseManager
+            .map { LocalSmartCacheManager(cacheRepository: CacheRepository(databaseManager: $0)) }
         let playbackProgressRepository = liveDatabaseManager
             .map(PlaybackProgressRepository.init(databaseManager:))
         let watchHistoryRepository = liveDatabaseManager
@@ -105,15 +107,20 @@ struct CineFlowApplication: App {
             store: playbackProgressRepository ?? InMemoryPlaybackProgressStore(),
             historyStore: watchHistoryRepository
         )
-        let updateService = GitHubReleaseUpdateService()
+        let updateService = SparkleUpdateService(startingUpdater: true)
         self.updateService = updateService
         let userMediaSourceRepository = liveDatabaseManager
             .map(DatabaseUserMediaSourceRepository.init(databaseManager:))
         let playbackService: any PlaybackServiceProtocol = TranscodingAVPlaybackService()
 
+        let torrentEngine = EmbeddedLibtorrentTorrentEngine(bridge: NativeLibtorrentBridge())
+        CineFlowAppDelegate.terminationHandler = {
+            try? await torrentEngine.shutdown()
+        }
+
         let appEnvironment = AppEnvironment(
             metadataService: metadataService,
-            torrentEngine: EmbeddedLibtorrentTorrentEngine(bridge: NativeLibtorrentBridge()),
+            torrentEngine: torrentEngine,
             playbackService: playbackService,
             subtitleService: SubtitleService(),
             libraryRepository: libraryRepository,
@@ -121,6 +128,7 @@ struct CineFlowApplication: App {
             diagnosticsService: diagnosticsService,
             updateService: updateService,
             imageCacheService: imageCacheService,
+            smartCacheManager: smartCacheManager,
             playbackProgressRepository: playbackProgressRepository,
             watchHistoryRepository: watchHistoryRepository,
             keychainService: keychainService,
@@ -215,9 +223,22 @@ struct CineFlowApplication: App {
 }
 
 private final class CineFlowAppDelegate: NSObject, NSApplicationDelegate {
+    static var terminationHandler: (@Sendable () async -> Void)?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let terminationHandler = Self.terminationHandler else {
+            return .terminateNow
+        }
+        Task {
+            await terminationHandler()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
     }
 }

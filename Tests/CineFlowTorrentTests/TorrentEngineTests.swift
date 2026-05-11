@@ -95,6 +95,84 @@ final class TorrentEngineTests: XCTestCase {
         XCTAssertGreaterThan(cleanup.freedBytes, 0)
     }
 
+    func testTorrentStatusModelCoversStreamingLifecycleAndBandwidthLimits() async throws {
+        let engine = MockTorrentEngine()
+        let session = try await engine.addMagnet(uri: "magnet:?xt=urn:btih:lifecycle")
+
+        try await engine.setBandwidthLimits(
+            sessionId: session.id,
+            TorrentBandwidthLimits(downloadBytesPerSecond: 1_024_000, uploadBytesPerSecond: 128_000)
+        )
+        let limitedStatus = try await engine.getStatus(sessionId: session.id)
+
+        XCTAssertEqual(TorrentSessionState.connecting.userFacingLabel, "Connecting")
+        XCTAssertEqual(TorrentSessionState.metadataLoading.userFacingLabel, "Loading metadata")
+        XCTAssertEqual(TorrentSessionState.buffering.userFacingLabel, "Buffering")
+        XCTAssertEqual(TorrentSessionState.stalled.userFacingLabel, "Connection stalled")
+        XCTAssertEqual(TorrentSessionState.completed.userFacingLabel, "Completed")
+        XCTAssertEqual(TorrentSessionState.error(reason: "No peers").userFacingLabel, "Error")
+        XCTAssertEqual(limitedStatus.bandwidthLimits?.downloadBytesPerSecond, 1_024_000)
+        XCTAssertEqual(limitedStatus.bandwidthLimits?.uploadBytesPerSecond, 128_000)
+
+        try await engine.setBandwidthLimits(sessionId: session.id, .unlimited)
+        let unlimitedStatus = try await engine.getStatus(sessionId: session.id)
+        XCTAssertEqual(unlimitedStatus.bandwidthLimits, .unlimited)
+    }
+
+    func testEmbeddedEngineStartStreamingSelectsLargestMediaFileAndPrioritizesOnlyThatFile() async throws {
+        let bridge = RecordingLibtorrentBridge(files: [
+            TorrentFile(id: "sample", path: "sample.txt", name: "sample.txt", lengthBytes: 2_000, isMediaFile: false),
+            TorrentFile(id: "small", path: "Movie/sample.mp4", name: "sample.mp4", lengthBytes: 25_000_000, isMediaFile: true),
+            TorrentFile(id: "main", path: "Movie/main.mkv", name: "main.mkv", lengthBytes: 4_000_000_000, isMediaFile: true)
+        ])
+        let engine = EmbeddedLibtorrentTorrentEngine(bridge: bridge)
+        let release = TorrentRelease(
+            id: "movie-1080p",
+            title: "Movie 1080p",
+            magnetURI: "magnet:?xt=urn:btih:main",
+            quality: .fullHD,
+            seeders: 12
+        )
+
+        let session = try await engine.startStreaming(release)
+        let status = try await engine.getStatus(sessionId: session.id)
+
+        XCTAssertEqual(session.selectedFileId, "main")
+        XCTAssertEqual(status.selectedFileId, "main")
+        XCTAssertEqual(status.streamingURL?.lastPathComponent, "main")
+        let calls = await bridge.recordedCalls()
+        XCTAssertEqual(calls, [
+            "addMagnet",
+            "setSequential:true",
+            "start",
+            "files",
+            "select:main",
+            "priority:main:3",
+            "priority:small:1",
+            "priority:sample:0",
+            "streamingURL",
+            "status"
+        ])
+    }
+
+    func testCleanupPoliciesProtectActiveSessionsAndShutdownStopsRemainingSessions() async throws {
+        let engine = MockTorrentEngine()
+        let active = try await engine.addMagnet(uri: "magnet:?xt=urn:btih:active")
+        let old = try await engine.addMagnet(uri: "magnet:?xt=urn:btih:old")
+
+        try await engine.markSessionCreatedAt(old.id, Date(timeIntervalSinceNow: -40 * 24 * 60 * 60))
+        let cleanup = try await engine.cleanup(policy: .olderThan(Date(timeIntervalSinceNow: -30 * 24 * 60 * 60), protecting: [active.id]))
+
+        XCTAssertEqual(cleanup.removedSessionIds, [old.id])
+        let activeStatus = try await engine.getStatus(sessionId: active.id)
+        XCTAssertEqual(activeStatus.sessionId, active.id)
+
+        try await engine.shutdown()
+
+        let stopped = try await engine.getStatus(sessionId: active.id)
+        XCTAssertEqual(stopped.state, .stopped)
+    }
+
     func testEmbeddedLibtorrentEngineSurfacesUnavailableWhenPlaceholderBridgeIsInjected() async throws {
         let engine = EmbeddedLibtorrentTorrentEngine(bridge: PlaceholderLibtorrentBridge())
         let cacheURL = engine.temporaryStorageURL
@@ -108,5 +186,85 @@ final class TorrentEngineTests: XCTestCase {
         } catch TorrentEngineError.libtorrentUnavailable {
             XCTAssertTrue(true)
         }
+    }
+}
+
+private actor RecordingLibtorrentBridge: LibtorrentBridgeProtocol {
+    private(set) var calls: [String] = []
+    private let filesValue: [TorrentFile]
+    private var selectedFileID: String?
+    private var sequentialDownloadEnabled = false
+
+    init(files: [TorrentFile]) {
+        filesValue = files
+    }
+
+    func addMagnet(uri: String, storageURL: URL) async throws -> String {
+        calls.append("addMagnet")
+        return "recording-handle"
+    }
+
+    func addTorrentFile(url: URL, storageURL: URL) async throws -> String {
+        calls.append("addTorrentFile")
+        return "recording-handle"
+    }
+
+    func start(handle: String) async throws {
+        calls.append("start")
+    }
+
+    func pause(handle: String) async throws {}
+    func resume(handle: String) async throws {}
+
+    func stop(handle: String) async throws {
+        calls.append("stop")
+    }
+
+    func remove(handle: String, deleteFiles: Bool) async throws {
+        calls.append("remove:\(deleteFiles)")
+    }
+
+    func status(handle: String) async throws -> TorrentStatus {
+        calls.append("status")
+        return TorrentStatus(
+            sessionId: handle,
+            state: .streaming,
+            selectedFileId: selectedFileID,
+            isSequentialDownloadEnabled: sequentialDownloadEnabled,
+            streamingURL: selectedFileID.map { URL(fileURLWithPath: "/tmp/\($0)") }
+        )
+    }
+
+    func files(handle: String) async throws -> [TorrentFile] {
+        calls.append("files")
+        return filesValue
+    }
+
+    func selectFile(handle: String, fileId: String) async throws {
+        calls.append("select:\(fileId)")
+        selectedFileID = fileId
+    }
+
+    func setSequentialDownload(handle: String, enabled: Bool) async throws {
+        calls.append("setSequential:\(enabled)")
+        sequentialDownloadEnabled = enabled
+    }
+
+    func setDownloadPriority(handle: String, fileId: String, priority: TorrentFilePriority) async throws {
+        calls.append("priority:\(fileId):\(priority.rawValue)")
+    }
+
+    func setBandwidthLimits(handle: String, limits: TorrentBandwidthLimits) async throws {}
+
+    func streamingURL(handle: String) async throws -> URL {
+        calls.append("streamingURL")
+        guard let selectedFileID else {
+            throw TorrentEngineError.streamingURLUnavailable(sessionId: handle)
+        }
+        return URL(fileURLWithPath: "/tmp/\(selectedFileID)")
+    }
+
+    func recordedCalls() -> [String] {
+        calls
     }
 }

@@ -25,6 +25,7 @@ public protocol NativeLibtorrentABI: Sendable {
     func selectFile(engine: NativeLibtorrentEngineHandle, handle: String, fileId: String) throws
     func setSequentialDownload(engine: NativeLibtorrentEngineHandle, handle: String, enabled: Bool) throws
     func setDownloadPriority(engine: NativeLibtorrentEngineHandle, handle: String, fileId: String, priority: TorrentFilePriority) throws
+    func setBandwidthLimits(engine: NativeLibtorrentEngineHandle, handle: String, limits: TorrentBandwidthLimits) throws
     func streamingURL(engine: NativeLibtorrentEngineHandle, handle: String) throws -> URL
 }
 
@@ -117,6 +118,10 @@ public actor NativeLibtorrentBridge: LibtorrentBridgeProtocol {
         try abi.setDownloadPriority(engine: try engineHandle(), handle: handle, fileId: fileId, priority: priority)
     }
 
+    public func setBandwidthLimits(handle: String, limits: TorrentBandwidthLimits) async throws {
+        try abi.setBandwidthLimits(engine: try engineHandle(), handle: handle, limits: limits)
+    }
+
     public func streamingURL(handle: String) async throws -> URL {
         do {
             return try abi.streamingURL(engine: try engineHandle(), handle: handle)
@@ -186,6 +191,13 @@ public final class SystemNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Se
         Int32,
         UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
     ) -> Int32
+    private typealias SetBandwidthLimitsFunction = @convention(c) (
+        OpaquePointer?,
+        UnsafePointer<CChar>,
+        Int64,
+        Int64,
+        UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
+    ) -> Int32
     private typealias StringFreeFunction = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
 
     private let library: UnsafeMutableRawPointer?
@@ -203,6 +215,7 @@ public final class SystemNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Se
     private let selectFileFunction: SelectFileFunction?
     private let setSequentialFunction: SetSequentialFunction?
     private let setPriorityFunction: SetPriorityFunction?
+    private let setBandwidthLimitsFunction: SetBandwidthLimitsFunction?
     private let streamingURLFunction: JSONFunction?
     private let stringFreeFunction: StringFreeFunction?
 
@@ -222,6 +235,7 @@ public final class SystemNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Se
         selectFileFunction = Self.symbol("cf_libtorrent_select_file", library: library)
         setSequentialFunction = Self.symbol("cf_libtorrent_set_sequential", library: library)
         setPriorityFunction = Self.symbol("cf_libtorrent_set_priority", library: library)
+        setBandwidthLimitsFunction = Self.symbol("cf_libtorrent_set_bandwidth_limits", library: library)
         streamingURLFunction = Self.symbol("cf_libtorrent_streaming_url", library: library)
         stringFreeFunction = Self.symbol("cf_libtorrent_string_free", library: library)
     }
@@ -326,6 +340,19 @@ public final class SystemNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Se
             fileId.withCString { filePointer in
                 setPriorityFunction(engine.rawValue, handlePointer, filePointer, Int32(priority.rawValue), &errorPointer)
             }
+        }
+        try validateResult(result, errorPointer: errorPointer)
+    }
+
+    public func setBandwidthLimits(engine: NativeLibtorrentEngineHandle, handle: String, limits: TorrentBandwidthLimits) throws {
+        guard let setBandwidthLimitsFunction else {
+            return
+        }
+        var errorPointer: UnsafeMutablePointer<CChar>?
+        let downloadLimit = limits.downloadBytesPerSecond ?? -1
+        let uploadLimit = limits.uploadBytesPerSecond ?? -1
+        let result = handle.withCString {
+            setBandwidthLimitsFunction(engine.rawValue, $0, downloadLimit, uploadLimit, &errorPointer)
         }
         try validateResult(result, errorPointer: errorPointer)
     }
@@ -510,12 +537,19 @@ private struct NativeTorrentStatusDTO: Decodable {
     private var torrentState: TorrentSessionState {
         switch state {
         case "idle": .idle
+        case "connecting": .connecting
+        case "metadataLoading", "metadata_loading", "loading_metadata": .metadataLoading
         case "checking": .checking
         case "downloading": .downloading
+        case "buffering": .buffering
         case "streaming": .streaming
+        case "stalled": .stalled
         case "paused": .paused
         case "seeding": .seeding
+        case "completed": .completed
         case "stopped": .stopped
+        case let state? where state.hasPrefix("error:"):
+            .error(reason: String(state.dropFirst("error:".count)))
         case let state? where state.hasPrefix("failed:"):
             .failed(reason: String(state.dropFirst("failed:".count)))
         case let state?:

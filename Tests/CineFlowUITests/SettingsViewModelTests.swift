@@ -40,6 +40,9 @@ final class SettingsViewModelTests: XCTestCase {
     }
 
     func testUpdatePersistsPlaybackSubtitlesAndGeneralSettings() async {
+        UserDefaults.standard.removeObject(forKey: "streamly.reduceMotion")
+        defer { UserDefaults.standard.removeObject(forKey: "streamly.reduceMotion") }
+
         let settingsRepository = CoreMockSettingsRepository()
         let viewModel = SettingsViewModel(
             environment: AppEnvironment(
@@ -58,6 +61,11 @@ final class SettingsViewModelTests: XCTestCase {
         await viewModel.updateLanguage(.english)
         await viewModel.updateReduceMotion(true)
         await viewModel.updatePreferredAudioLanguages(["en", "ru"])
+        await viewModel.updatePreferredQuality(.p1080)
+        await viewModel.updateHDRPreference(.avoidHDR)
+        await viewModel.updateCodecPreference(.avoidUnsupportedAV1)
+        await viewModel.updateMaxFileSizeGB(12)
+        await viewModel.updatePreferHighSeedersOverHighestQuality(true)
         await viewModel.updateSeekStep(30)
         await viewModel.updateStartFromLastPosition(false)
         await viewModel.updateSubtitleLanguages(["en", "ru"])
@@ -68,7 +76,13 @@ final class SettingsViewModelTests: XCTestCase {
 
         XCTAssertEqual(persisted.general.language, .english)
         XCTAssertEqual(persisted.appearance.reduceMotion, true)
+        XCTAssertEqual(UserDefaults.standard.bool(forKey: "streamly.reduceMotion"), true)
         XCTAssertEqual(persisted.playback.preferredAudioLanguages, ["en", "ru"])
+        XCTAssertEqual(persisted.playback.preferredQuality, .p1080)
+        XCTAssertEqual(persisted.playback.hdrPreference, .avoidHDR)
+        XCTAssertEqual(persisted.playback.codecPreference, .avoidUnsupportedAV1)
+        XCTAssertEqual(persisted.playback.maxFileSizeBytes, 12_000_000_000)
+        XCTAssertEqual(persisted.playback.preferHighSeedersOverHighestQuality, true)
         XCTAssertEqual(persisted.playback.seekStepSeconds, 30)
         XCTAssertEqual(persisted.playback.startFromLastPosition, false)
         XCTAssertEqual(persistedSubtitles.languagePreference.languageCodes, ["en", "ru"])
@@ -201,6 +215,59 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertNil(storedToken)
     }
 
+    func testSmartCacheDashboardPersistsPolicyAndRoutesSafeActions() async {
+        let settingsRepository = CoreMockSettingsRepository()
+        let smartCacheManager = TestSmartCacheManager()
+        let viewModel = SettingsViewModel(
+            environment: AppEnvironment(
+                metadataService: CoreMockMetadataService(),
+                torrentEngine: CoreMockTorrentEngine(),
+                playbackService: CoreMockPlaybackService(),
+                subtitleService: CoreMockSubtitleService(),
+                libraryRepository: CoreMockLibraryRepository(),
+                settingsRepository: settingsRepository,
+                diagnosticsService: CoreMockDiagnosticsService(),
+                updateService: CoreMockUpdateService(),
+                smartCacheManager: smartCacheManager
+            )
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.cacheSummary.imageBytes, 1_000)
+        XCTAssertEqual(viewModel.cacheSummary.torrentBytes, 2_000)
+        XCTAssertEqual(viewModel.cacheSummary.subtitleBytes, 3_000)
+        XCTAssertEqual(viewModel.cacheSummary.metadataBytes, 4_000)
+        XCTAssertEqual(viewModel.cacheSummary.totalBytes, 10_000)
+        XCTAssertEqual(viewModel.cacheSummary.titleItems.map(\.title), ["Cached Movie"])
+
+        await viewModel.updateCacheRetentionDays(14)
+        await viewModel.updateMaxCacheSizeGB(12)
+        await viewModel.updateKeepUnfinishedCache(false)
+        await viewModel.updateRemoveCompletedCache(true)
+        await viewModel.updateTorrentDownloadLimitMBps(25)
+        await viewModel.updateTorrentUploadLimitMBps(5)
+
+        let persisted = await settingsRepository.appSettings
+        XCTAssertEqual(persisted.storage.cacheRetentionDays, 14)
+        XCTAssertEqual(persisted.storage.maxCacheSizeBytes, 12 * 1_024 * 1_024 * 1_024)
+        XCTAssertFalse(persisted.storage.keepUnfinishedCache)
+        XCTAssertTrue(persisted.storage.removeCompletedCache)
+        XCTAssertEqual(persisted.storage.torrentDownloadLimitBytesPerSecond, 25 * 1_024 * 1_024)
+        XCTAssertEqual(persisted.storage.torrentUploadLimitBytesPerSecond, 5 * 1_024 * 1_024)
+
+        await viewModel.setTitleCacheKeepForLater(itemID: "torrents:/tmp/Cached.Movie", keep: true)
+        await viewModel.clearTitleCache(itemID: "torrents:/tmp/Cached.Movie")
+        await viewModel.runCacheAutoClean()
+        await viewModel.clearMetadataCache()
+
+        let calls = await smartCacheManager.calls()
+        XCTAssertTrue(calls.contains("keep:torrents:/tmp/Cached.Movie:true"))
+        XCTAssertTrue(calls.contains("clearTitle:torrents:/tmp/Cached.Movie"))
+        XCTAssertTrue(calls.contains("autoClean:14"))
+        XCTAssertTrue(calls.contains("clear:metadata"))
+    }
+
     func testUpdateSectionReflectsSparkleStateAndPersistsAutomaticChecks() async {
         let lastCheckedAt = Date(timeIntervalSince1970: 1_800_000_000)
         let updates = TestUpdateService(
@@ -286,6 +353,56 @@ private actor TestSettingsImageCacheService: ImageCacheServiceProtocol {
 
     func clearAllWasCalled() -> Bool {
         didClearAll
+    }
+}
+
+private actor TestSmartCacheManager: SmartCacheManagerProtocol {
+    private var recordedCalls: [String] = []
+
+    func summary(policy: SmartCachePolicy, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheSummary {
+        recordedCalls.append("summary:\(policy.retentionDays)")
+        return SmartCacheSummary(
+            buckets: [
+                SmartCacheBucketSummary(category: .images, sizeBytes: 1_000, itemCount: 1),
+                SmartCacheBucketSummary(category: .torrents, sizeBytes: 2_000, itemCount: 1, path: scope.torrentCacheURL.path),
+                SmartCacheBucketSummary(category: .subtitles, sizeBytes: 3_000, itemCount: 1, path: scope.subtitleCacheURL.path),
+                SmartCacheBucketSummary(category: .metadata, sizeBytes: 4_000, itemCount: 1)
+            ],
+            titleItems: [
+                SmartTitleCacheItem(
+                    id: "torrents:/tmp/Cached.Movie",
+                    title: "Cached Movie",
+                    category: .torrents,
+                    sizeBytes: 2_000,
+                    isCompleted: true,
+                    path: "/tmp/Cached.Movie"
+                )
+            ],
+            maxSizeBytes: policy.maxSizeBytes
+        )
+    }
+
+    func clear(category: SmartCacheCategory, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult {
+        recordedCalls.append("clear:\(category.rawValue)")
+        return SmartCacheCleanupResult(removedItemCount: 1, freedBytes: 512)
+    }
+
+    func clearTitleCache(itemID: String, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult {
+        recordedCalls.append("clearTitle:\(itemID)")
+        return SmartCacheCleanupResult(removedItemCount: 1, freedBytes: 512)
+    }
+
+    func setKeepForLater(itemID: String, keep: Bool) async throws {
+        recordedCalls.append("keep:\(itemID):\(keep)")
+    }
+
+    func runAutoClean(policy: SmartCachePolicy, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult {
+        recordedCalls.append("autoClean:\(policy.retentionDays)")
+        return SmartCacheCleanupResult(removedItemCount: 1, freedBytes: 512)
+    }
+
+    func calls() -> [String] {
+        recordedCalls
     }
 }
 

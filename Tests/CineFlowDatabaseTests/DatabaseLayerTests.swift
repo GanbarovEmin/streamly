@@ -258,6 +258,11 @@ final class DatabaseLayerTests: XCTestCase {
         settings.general.openLastScreenOnLaunch = true
         settings.appearance.reduceMotion = true
         settings.playback.preferredAudioLanguages = ["en", "ru"]
+        settings.playback.preferredQuality = .p1080
+        settings.playback.hdrPreference = .avoidHDR
+        settings.playback.codecPreference = .avoidUnsupportedAV1
+        settings.playback.maxFileSizeBytes = 12_000_000_000
+        settings.playback.preferHighSeedersOverHighestQuality = true
         settings.playback.hardwareAccelerationEnabled = false
         settings.playback.startFromLastPosition = false
         settings.playback.defaultFullscreen = true
@@ -275,6 +280,11 @@ final class DatabaseLayerTests: XCTestCase {
         XCTAssertEqual(reopened.appearance.accentColorName, "neonPurple")
         XCTAssertEqual(reopened.appearance.reduceMotion, true)
         XCTAssertEqual(reopened.playback.preferredAudioLanguages, ["en", "ru"])
+        XCTAssertEqual(reopened.playback.preferredQuality, .p1080)
+        XCTAssertEqual(reopened.playback.hdrPreference, .avoidHDR)
+        XCTAssertEqual(reopened.playback.codecPreference, .avoidUnsupportedAV1)
+        XCTAssertEqual(reopened.playback.maxFileSizeBytes, 12_000_000_000)
+        XCTAssertEqual(reopened.playback.preferHighSeedersOverHighestQuality, true)
         XCTAssertEqual(reopened.playback.hardwareAccelerationEnabled, false)
         XCTAssertEqual(reopened.playback.startFromLastPosition, false)
         XCTAssertEqual(reopened.playback.defaultFullscreen, true)
@@ -421,6 +431,97 @@ final class DatabaseLayerTests: XCTestCase {
         try await cacheRepository.clearImageCache()
         let clearedCacheSize = try await cacheRepository.imageCacheSizeBytes()
         XCTAssertEqual(clearedCacheSize, 0)
+    }
+
+    func testMetadataCacheReportsSizeAndCanClearRecords() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let cacheRepository = CacheRepository(databaseManager: databaseManager)
+
+        try await cacheRepository.setMetadata(cacheKey: "tmdb:movie:1", provider: "tmdb", payloadJSON: #"{"title":"One"}"#)
+        try await cacheRepository.setMetadata(cacheKey: "cinemeta:movie:2", provider: "cinemeta", payloadJSON: #"{"title":"Two"}"#)
+
+        let records = try await cacheRepository.metadataCacheRecords()
+        let size = try await cacheRepository.metadataCacheSizeBytes()
+
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(size, Int64(#"{"title":"One"}"#.count + #"{"title":"Two"}"#.count))
+
+        try await cacheRepository.removeMetadata(cacheKey: "tmdb:movie:1")
+        let remainingKeys = try await cacheRepository.metadataCacheRecords().map(\.cacheKey)
+        XCTAssertEqual(remainingKeys, ["cinemeta:movie:2"])
+
+        try await cacheRepository.clearMetadataCache()
+        let clearedMetadataSize = try await cacheRepository.metadataCacheSizeBytes()
+        XCTAssertEqual(clearedMetadataSize, 0)
+    }
+
+    func testSmartCacheManagerSummarizesProtectsAndCleansLocalCache() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let cacheRepository = CacheRepository(databaseManager: databaseManager)
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let torrentRoot = workspace.appendingPathComponent("TorrentCache", isDirectory: true)
+        let subtitleRoot = workspace.appendingPathComponent("Subtitles", isDirectory: true)
+        let activeTitle = torrentRoot.appendingPathComponent("Active.Movie", isDirectory: true)
+        let oldTitle = torrentRoot.appendingPathComponent("Old.Movie", isDirectory: true)
+        let unfinishedTitle = torrentRoot.appendingPathComponent("Unfinished.Movie", isDirectory: true)
+        let oldSubtitle = subtitleRoot.appendingPathComponent("Old.Movie.ru.srt")
+        let imageURL = workspace.appendingPathComponent("poster.jpg")
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        try FileManager.default.createDirectory(at: activeTitle, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: oldTitle, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: unfinishedTitle, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: subtitleRoot, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 20).write(to: activeTitle.appendingPathComponent("movie.mkv"))
+        try Data(repeating: 2, count: 30).write(to: oldTitle.appendingPathComponent("movie.mkv"))
+        try Data(repeating: 3, count: 40).write(to: unfinishedTitle.appendingPathComponent("movie.part"))
+        try Data(repeating: 4, count: 10).write(to: oldSubtitle)
+        try Data(repeating: 5, count: 15).write(to: imageURL)
+
+        let oldDate = Date(timeIntervalSinceNow: -40 * 24 * 60 * 60)
+        for url in [oldTitle, unfinishedTitle, oldSubtitle] {
+            try FileManager.default.setAttributes([.modificationDate: oldDate], ofItemAtPath: url.path)
+        }
+        try await cacheRepository.upsertCachedImage(
+            url: "https://image.tmdb.org/poster.jpg",
+            localPath: imageURL.path,
+            fileSize: 15,
+            createdAt: ISO8601DateFormatter().string(from: oldDate),
+            lastAccessedAt: ISO8601DateFormatter().string(from: oldDate)
+        )
+        try await cacheRepository.setMetadata(cacheKey: "tmdb:movie:old", provider: "tmdb", payloadJSON: #"{"title":"Old"}"#)
+
+        let suiteName = "streamly.smart-cache.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let manager = LocalSmartCacheManager(cacheRepository: cacheRepository, userDefaults: defaults)
+        let scope = SmartCacheScope(torrentCacheURL: torrentRoot, subtitleCacheURL: subtitleRoot)
+        let protection = SmartCacheProtection(activeFileURLs: [activeTitle.appendingPathComponent("movie.mkv")])
+        let policy = SmartCachePolicy(retentionDays: 30, maxSizeBytes: 64, keepUnfinished: true, removeCompleted: true)
+
+        let initialSummary = try await manager.summary(policy: policy, scope: scope, protection: protection)
+
+        XCTAssertEqual(initialSummary.buckets.first(where: { $0.category == .torrents })?.sizeBytes, 90)
+        XCTAssertTrue(initialSummary.titleItems.first(where: { $0.title == "Active" })?.isActive == true)
+        XCTAssertTrue(initialSummary.titleItems.first(where: { $0.title == "Unfinished" })?.isCompleted == false)
+
+        let oldTitleID = try XCTUnwrap(initialSummary.titleItems.first(where: { $0.title == "Old" })?.id)
+        try await manager.setKeepForLater(itemID: oldTitleID, keep: true)
+        let protectedClean = try await manager.runAutoClean(policy: policy, scope: scope, protection: protection)
+
+        XCTAssertGreaterThanOrEqual(protectedClean.protectedItemCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeTitle.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: oldTitle.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unfinishedTitle.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldSubtitle.path))
+        let clearedImageSize = try await cacheRepository.imageCacheSizeBytes()
+        XCTAssertEqual(clearedImageSize, 0)
+
+        try await manager.setKeepForLater(itemID: oldTitleID, keep: false)
+        _ = try await manager.clearTitleCache(itemID: oldTitleID, scope: scope, protection: protection)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldTitle.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: activeTitle.path))
     }
 
     func testSeedDevelopmentDataIsIdempotent() throws {

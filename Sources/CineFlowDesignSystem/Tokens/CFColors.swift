@@ -47,6 +47,12 @@ public enum CFColors {
     public static let hoverFill = Color.white.opacity(0.055)
     public static let activeFill = CFColorToken.accentPrimary.color.opacity(0.16)
     public static let elevatedFill = Color.white.opacity(0.065)
+    public static let panelFill = Color.white.opacity(0.072)
+    public static let railFill = CFColorToken.backgroundPrimary.color.opacity(0.82)
+    public static let dockFill = Color.white.opacity(0.10)
+    public static let dockHoverFill = Color.white.opacity(0.16)
+    public static let softScrim = CFColorToken.backgroundPrimary.color.opacity(0.42)
+    public static let strongScrim = CFColorToken.backgroundPrimary.color.opacity(0.78)
     public static let clear = Color.clear
 
     public static let windowBackgroundNSColor = CFColorToken.backgroundPrimary.nsColor

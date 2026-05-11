@@ -64,6 +64,39 @@ public struct SeriesEpisode: Identifiable, Equatable, Sendable {
     public let title: String
     public let runtime: String
     public let overview: String
+    public let airDate: Date?
+    public let thumbnailURL: URL?
+
+    public var isUpcoming: Bool {
+        guard let airDate else { return false }
+        return airDate > Date()
+    }
+
+    public var isReleased: Bool {
+        !isUpcoming
+    }
+
+    public init(
+        id: String,
+        seasonID: String,
+        seasonNumber: Int,
+        episodeNumber: Int,
+        title: String,
+        runtime: String,
+        overview: String,
+        airDate: Date? = nil,
+        thumbnailURL: URL? = nil
+    ) {
+        self.id = id
+        self.seasonID = seasonID
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.title = title
+        self.runtime = runtime
+        self.overview = overview
+        self.airDate = airDate
+        self.thumbnailURL = thumbnailURL
+    }
 }
 
 public struct SeriesSeason: Identifiable, Equatable, Sendable {
@@ -107,6 +140,28 @@ public protocol SeriesDetailProviderProtocol: Sendable {
 public extension SeriesDetailProviderProtocol {
     func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
         []
+    }
+}
+
+public protocol SeriesNotificationStoreProtocol: Sendable {
+    func notificationsEnabled(seriesID: String) async -> Bool
+    func setNotificationsEnabled(_ enabled: Bool, seriesID: String) async
+}
+
+public actor UserDefaultsSeriesNotificationStore: SeriesNotificationStoreProtocol {
+    private let userDefaults: UserDefaults
+    private let keyPrefix = "streamly.series.notifications."
+
+    public init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+    }
+
+    public func notificationsEnabled(seriesID: String) async -> Bool {
+        userDefaults.bool(forKey: keyPrefix + seriesID)
+    }
+
+    public func setNotificationsEnabled(_ enabled: Bool, seriesID: String) async {
+        userDefaults.set(enabled, forKey: keyPrefix + seriesID)
     }
 }
 
@@ -274,10 +329,12 @@ public final class SeriesDetailViewModel: ObservableObject {
     @Published public private(set) var selectedEpisodeID: String?
     @Published public private(set) var mediaItem: MediaItem?
     @Published public private(set) var isInLibrary = false
+    @Published public private(set) var episodeNotificationsEnabled = false
     @Published public private(set) var selectedListName: String?
     @Published public private(set) var lastPlayedEpisodeID: String?
     @Published public private(set) var userSources: [UserMediaSource] = []
     @Published public private(set) var selectedUserSourceID: String?
+    @Published public private(set) var manualOverrideReleaseID: String?
     @Published public var selectedTab: SeriesDetailTab = .seasons
 
     public let tabs: [SeriesDetailTab] = SeriesDetailTab.allCases
@@ -287,9 +344,13 @@ public final class SeriesDetailViewModel: ObservableObject {
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
     private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
+    private let settingsRepository: (any SettingsRepositoryProtocol)?
     private let diagnosticsService: (any DiagnosticsServiceProtocol)?
+    private let notificationStore: any SeriesNotificationStoreProtocol
+    private let releaseSelectionStore: ReleaseSelectionStoreProtocol
     private var loadGeneration = 0
     private var episodeReleaseGeneration = 0
+    private var rankingPreferences: RankingPreferences?
 
     public init(
         seriesID: String,
@@ -297,14 +358,20 @@ public final class SeriesDetailViewModel: ObservableObject {
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
-        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
+        settingsRepository: (any SettingsRepositoryProtocol)? = nil,
+        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil,
+        notificationStore: any SeriesNotificationStoreProtocol = UserDefaultsSeriesNotificationStore(),
+        releaseSelectionStore: ReleaseSelectionStoreProtocol = UserDefaultsReleaseSelectionStore()
     ) {
         self.seriesID = seriesID
         self.provider = provider
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
         self.userMediaSourceRepository = userMediaSourceRepository
+        self.settingsRepository = settingsRepository
         self.diagnosticsService = diagnosticsService
+        self.notificationStore = notificationStore
+        self.releaseSelectionStore = releaseSelectionStore
     }
 
     public var selectedSeason: SeriesSeason? {
@@ -340,6 +407,29 @@ public final class SeriesDetailViewModel: ObservableObject {
         seasons.flatMap(\.episodes)
     }
 
+    public var bestPlayableRelease: ScopedSeriesRelease? {
+        if let manualOverrideReleaseID,
+           let manual = releases.first(where: { $0.release.id == manualOverrideReleaseID }) {
+            return manual
+        }
+        return releases.first
+    }
+
+    public func nextReleasedEpisode(after episode: SeriesEpisode) -> SeriesEpisode? {
+        let episodes = allEpisodes
+            .filter(\.isReleased)
+            .sorted {
+                if $0.seasonNumber != $1.seasonNumber {
+                    return $0.seasonNumber < $1.seasonNumber
+                }
+                return $0.episodeNumber < $1.episodeNumber
+            }
+        guard let index = episodes.firstIndex(where: { $0.id == episode.id }) else { return nil }
+        let nextIndex = episodes.index(after: index)
+        guard nextIndex < episodes.endIndex else { return nil }
+        return episodes[nextIndex]
+    }
+
     public func load() async {
         loadGeneration += 1
         let generation = loadGeneration
@@ -362,8 +452,10 @@ public final class SeriesDetailViewModel: ObservableObject {
             }
 
             guard generation == loadGeneration, !Task.isCancelled else { return }
+            await refreshRankingPreferences()
             series = response.series
             mediaItem = response.series.mediaItem()
+            episodeNotificationsEnabled = await notificationStore.notificationsEnabled(seriesID: seriesID)
             seasons = response.seasons
             trailers = response.trailers
             similar = response.similar
@@ -373,6 +465,7 @@ public final class SeriesDetailViewModel: ObservableObject {
             selectedSeasonID = response.seasons.first?.id
             selectedEpisodeID = response.seasons.first?.episodes.first?.id
             releases = rankScopedReleases(response.releases)
+            refreshManualOverride()
             await refreshLibraryState()
             await refreshUserSources()
             guard generation == loadGeneration, !Task.isCancelled else { return }
@@ -394,18 +487,23 @@ public final class SeriesDetailViewModel: ObservableObject {
     public func selectEpisode(id: String) {
         guard allEpisodes.contains(where: { $0.id == id }) else { return }
         selectedEpisodeID = id
+        refreshManualOverride()
     }
 
     public func selectSeasonAndLoadReleases(id: String) async {
         selectSeason(id: id)
         if let episodeID = selectedEpisodeID {
-            await loadReleasesForEpisode(id: episodeID)
+            await selectEpisodeAndLoadReleases(id: episodeID)
         }
     }
 
     public func selectEpisodeAndLoadReleases(id: String) async {
         selectEpisode(id: id)
         guard selectedEpisodeID == id else { return }
+        if selectedEpisode?.isUpcoming == true {
+            releases = []
+            return
+        }
         await loadReleasesForEpisode(id: id)
     }
 
@@ -419,6 +517,28 @@ public final class SeriesDetailViewModel: ObservableObject {
                 try? await libraryRepository.markWatched(mediaItem, positionSeconds: 0)
             }
         }
+    }
+
+    @discardableResult
+    public func playBestRelease() -> TorrentRelease? {
+        guard let release = bestPlayableRelease?.release else { return nil }
+        if let episodeID = selectedEpisode?.id {
+            playEpisode(id: episodeID)
+        }
+        return release
+    }
+
+    public func playManualRelease(_ release: TorrentRelease) {
+        releaseSelectionStore.setReleaseID(release.id, for: releaseSelectionKey)
+        manualOverrideReleaseID = release.id
+        if let episodeID = selectedEpisode?.id {
+            playEpisode(id: episodeID)
+        }
+    }
+
+    public func clearManualReleaseOverride() {
+        releaseSelectionStore.setReleaseID(nil, for: releaseSelectionKey)
+        manualOverrideReleaseID = nil
     }
 
     public func selectUserSource(_ source: UserMediaSource) {
@@ -473,6 +593,11 @@ public final class SeriesDetailViewModel: ObservableObject {
         }
     }
 
+    public func setEpisodeNotificationsEnabled(_ enabled: Bool) async {
+        episodeNotificationsEnabled = enabled
+        await notificationStore.setNotificationsEnabled(enabled, seriesID: seriesID)
+    }
+
     public func addToList(_ name: String) {
         selectedListName = name
         guard let mediaItem, let libraryRepository else { return }
@@ -493,19 +618,52 @@ public final class SeriesDetailViewModel: ObservableObject {
     private func rankScopedReleases(_ releases: [(release: TorrentRelease, scope: SeriesReleaseScope)]) -> [ScopedSeriesRelease] {
         let scopeByReleaseID = Dictionary(uniqueKeysWithValues: releases.map { ($0.release.id, $0.scope) })
 
-        return rankingEngine.rank(releases.map(\.release)).compactMap { ranked in
+        return currentRankingEngine.rank(releases.map(\.release)).compactMap { ranked in
             guard let scope = scopeByReleaseID[ranked.release.id] else { return nil }
             return ScopedSeriesRelease(ranked: ranked, scope: scope)
         }
+    }
+
+    private var currentRankingEngine: ReleaseRankingEngine {
+        rankingPreferences.map(ReleaseRankingEngine.init(preferences:)) ?? rankingEngine
+    }
+
+    private var releaseSelectionKey: String {
+        guard let selectedEpisodeID else { return seriesID }
+        return "\(seriesID):\(selectedEpisodeID)"
+    }
+
+    private func refreshRankingPreferences() async {
+        guard let settingsRepository else {
+            rankingPreferences = nil
+            return
+        }
+        let settings = await settingsRepository.appSettings
+        let subtitleLanguages = await settingsRepository.subtitleLanguagePriority
+        rankingPreferences = settings.playback.rankingPreferences(
+            preferredSubtitleLanguages: subtitleLanguages,
+            supportsHDR: true
+        )
+    }
+
+    private func refreshManualOverride() {
+        guard let releaseID = releaseSelectionStore.releaseID(for: releaseSelectionKey),
+              releases.contains(where: { $0.release.id == releaseID }) else {
+            manualOverrideReleaseID = nil
+            return
+        }
+        manualOverrideReleaseID = releaseID
     }
 
     private func loadReleasesForEpisode(id: String) async {
         episodeReleaseGeneration += 1
         let generation = episodeReleaseGeneration
         do {
+            await refreshRankingPreferences()
             let episodeReleases = try await provider.episodeReleases(seriesID: seriesID, episodeID: id)
             guard generation == episodeReleaseGeneration, selectedEpisodeID == id, !Task.isCancelled else { return }
             releases = rankScopedReleases(episodeReleases)
+            refreshManualOverride()
         } catch {
             guard generation == episodeReleaseGeneration, selectedEpisodeID == id, !Task.isCancelled else { return }
             releases = []

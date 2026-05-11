@@ -15,7 +15,11 @@ public struct CFFocusRingModifier: ViewModifier {
             .focused($isFocused)
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(isFocused ? CFColors.focusRing : .clear, lineWidth: CFSeparators.width)
+                    .stroke(isFocused ? CFColors.focusRing : .clear, lineWidth: 2)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius + 2, style: .continuous)
+                    .stroke(isFocused ? CFColors.accentPrimary.opacity(0.28) : .clear, lineWidth: 5)
             )
     }
 }

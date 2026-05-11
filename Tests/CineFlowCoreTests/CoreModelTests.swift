@@ -163,5 +163,22 @@ final class CoreModelTests: XCTestCase {
         XCTAssertTrue(settings.storage.torrentCacheFolderPath.contains("Application Support"))
         XCTAssertTrue(settings.storage.torrentCacheFolderPath.contains("Streamly/TorrentCache"))
         XCTAssertNil(settings.storage.downloadsFolderPath)
+        XCTAssertEqual(settings.storage.cacheRetentionDays, 30)
+        XCTAssertEqual(settings.storage.maxCacheSizeBytes, 50 * 1_024 * 1_024 * 1_024)
+        XCTAssertTrue(settings.storage.keepUnfinishedCache)
+        XCTAssertFalse(settings.storage.removeCompletedCache)
+        XCTAssertEqual(settings.storage.torrentBandwidthLimits, .unlimited)
+    }
+
+    func testStorageSettingsDecodeOlderPayloadWithSmartCacheDefaults() throws {
+        let data = Data(#"{"torrentCacheFolderPath":"/tmp/torrents","downloadsFolderPath":null}"#.utf8)
+
+        let settings = try JSONDecoder().decode(StorageSettings.self, from: data)
+
+        XCTAssertEqual(settings.torrentCacheFolderPath, "/tmp/torrents")
+        XCTAssertEqual(settings.cacheRetentionDays, 30)
+        XCTAssertEqual(settings.maxCacheSizeBytes, 50 * 1_024 * 1_024 * 1_024)
+        XCTAssertTrue(settings.smartCachePolicy.keepUnfinished)
+        XCTAssertEqual(settings.torrentBandwidthLimits, .unlimited)
     }
 }

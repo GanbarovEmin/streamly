@@ -18,4 +18,11 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(CFMotionToken.standard.duration, 0.22, accuracy: 0.001)
         XCTAssertEqual(CFMotionToken.spring.response, 0.34, accuracy: 0.001)
     }
+
+    func testReducedMotionTokensDisableScaleEffects() {
+        XCTAssertGreaterThan(CFMotion.hoverScale, CFMotion.reducedHoverScale)
+        XCTAssertLessThan(CFMotion.activeScale, CFMotion.reducedActiveScale)
+        XCTAssertEqual(CFMotion.reducedHoverScale, 1)
+        XCTAssertEqual(CFMotion.reducedActiveScale, 1)
+    }
 }

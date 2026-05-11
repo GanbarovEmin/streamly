@@ -39,6 +39,8 @@ class TorrentEntry:
     selected_file_id: str | None = None
     sequential: bool = True
     streaming_url: str | None = None
+    download_limit_bytes_per_second: int | None = None
+    upload_limit_bytes_per_second: int | None = None
 
 
 class TorrentRuntime:
@@ -138,6 +140,8 @@ class TorrentRuntime:
             "selectedFileId": entry.selected_file_id,
             "isSequentialDownloadEnabled": entry.sequential,
             "streamingURL": entry.streaming_url,
+            "downloadLimitBytesPerSecond": entry.download_limit_bytes_per_second,
+            "uploadLimitBytesPerSecond": entry.upload_limit_bytes_per_second,
         }
 
     def files(self, handle_id: str) -> list[dict]:
@@ -194,6 +198,13 @@ class TorrentRuntime:
             priorities.append(0)
         priorities[index] = PRIORITY_MAP.get(priority, 4)
         entry.handle.prioritize_files(priorities)
+
+    def set_bandwidth_limits(self, handle_id: str, download_limit: int | None, upload_limit: int | None) -> None:
+        entry = self.entry(handle_id)
+        entry.download_limit_bytes_per_second = self.normalized_limit(download_limit)
+        entry.upload_limit_bytes_per_second = self.normalized_limit(upload_limit)
+        entry.handle.set_download_limit(entry.download_limit_bytes_per_second or 0)
+        entry.handle.set_upload_limit(entry.upload_limit_bytes_per_second or 0)
 
     def streaming_url(self, handle_id: str) -> str:
         entry = self.entry(handle_id)
@@ -388,6 +399,11 @@ class TorrentRuntime:
             return 2
         return 1
 
+    def normalized_limit(self, value: int | None) -> int | None:
+        if value is None or value <= 0:
+            return None
+        return int(value)
+
 
 def read_json(handler: BaseHTTPRequestHandler) -> dict:
     length = int(handler.headers.get("Content-Length", "0"))
@@ -441,6 +457,13 @@ def make_control_handler(runtime: TorrentRuntime):
                     send_text(self, "ok")
                 elif path == "/set_priority":
                     runtime.set_priority(payload["handle"], payload["fileId"], int(payload["priority"]))
+                    send_text(self, "ok")
+                elif path == "/set_bandwidth_limits":
+                    runtime.set_bandwidth_limits(
+                        payload["handle"],
+                        payload.get("downloadBytesPerSecond"),
+                        payload.get("uploadBytesPerSecond"),
+                    )
                     send_text(self, "ok")
                 elif path == "/streaming_url":
                     send_text(self, runtime.streaming_url(payload["handle"]))

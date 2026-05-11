@@ -19,6 +19,10 @@ final class NativeLibtorrentBridgeTests: XCTestCase {
         let files = try await bridge.files(handle: handle)
         try await bridge.selectFile(handle: handle, fileId: "0")
         try await bridge.setDownloadPriority(handle: handle, fileId: "0", priority: .high)
+        try await bridge.setBandwidthLimits(
+            handle: handle,
+            limits: TorrentBandwidthLimits(downloadBytesPerSecond: 1_024_000, uploadBytesPerSecond: 128_000)
+        )
         let streamingURL = try await bridge.streamingURL(handle: handle)
 
         XCTAssertEqual(handle, "native-handle")
@@ -52,6 +56,7 @@ final class NativeLibtorrentBridgeTests: XCTestCase {
             "files:native-handle",
             "selectFile:native-handle:0",
             "setPriority:native-handle:0:3",
+            "setBandwidthLimits:native-handle:1024000:128000",
             "streamingURL:native-handle"
         ])
     }
@@ -231,6 +236,10 @@ private final class FakeNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Sen
         calls.append("setPriority:\(handle):\(fileId):\(priority.rawValue)")
     }
 
+    func setBandwidthLimits(engine: NativeLibtorrentEngineHandle, handle: String, limits: TorrentBandwidthLimits) throws {
+        calls.append("setBandwidthLimits:\(handle):\(limits.downloadBytesPerSecond ?? -1):\(limits.uploadBytesPerSecond ?? -1)")
+    }
+
     func streamingURL(engine: NativeLibtorrentEngineHandle, handle: String) throws -> URL {
         calls.append("streamingURL:\(handle)")
         return URL(string: "http://127.0.0.1:49152/stream/native-handle/0")!
@@ -262,6 +271,7 @@ private struct UnavailableNativeLibtorrentABI: NativeLibtorrentABI {
     func selectFile(engine: NativeLibtorrentEngineHandle, handle: String, fileId: String) throws {}
     func setSequentialDownload(engine: NativeLibtorrentEngineHandle, handle: String, enabled: Bool) throws {}
     func setDownloadPriority(engine: NativeLibtorrentEngineHandle, handle: String, fileId: String, priority: TorrentFilePriority) throws {}
+    func setBandwidthLimits(engine: NativeLibtorrentEngineHandle, handle: String, limits: TorrentBandwidthLimits) throws {}
     func streamingURL(engine: NativeLibtorrentEngineHandle, handle: String) throws -> URL {
         throw TorrentEngineError.libtorrentUnavailable
     }

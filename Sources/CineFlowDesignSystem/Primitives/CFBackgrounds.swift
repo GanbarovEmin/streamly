@@ -73,3 +73,28 @@ public struct CFHeroSurface: View {
             .cfShadow(.elevated)
     }
 }
+
+public extension View {
+    func cfPanelBackground(
+        radius: CGFloat = CFRadius.panel,
+        fill: Color = CFColors.panelFill,
+        stroke: Color = CFColors.separator,
+        shadow: CFShadowToken = .none
+    ) -> some View {
+        background(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(fill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .stroke(stroke, lineWidth: CFSeparators.width)
+                )
+        )
+        .cfShadow(shadow)
+    }
+
+    func cfSectionPadding() -> some View {
+        padding(.horizontal, CFSpacing.xl)
+            .padding(.top, CFSpacing.lg)
+            .padding(.bottom, CFSpacing.xxl)
+    }
+}

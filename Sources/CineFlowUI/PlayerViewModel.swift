@@ -3,6 +3,55 @@ import CineFlowPlayback
 import AVFoundation
 import Foundation
 
+public struct PlayerResumePrompt: Equatable, Sendable {
+    public let positionSeconds: Double
+    public let positionLabel: String
+
+    public init(positionSeconds: Double, positionLabel: String) {
+        self.positionSeconds = positionSeconds
+        self.positionLabel = positionLabel
+    }
+}
+
+public struct PlayerNextEpisodePrompt: Hashable, Sendable {
+    public let title: String
+    public let subtitle: String
+
+    public init(title: String, subtitle: String) {
+        self.title = title
+        self.subtitle = subtitle
+    }
+}
+
+public struct PlayerBufferingPresentation: Equatable, Sendable {
+    public let title: String
+    public let message: String
+    public let progress: Double?
+    public let advancedDetails: [String]
+
+    public init(title: String, message: String, progress: Double? = nil, advancedDetails: [String] = []) {
+        self.title = title
+        self.message = message
+        self.progress = progress
+        self.advancedDetails = advancedDetails
+    }
+}
+
+public enum PlayerKeyboardShortcut: Equatable, Sendable {
+    case space
+    case left
+    case right
+    case shiftLeft
+    case shiftRight
+    case up
+    case down
+    case mute
+    case fullscreen
+    case subtitles
+    case audio
+    case escape
+}
+
 @MainActor
 public final class PlayerViewModel: ObservableObject {
     @Published public private(set) var status: PlaybackStatus
@@ -11,6 +60,10 @@ public final class PlayerViewModel: ObservableObject {
     @Published public private(set) var onlineSubtitleResults: [SubtitleSearchResult] = []
     @Published private var loadedSubtitleTracks: [SubtitleTrack] = []
     @Published public private(set) var resumeProgress: PlaybackProgress?
+    @Published public private(set) var resumePrompt: PlayerResumePrompt?
+    @Published public private(set) var nextEpisodePrompt: PlayerNextEpisodePrompt?
+    @Published public private(set) var fallbackSuggestion: ReleaseFallbackSuggestion?
+    @Published public private(set) var advancedDebugVisible = false
 
     private let service: any PlaybackServiceProtocol
     private let mediaSource: PlaybackMediaSource
@@ -18,7 +71,12 @@ public final class PlayerViewModel: ObservableObject {
     private let diagnosticsService: (any DiagnosticsServiceProtocol)?
     private let progressRecorder: PlaybackProgressRecorder?
     private let progressRepository: (any PlaybackProgressRepositoryProtocol)?
+    private let fallbackReleases: [TorrentRelease]
+    private let fallbackPreferences: RankingPreferences
+    private let fallbackHandler: ((TorrentRelease) async -> Void)?
+    private let configuredNextEpisodePrompt: PlayerNextEpisodePrompt?
     private var statusTask: Task<Void, Never>?
+    private var controlsHideTask: Task<Void, Never>?
 
     public init(
         service: any PlaybackServiceProtocol,
@@ -26,7 +84,11 @@ public final class PlayerViewModel: ObservableObject {
         subtitleService: (any SubtitleServiceProtocol)? = nil,
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil,
         progressRecorder: PlaybackProgressRecorder? = nil,
-        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil
+        progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
+        fallbackReleases: [TorrentRelease] = [],
+        fallbackPreferences: RankingPreferences = RankingPreferences(),
+        fallbackHandler: ((TorrentRelease) async -> Void)? = nil,
+        nextEpisodePrompt: PlayerNextEpisodePrompt? = nil
     ) {
         self.service = service
         self.mediaSource = mediaSource
@@ -34,11 +96,19 @@ public final class PlayerViewModel: ObservableObject {
         self.diagnosticsService = diagnosticsService
         self.progressRecorder = progressRecorder
         self.progressRepository = progressRepository
+        self.fallbackReleases = fallbackReleases
+        self.fallbackPreferences = fallbackPreferences
+        self.fallbackHandler = fallbackHandler
+        self.configuredNextEpisodePrompt = nextEpisodePrompt
         self.status = PlaybackStatus(media: mediaSource, state: .idle)
+        self.fallbackSuggestion = mediaSource.release.flatMap {
+            ReleaseFallbackPlanner.seedWarning(for: $0, in: fallbackReleases, preferences: fallbackPreferences)
+        }
     }
 
     deinit {
         statusTask?.cancel()
+        controlsHideTask?.cancel()
     }
 
     public var audioTracks: [AudioTrack] {
@@ -58,8 +128,33 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     public var shouldOfferResume: Bool {
-        guard let resumeProgress else { return false }
-        return resumeProgress.positionSeconds > 5 && !resumeProgress.completed
+        resumePrompt != nil
+    }
+
+    public var shouldOfferNextEpisode: Bool {
+        nextEpisodePrompt != nil
+    }
+
+    public var bufferingPresentation: PlayerBufferingPresentation {
+        switch status.bufferingState {
+        case .idle, .ready:
+            return PlayerBufferingPresentation(title: "", message: "")
+        case .buffering(let progress):
+            var details: [String] = []
+            if advancedDebugVisible, let release = status.media?.release ?? mediaSource.release {
+                details.append("Download speed: unavailable")
+                details.append("Seeders: \(release.seeders)")
+                details.append("Source health: \(release.releaseHealth.label)")
+                details.append("Health: \(release.releaseHealth.label)")
+                details.append("Source: \(release.sourceName)")
+            }
+            return PlayerBufferingPresentation(
+                title: "Buffering",
+                message: "Preparing stream · \(Int(progress * 100))%",
+                progress: progress,
+                advancedDetails: details
+            )
+        }
     }
 
     public var avPlayer: AVPlayer? {
@@ -72,11 +167,25 @@ public final class PlayerViewModel: ObservableObject {
             self.resumeProgress = try await self.progressRepository?.progress(mediaID: self.mediaSource.id, episodeID: nil)
             try await self.service.play(self.mediaSource)
             if let resumeProgress = self.resumeProgress, resumeProgress.positionSeconds > 5, !resumeProgress.completed {
-                try await self.service.seek(to: resumeProgress.positionSeconds)
+                self.resumePrompt = PlayerResumePrompt(
+                    positionSeconds: resumeProgress.positionSeconds,
+                    positionLabel: Self.timeLabel(resumeProgress.positionSeconds)
+                )
             }
             await self.refreshStatus()
             self.startStatusUpdates()
         }
+    }
+
+    public func continueFromResume() async {
+        guard let resumePrompt else { return }
+        await seek(to: resumePrompt.positionSeconds)
+        self.resumePrompt = nil
+    }
+
+    public func startOverFromBeginning() async {
+        await seek(to: 0)
+        resumePrompt = nil
     }
 
     public func togglePlayPause() async {
@@ -101,8 +210,16 @@ public final class PlayerViewModel: ObservableObject {
         await seek(by: 10)
     }
 
+    public func seekForwardLarge() async {
+        await seek(by: 60)
+    }
+
     public func seekBackward() async {
         await seek(by: -10)
+    }
+
+    public func seekBackwardLarge() async {
+        await seek(by: -60)
     }
 
     public func seek(to time: Double) async {
@@ -113,11 +230,11 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     public func volumeUp() async {
-        await setVolume(status.volume + 0.05)
+        await setVolume(status.volume + 0.1)
     }
 
     public func volumeDown() async {
-        await setVolume(status.volume - 0.05)
+        await setVolume(status.volume - 0.1)
     }
 
     public func setVolume(_ volume: Double) async {
@@ -209,11 +326,55 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
+    public func setAdvancedDebugVisible(_ visible: Bool) {
+        advancedDebugVisible = visible
+    }
+
+    public func handleShortcut(_ shortcut: PlayerKeyboardShortcut) async {
+        showControlsTemporarily()
+        switch shortcut {
+        case .space:
+            await togglePlayPause()
+        case .left:
+            await seekBackward()
+        case .right:
+            await seekForward()
+        case .shiftLeft:
+            await seekBackwardLarge()
+        case .shiftRight:
+            await seekForwardLarge()
+        case .up:
+            await volumeUp()
+        case .down:
+            await volumeDown()
+        case .mute:
+            await toggleMuted()
+        case .fullscreen:
+            await toggleFullscreen()
+        case .subtitles, .audio, .escape:
+            showControls()
+        }
+    }
+
     public func stop() async {
         await perform {
             try await self.progressRecorder?.recordIfNeeded(status: self.status, force: true)
             try await self.service.stop()
             await self.refreshStatus()
+        }
+    }
+
+    public func tryNextBestRelease() async {
+        guard let release = fallbackSuggestion?.nextBestRelease?.release else { return }
+        if let fallbackHandler {
+            await fallbackHandler(release)
+            return
+        }
+
+        await perform(operation: "player.fallback.tryNext") {
+            try await self.service.play(PlaybackMediaSource(release: release))
+            await self.refreshStatus()
+            self.fallbackSuggestion = nil
         }
     }
 
@@ -226,7 +387,24 @@ public final class PlayerViewModel: ObservableObject {
     }
 
     public func showControls() {
+        controlsHideTask?.cancel()
         controlsAreVisible = true
+    }
+
+    public func showControlsTemporarily(autoHideAfter delay: TimeInterval = 2.4) {
+        controlsHideTask?.cancel()
+        controlsAreVisible = true
+        controlsHideTask = Task { [weak self] in
+            guard delay > 0 else { return }
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            await MainActor.run {
+                self?.controlsAreVisible = false
+            }
+        }
+    }
+
+    public func dismissNextEpisodePrompt() {
+        nextEpisodePrompt = nil
     }
 
     private func seek(by delta: Double) async {
@@ -235,6 +413,7 @@ public final class PlayerViewModel: ObservableObject {
 
     private func refreshStatus() async {
         status = await service.currentStatus
+        updateNextEpisodePromptIfNeeded(for: status)
         try? await progressRecorder?.recordIfNeeded(status: status)
     }
 
@@ -268,6 +447,8 @@ public final class PlayerViewModel: ObservableObject {
                 for try await status in service.statusUpdates() {
                     await MainActor.run {
                         self.status = status
+                        self.updateFallbackSuggestionIfNeeded(for: status)
+                        self.updateNextEpisodePromptIfNeeded(for: status)
                     }
                     try? await self.progressRecorder?.recordIfNeeded(status: status)
                 }
@@ -301,6 +482,51 @@ public final class PlayerViewModel: ObservableObject {
             operation: operation,
             metadata: ["mediaID": mediaSource.id]
         )
+    }
+
+    private func updateFallbackSuggestionIfNeeded(for status: PlaybackStatus) {
+        guard fallbackSuggestion == nil else { return }
+        guard let release = status.media?.release ?? mediaSource.release else { return }
+
+        let reason: ReleaseFallbackReason?
+        switch status.state {
+        case .failed(let message) where message.localizedCaseInsensitiveContains("stall"):
+            reason = .stalled
+        case .failed:
+            reason = .failedToStart
+        default:
+            reason = nil
+        }
+
+        guard let reason,
+              let suggestion = ReleaseFallbackPlanner.suggestion(
+                for: release,
+                in: fallbackReleases,
+                reason: reason,
+                preferences: fallbackPreferences
+              )
+        else { return }
+
+        fallbackSuggestion = suggestion
+        Task {
+            await diagnosticsService?.log(
+                level: .warning,
+                subsystem: .playback,
+                message: reason.userFacingSummary,
+                metadata: [
+                    "operation": "player.fallback.suggest",
+                    "mediaID": mediaSource.id,
+                    "releaseID": release.id,
+                    "reason": reason.rawValue
+                ]
+            )
+        }
+    }
+
+    private func updateNextEpisodePromptIfNeeded(for status: PlaybackStatus) {
+        guard nextEpisodePrompt == nil, let configuredNextEpisodePrompt else { return }
+        guard status.progressFraction >= 0.92 || status.state == .stopped else { return }
+        nextEpisodePrompt = configuredNextEpisodePrompt
     }
 
     private static func timeLabel(_ value: Double) -> String {

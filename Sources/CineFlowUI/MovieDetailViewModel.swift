@@ -194,12 +194,14 @@ public final class MovieDetailViewModel: ObservableObject {
     @Published public private(set) var mediaItem: MediaItem?
     @Published public private(set) var isFavorite = false
     @Published public private(set) var isInLibrary = false
+    @Published public private(set) var isWatched = false
     @Published public private(set) var selectedListName: String?
     @Published public private(set) var userRating: Int?
     @Published public private(set) var lastPlayedReleaseID: String?
     @Published public private(set) var copiedMagnetURI: String?
     @Published public private(set) var userSources: [UserMediaSource] = []
     @Published public private(set) var selectedUserSourceID: String?
+    @Published public private(set) var manualOverrideReleaseID: String?
     @Published public var selectedTab: MovieDetailTab = .releases
 
     public let tabs: [MovieDetailTab] = MovieDetailTab.allCases
@@ -208,8 +210,11 @@ public final class MovieDetailViewModel: ObservableObject {
     private let provider: any MovieDetailProviderProtocol
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let settingsRepository: (any SettingsRepositoryProtocol)?
     private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
     private let diagnosticsService: (any DiagnosticsServiceProtocol)?
+    private let releaseSelectionStore: ReleaseSelectionStoreProtocol
+    private var rankingPreferences: RankingPreferences?
     private var loadGeneration = 0
 
     public init(
@@ -217,15 +222,19 @@ public final class MovieDetailViewModel: ObservableObject {
         provider: any MovieDetailProviderProtocol = MockMovieDetailProvider(),
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        settingsRepository: (any SettingsRepositoryProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
-        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
+        diagnosticsService: (any DiagnosticsServiceProtocol)? = nil,
+        releaseSelectionStore: ReleaseSelectionStoreProtocol = UserDefaultsReleaseSelectionStore()
     ) {
         self.mediaID = mediaID
         self.provider = provider
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
+        self.settingsRepository = settingsRepository
         self.userMediaSourceRepository = userMediaSourceRepository
         self.diagnosticsService = diagnosticsService
+        self.releaseSelectionStore = releaseSelectionStore
     }
 
     public var hasContinueWatching: Bool {
@@ -239,13 +248,21 @@ public final class MovieDetailViewModel: ObservableObject {
 
     public var sourceSummary: String {
         guard !releases.isEmpty else {
-            return userSources.isEmpty ? "No sources selected" : "\(userSources.count) local source\(userSources.count == 1 ? "" : "s")"
+            return userSources.isEmpty ? "Локальный файл не выбран" : "\(userSources.count) локальных источников"
         }
 
         let best = releases[0].release
         let quality = best.qualityLabel
         let providerCount = Set(releases.map(\.release.sourceName)).count
         return "\(releases.count) sources · best \(quality) · \(best.seeders) seeders · \(providerCount) provider\(providerCount == 1 ? "" : "s")"
+    }
+
+    public var bestPlayableRelease: RankedRelease? {
+        if let manualOverrideReleaseID,
+           let manual = releases.first(where: { $0.release.id == manualOverrideReleaseID }) {
+            return manual
+        }
+        return releases.first
     }
 
     public func load() async {
@@ -268,9 +285,11 @@ public final class MovieDetailViewModel: ObservableObject {
             }
 
             guard generation == loadGeneration, !Task.isCancelled else { return }
+            await refreshRankingPreferences()
             movie = response.movie
             mediaItem = response.movie.mediaItem()
-            releases = rankingEngine.rank(response.releases)
+            releases = currentRankingEngine.rank(response.releases)
+            refreshManualOverride()
             trailers = response.trailers
             similar = response.similar
             cast = response.cast
@@ -291,6 +310,24 @@ public final class MovieDetailViewModel: ObservableObject {
         lastPlayedReleaseID = release.id
     }
 
+    @discardableResult
+    public func playBestRelease() -> TorrentRelease? {
+        guard let release = bestPlayableRelease?.release else { return nil }
+        play(release)
+        return release
+    }
+
+    public func playManualRelease(_ release: TorrentRelease) {
+        releaseSelectionStore.setReleaseID(release.id, for: mediaID)
+        manualOverrideReleaseID = release.id
+        play(release)
+    }
+
+    public func clearManualReleaseOverride() {
+        releaseSelectionStore.setReleaseID(nil, for: mediaID)
+        manualOverrideReleaseID = nil
+    }
+
     public func selectUserSource(_ source: UserMediaSource) {
         selectedUserSourceID = source.id
     }
@@ -308,8 +345,34 @@ public final class MovieDetailViewModel: ObservableObject {
         await refreshUserSources()
     }
 
+    private var currentRankingEngine: ReleaseRankingEngine {
+        rankingPreferences.map(ReleaseRankingEngine.init(preferences:)) ?? rankingEngine
+    }
+
+    private func refreshRankingPreferences() async {
+        guard let settingsRepository else {
+            rankingPreferences = nil
+            return
+        }
+        let settings = await settingsRepository.appSettings
+        let subtitleLanguages = await settingsRepository.subtitleLanguagePriority
+        rankingPreferences = settings.playback.rankingPreferences(
+            preferredSubtitleLanguages: subtitleLanguages,
+            supportsHDR: true
+        )
+    }
+
+    private func refreshManualOverride() {
+        guard let releaseID = releaseSelectionStore.releaseID(for: mediaID),
+              releases.contains(where: { $0.release.id == releaseID }) else {
+            manualOverrideReleaseID = nil
+            return
+        }
+        manualOverrideReleaseID = releaseID
+    }
+
     public func continueWatching() {
-        lastPlayedReleaseID = releases.first?.release.id
+        lastPlayedReleaseID = bestPlayableRelease?.release.id
     }
 
     public func addToLibrary() {
@@ -317,6 +380,14 @@ public final class MovieDetailViewModel: ObservableObject {
         guard let mediaItem, let libraryRepository else { return }
         Task {
             try? await libraryRepository.add(mediaItem)
+        }
+    }
+
+    public func markWatched() {
+        isWatched = true
+        guard let mediaItem, let libraryRepository else { return }
+        Task {
+            try? await libraryRepository.markWatched(mediaItem, positionSeconds: 0)
         }
     }
 
@@ -368,17 +439,21 @@ public final class MovieDetailViewModel: ObservableObject {
         do {
             async let libraryItems = libraryRepository.items()
             async let favoriteItems = libraryRepository.favorites()
+            async let watchedItems = libraryRepository.watchedItems()
             async let ratedItems = libraryRepository.ratedItems()
 
             let loadedLibraryItems = try await libraryItems
             let loadedFavoriteItems = try await favoriteItems
+            let loadedWatchedItems = try await watchedItems
             let loadedRatedItems = try await ratedItems
             isInLibrary = loadedLibraryItems.contains { $0.id == mediaItem.id }
             isFavorite = loadedFavoriteItems.contains { $0.id == mediaItem.id }
+            isWatched = loadedWatchedItems.contains { $0.item.id == mediaItem.id }
             userRating = loadedRatedItems.first { $0.item.id == mediaItem.id }?.rating
         } catch {
             isInLibrary = false
             isFavorite = false
+            isWatched = false
             userRating = nil
         }
     }

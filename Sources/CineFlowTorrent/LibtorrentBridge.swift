@@ -14,6 +14,7 @@ public protocol LibtorrentBridgeProtocol: Sendable {
     func selectFile(handle: String, fileId: String) async throws
     func setSequentialDownload(handle: String, enabled: Bool) async throws
     func setDownloadPriority(handle: String, fileId: String, priority: TorrentFilePriority) async throws
+    func setBandwidthLimits(handle: String, limits: TorrentBandwidthLimits) async throws
     func streamingURL(handle: String) async throws -> URL
 }
 
@@ -68,6 +69,10 @@ public struct PlaceholderLibtorrentBridge: LibtorrentBridgeProtocol {
         throw TorrentEngineError.libtorrentUnavailable
     }
 
+    public func setBandwidthLimits(handle: String, limits: TorrentBandwidthLimits) async throws {
+        throw TorrentEngineError.libtorrentUnavailable
+    }
+
     public func streamingURL(handle: String) async throws -> URL {
         throw TorrentEngineError.libtorrentUnavailable
     }
@@ -77,7 +82,7 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
     public nonisolated let temporaryStorageURL: URL
 
     private let bridge: any LibtorrentBridgeProtocol
-    private var handlesBySessionID: [String: String] = [:]
+    private var sessionsByID: [String: EmbeddedTorrentSessionRecord] = [:]
 
     public init(
         bridge: any LibtorrentBridgeProtocol = PlaceholderLibtorrentBridge(),
@@ -99,9 +104,10 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         let sessionId = UUID().uuidString
         let storageURL = try storageURL(for: sessionId)
         let handle = try await bridge.addMagnet(uri: uri, storageURL: storageURL)
-        handlesBySessionID[sessionId] = handle
+        let session = TorrentSession(id: sessionId, magnetURI: uri, storageURL: storageURL)
+        sessionsByID[sessionId] = EmbeddedTorrentSessionRecord(session: session, handle: handle)
 
-        return TorrentSession(id: sessionId, magnetURI: uri, storageURL: storageURL)
+        return session
     }
 
     public func addTorrentFile(url: URL) async throws -> TorrentSession {
@@ -112,9 +118,10 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         let sessionId = UUID().uuidString
         let storageURL = try storageURL(for: sessionId)
         let handle = try await bridge.addTorrentFile(url: url, storageURL: storageURL)
-        handlesBySessionID[sessionId] = handle
+        let session = TorrentSession(id: sessionId, torrentFileURL: url, storageURL: storageURL)
+        sessionsByID[sessionId] = EmbeddedTorrentSessionRecord(session: session, handle: handle)
 
-        return TorrentSession(id: sessionId, torrentFileURL: url, storageURL: storageURL)
+        return session
     }
 
     public func addTorrentFile(data: Data) async throws -> TorrentSession {
@@ -127,9 +134,10 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         let torrentURL = storageURL.appendingPathComponent("source.torrent")
         try data.write(to: torrentURL)
         let handle = try await bridge.addTorrentFile(url: torrentURL, storageURL: storageURL)
-        handlesBySessionID[sessionId] = handle
+        let session = TorrentSession(id: sessionId, torrentFileURL: torrentURL, storageURL: storageURL)
+        sessionsByID[sessionId] = EmbeddedTorrentSessionRecord(session: session, handle: handle)
 
-        return TorrentSession(id: sessionId, torrentFileURL: torrentURL, storageURL: storageURL)
+        return session
     }
 
     public func startStreaming(_ release: TorrentRelease) async throws -> TorrentSession {
@@ -141,21 +149,45 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
             throw TorrentEngineError.invalidTorrentFile
         }
 
-        guard let handle = handlesBySessionID[session.id] else {
+        guard let handle = sessionsByID[session.id]?.handle else {
             throw TorrentEngineError.sessionNotFound(session.id)
         }
         try await bridge.setSequentialDownload(handle: handle, enabled: true)
         try await bridge.start(handle: handle)
+        let files = try await bridge.files(handle: handle)
+        let selectedFile = try selectBestMediaFile(from: files, sessionId: session.id)
+        try await bridge.selectFile(handle: handle, fileId: selectedFile.id)
+        let priorityOrder = files.sorted { lhs, rhs in
+            if lhs.id == selectedFile.id { return true }
+            if rhs.id == selectedFile.id { return false }
+            if lhs.isMediaFile != rhs.isMediaFile { return lhs.isMediaFile && !rhs.isMediaFile }
+            return lhs.lengthBytes > rhs.lengthBytes
+        }
+        for file in priorityOrder {
+            let priority: TorrentFilePriority = if file.id == selectedFile.id {
+                .high
+            } else if file.isMediaFile {
+                .low
+            } else {
+                .disabled
+            }
+            try await bridge.setDownloadPriority(handle: handle, fileId: file.id, priority: priority)
+        }
+        let streamingURL = try await bridge.streamingURL(handle: handle)
 
-        return TorrentSession(
+        let streamSession = TorrentSession(
             id: session.id,
             releaseId: release.id,
             sourceId: release.sourceId,
             magnetURI: session.magnetURI,
             torrentFileURL: session.torrentFileURL,
             storageURL: session.storageURL,
+            selectedFileId: selectedFile.id,
+            streamingURL: streamingURL,
             isSequentialDownloadEnabled: true
         )
+        sessionsByID[session.id] = EmbeddedTorrentSessionRecord(session: streamSession, handle: handle)
+        return streamSession
     }
 
     public func pause(sessionId: String) async throws {
@@ -173,11 +205,23 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
     public func remove(sessionId: String, deleteFiles: Bool = false) async throws {
         let handle = try handle(for: sessionId)
         try await bridge.remove(handle: handle, deleteFiles: deleteFiles)
-        handlesBySessionID[sessionId] = nil
+        sessionsByID[sessionId] = nil
     }
 
     public func getStatus(sessionId: String) async throws -> TorrentStatus {
-        try await bridge.status(handle: try handle(for: sessionId))
+        let raw = try await bridge.status(handle: try handle(for: sessionId))
+        let record = sessionsByID[sessionId]
+        return TorrentStatus(
+            sessionId: sessionId,
+            state: raw.state,
+            progress: raw.progress,
+            health: raw.health,
+            selectedFileId: raw.selectedFileId ?? record?.session.selectedFileId,
+            isSequentialDownloadEnabled: raw.isSequentialDownloadEnabled || record?.session.isSequentialDownloadEnabled == true,
+            streamingURL: raw.streamingURL ?? record?.session.streamingURL,
+            bandwidthLimits: record?.bandwidthLimits ?? raw.bandwidthLimits,
+            updatedAt: raw.updatedAt
+        )
     }
 
     public func getFileList(sessionId: String) async throws -> [TorrentFile] {
@@ -196,6 +240,14 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         try await bridge.setDownloadPriority(handle: try handle(for: sessionId), fileId: fileId, priority: priority)
     }
 
+    public func setBandwidthLimits(sessionId: String, _ limits: TorrentBandwidthLimits) async throws {
+        let handle = try handle(for: sessionId)
+        try await bridge.setBandwidthLimits(handle: handle, limits: limits)
+        guard var record = sessionsByID[sessionId] else { return }
+        record.bandwidthLimits = limits
+        sessionsByID[sessionId] = record
+    }
+
     public func getStreamingURL(sessionId: String) async throws -> URL {
         try await bridge.streamingURL(handle: try handle(for: sessionId))
     }
@@ -204,8 +256,15 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         AsyncThrowingStream { continuation in
             Task {
                 do {
-                    let status = try await self.getStatus(sessionId: sessionId)
-                    continuation.yield(status)
+                    while !Task.isCancelled {
+                        let status = try await self.getStatus(sessionId: sessionId)
+                        continuation.yield(status)
+                        if status.state.isTerminal {
+                            continuation.finish()
+                            return
+                        }
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                    }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -217,18 +276,44 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
     public func cleanup(policy: TorrentCleanupPolicy) async throws -> TorrentCleanupResult {
         switch policy {
         case .all:
-            let ids = Array(handlesBySessionID.keys).sorted()
+            let ids = Array(sessionsByID.keys).sorted()
             for id in ids {
                 try await remove(sessionId: id, deleteFiles: true)
             }
             return TorrentCleanupResult(removedSessionIds: ids, freedBytes: 0)
-        case .olderThan, .exceedingCacheSize:
-            return TorrentCleanupResult(removedSessionIds: [], freedBytes: 0)
+        case .olderThan(let date, let protecting):
+            let ids = sessionsByID.values
+                .filter { $0.session.createdAt < date }
+                .filter { !protecting.contains($0.session.id) }
+                .map(\.session.id)
+                .sorted()
+            for id in ids {
+                try await remove(sessionId: id, deleteFiles: true)
+            }
+            return TorrentCleanupResult(removedSessionIds: ids, freedBytes: 0)
+        case .exceedingCacheSize(let maxBytes, let protecting):
+            var currentSize = directorySize(temporaryStorageURL)
+            var removed: [String] = []
+            let candidates = sessionsByID.values
+                .filter { !protecting.contains($0.session.id) }
+                .sorted { $0.session.createdAt < $1.session.createdAt }
+            for candidate in candidates where currentSize > maxBytes {
+                try await remove(sessionId: candidate.session.id, deleteFiles: true)
+                removed.append(candidate.session.id)
+                currentSize = directorySize(temporaryStorageURL)
+            }
+            return TorrentCleanupResult(removedSessionIds: removed, freedBytes: 0)
+        }
+    }
+
+    public func shutdown() async throws {
+        for id in sessionsByID.keys {
+            try? await stop(sessionId: id)
         }
     }
 
     private func handle(for sessionId: String) throws -> String {
-        guard let handle = handlesBySessionID[sessionId] else {
+        guard let handle = sessionsByID[sessionId]?.handle else {
             throw TorrentEngineError.sessionNotFound(sessionId)
         }
         return handle
@@ -238,5 +323,52 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         let url = temporaryStorageURL.appendingPathComponent(sessionId, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func selectBestMediaFile(from files: [TorrentFile], sessionId: String) throws -> TorrentFile {
+        guard let selected = files
+            .filter(\.isMediaFile)
+            .max(by: { $0.lengthBytes < $1.lengthBytes })
+        else {
+            throw TorrentEngineError.fileNotFound(sessionId: sessionId, fileId: "media")
+        }
+        return selected
+    }
+
+    private func directorySize(_ url: URL) -> Int64 {
+        guard let enumerator = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+        return enumerator.reduce(Int64(0)) { partial, item in
+            guard
+                let fileURL = item as? URL,
+                let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                values.isRegularFile == true
+            else {
+                return partial
+            }
+            return partial + Int64(values.fileSize ?? 0)
+        }
+    }
+}
+
+private struct EmbeddedTorrentSessionRecord {
+    var session: TorrentSession
+    let handle: String
+    var bandwidthLimits: TorrentBandwidthLimits?
+}
+
+private extension TorrentSessionState {
+    var isTerminal: Bool {
+        switch self {
+        case .stopped, .completed, .error, .failed:
+            true
+        default:
+            false
+        }
     }
 }

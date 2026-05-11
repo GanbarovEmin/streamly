@@ -32,6 +32,14 @@ public protocol ImageCacheServiceProtocol: Sendable {
     func clearUnused(olderThan date: Date) async throws
 }
 
+public protocol SmartCacheManagerProtocol: Sendable {
+    func summary(policy: SmartCachePolicy, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheSummary
+    func clear(category: SmartCacheCategory, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult
+    func clearTitleCache(itemID: String, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult
+    func setKeepForLater(itemID: String, keep: Bool) async throws
+    func runAutoClean(policy: SmartCachePolicy, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult
+}
+
 public enum CoreMetadataServiceError: LocalizedError, Equatable {
     case unsupported
 
@@ -140,9 +148,11 @@ public protocol TorrentEngineProtocol: Sendable {
     func selectMediaFile(sessionId: String, fileId: String) async throws
     func setSequentialDownload(sessionId: String, enabled: Bool) async throws
     func setDownloadPriority(sessionId: String, fileId: String, priority: TorrentFilePriority) async throws
+    func setBandwidthLimits(sessionId: String, _ limits: TorrentBandwidthLimits) async throws
     func getStreamingURL(sessionId: String) async throws -> URL
     func statusUpdates(sessionId: String) -> AsyncThrowingStream<TorrentStatus, Error>
     func cleanup(policy: TorrentCleanupPolicy) async throws -> TorrentCleanupResult
+    func shutdown() async throws
 }
 
 public extension TorrentEngineProtocol {
@@ -202,6 +212,11 @@ public extension TorrentEngineProtocol {
         throw TorrentEngineError.unsupported(operation: "setDownloadPriority")
     }
 
+    func setBandwidthLimits(sessionId: String, _ limits: TorrentBandwidthLimits) async throws {
+        _ = sessionId
+        _ = limits
+    }
+
     func getStreamingURL(sessionId: String) async throws -> URL {
         throw TorrentEngineError.unsupported(operation: "getStreamingURL")
     }
@@ -215,6 +230,8 @@ public extension TorrentEngineProtocol {
     func cleanup(policy: TorrentCleanupPolicy) async throws -> TorrentCleanupResult {
         throw TorrentEngineError.unsupported(operation: "cleanup")
     }
+
+    func shutdown() async throws {}
 }
 
 public protocol PlaybackServiceProtocol {
@@ -409,7 +426,7 @@ public extension SettingsRepositoryProtocol {
     func clearAllLocalData() async {}
 }
 
-public protocol DiagnosticsServiceProtocol {
+public protocol DiagnosticsServiceProtocol: Sendable {
     func log(level: DiagnosticsLogLevel, subsystem: DiagnosticsSubsystem, message: String, metadata: [String: String]) async
     func exportDiagnostics() async -> String
     func exportDiagnosticsPackage() async throws -> URL

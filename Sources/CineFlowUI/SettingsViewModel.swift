@@ -78,15 +78,36 @@ public struct SettingsCacheSummary: Equatable, Sendable {
     public var imageBytes: Int64?
     public var torrentBytes: Int64
     public var subtitleBytes: Int64
+    public var metadataBytes: Int64
+    public var buckets: [SmartCacheBucketSummary]
+    public var titleItems: [SmartTitleCacheItem]
+    public var maxSizeBytes: Int64
 
-    public init(imageBytes: Int64? = nil, torrentBytes: Int64 = 0, subtitleBytes: Int64 = 0) {
+    public init(
+        imageBytes: Int64? = nil,
+        torrentBytes: Int64 = 0,
+        subtitleBytes: Int64 = 0,
+        metadataBytes: Int64 = 0,
+        buckets: [SmartCacheBucketSummary] = [],
+        titleItems: [SmartTitleCacheItem] = [],
+        maxSizeBytes: Int64 = SmartCachePolicy().maxSizeBytes
+    ) {
         self.imageBytes = imageBytes
         self.torrentBytes = torrentBytes
         self.subtitleBytes = subtitleBytes
+        self.metadataBytes = metadataBytes
+        self.buckets = buckets
+        self.titleItems = titleItems
+        self.maxSizeBytes = maxSizeBytes
     }
 
     public var totalBytes: Int64 {
-        (imageBytes ?? 0) + torrentBytes + subtitleBytes
+        (imageBytes ?? 0) + torrentBytes + subtitleBytes + metadataBytes
+    }
+
+    public var isAlmostFull: Bool {
+        guard maxSizeBytes > 0 else { return false }
+        return Double(totalBytes) / Double(maxSizeBytes) >= 0.9
     }
 }
 
@@ -188,6 +209,7 @@ public final class SettingsViewModel: ObservableObject {
 
     public func load() async {
         settings = await environment.settingsRepository.appSettings
+        UserDefaults.standard.set(settings.appearance.reduceMotion, forKey: "streamly.reduceMotion")
         subtitleSettings = await environment.settingsRepository.subtitleSettings
         updateStatus = await environment.updateService.currentStatus
         settings.updates.automaticChecksEnabled = await environment.updateService.automaticallyChecksForUpdates
@@ -215,11 +237,41 @@ public final class SettingsViewModel: ObservableObject {
 
     public func updateReduceMotion(_ enabled: Bool) async {
         settings.appearance.reduceMotion = enabled
+        UserDefaults.standard.set(enabled, forKey: "streamly.reduceMotion")
         await persistSettings()
     }
 
     public func updatePreferredAudioLanguages(_ languages: [String]) async {
         settings.playback.preferredAudioLanguages = normalizedLanguages(languages)
+        await persistSettings()
+    }
+
+    public func updatePreferredQuality(_ quality: PreferredQuality) async {
+        settings.playback.preferredQuality = quality
+        await persistSettings()
+    }
+
+    public func updateHDRPreference(_ preference: HDRPreference) async {
+        settings.playback.hdrPreference = preference
+        await persistSettings()
+    }
+
+    public func updateCodecPreference(_ preference: CodecPreference) async {
+        settings.playback.codecPreference = preference
+        await persistSettings()
+    }
+
+    public func updateMaxFileSizeGB(_ value: Double?) async {
+        if let value, value > 0 {
+            settings.playback.maxFileSizeBytes = Int64(value * 1_000_000_000)
+        } else {
+            settings.playback.maxFileSizeBytes = nil
+        }
+        await persistSettings()
+    }
+
+    public func updatePreferHighSeedersOverHighestQuality(_ enabled: Bool) async {
+        settings.playback.preferHighSeedersOverHighestQuality = enabled
         await persistSettings()
     }
 
@@ -280,6 +332,40 @@ public final class SettingsViewModel: ObservableObject {
             return
         }
         settings.storage.torrentCacheFolderPath = url.path
+        await persistSettings()
+        await refreshCacheSummary()
+    }
+
+    public func updateCacheRetentionDays(_ days: Int) async {
+        settings.storage.cacheRetentionDays = [7, 14, 30].min(by: { abs($0 - days) < abs($1 - days) }) ?? 30
+        await persistSettings()
+        await refreshCacheSummary()
+    }
+
+    public func updateMaxCacheSizeGB(_ gigabytes: Int) async {
+        let bounded = min(max(gigabytes, 1), 512)
+        settings.storage.maxCacheSizeBytes = Int64(bounded) * 1_024 * 1_024 * 1_024
+        await persistSettings()
+        await refreshCacheSummary()
+    }
+
+    public func updateKeepUnfinishedCache(_ enabled: Bool) async {
+        settings.storage.keepUnfinishedCache = enabled
+        await persistSettings()
+    }
+
+    public func updateRemoveCompletedCache(_ enabled: Bool) async {
+        settings.storage.removeCompletedCache = enabled
+        await persistSettings()
+    }
+
+    public func updateTorrentDownloadLimitMBps(_ megabytesPerSecond: Int?) async {
+        settings.storage.torrentDownloadLimitBytesPerSecond = megabytesPerSecond.map { Int64(max(0, $0)) * 1_024 * 1_024 }
+        await persistSettings()
+    }
+
+    public func updateTorrentUploadLimitMBps(_ megabytesPerSecond: Int?) async {
+        settings.storage.torrentUploadLimitBytesPerSecond = megabytesPerSecond.map { Int64(max(0, $0)) * 1_024 * 1_024 }
         await persistSettings()
     }
 
@@ -454,17 +540,39 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public func refreshCacheSummary() async {
+        if let smartCacheManager = environment.smartCacheManager {
+            do {
+                let summary = try await smartCacheManager.summary(
+                    policy: settings.storage.smartCachePolicy,
+                    scope: cacheScope,
+                    protection: await cacheProtection()
+                )
+                cacheSummary = SettingsCacheSummary(summary: summary)
+                return
+            } catch {
+                await handleSettingsError(error, operation: "cache.summary", category: .cache)
+            }
+        }
+
         let imageBytes = try? await environment.imageCacheService?.cacheSizeBytes()
+        let torrentBytes = directorySize(cacheScope.torrentCacheURL)
+        let subtitleBytes = directorySize(cacheScope.subtitleCacheURL)
         cacheSummary = SettingsCacheSummary(
             imageBytes: imageBytes ?? nil,
-            torrentBytes: directorySize(cacheBaseURL.appendingPathComponent("TorrentCache", isDirectory: true)),
-            subtitleBytes: directorySize(cacheBaseURL.appendingPathComponent("Subtitles", isDirectory: true))
+            torrentBytes: torrentBytes,
+            subtitleBytes: subtitleBytes,
+            buckets: fallbackCacheBuckets(imageBytes: imageBytes, torrentBytes: torrentBytes, subtitleBytes: subtitleBytes),
+            maxSizeBytes: settings.storage.maxCacheSizeBytes
         )
     }
 
     public func clearImageCache() async {
         do {
-            try await environment.imageCacheService?.clearAll()
+            if let smartCacheManager = environment.smartCacheManager {
+                _ = try await smartCacheManager.clear(category: .images, scope: cacheScope, protection: await cacheProtection())
+            } else {
+                try await environment.imageCacheService?.clearAll()
+            }
             operationMessage = "Image cache cleared."
             await refreshCacheSummary()
         } catch {
@@ -473,23 +581,113 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public func clearTorrentCache() async {
-        clearDirectory(cacheBaseURL.appendingPathComponent("TorrentCache", isDirectory: true))
+        if let smartCacheManager = environment.smartCacheManager {
+            do {
+                _ = try await smartCacheManager.clear(category: .torrents, scope: cacheScope, protection: await cacheProtection())
+            } catch {
+                await handleSettingsError(error, operation: "clearTorrentCache", category: .cache)
+                return
+            }
+        } else {
+            clearDirectory(cacheScope.torrentCacheURL)
+        }
         operationMessage = "Torrent cache cleared."
         await refreshCacheSummary()
     }
 
     public func clearSubtitlesCache() async {
-        clearDirectory(cacheBaseURL.appendingPathComponent("Subtitles", isDirectory: true))
+        if let smartCacheManager = environment.smartCacheManager {
+            do {
+                _ = try await smartCacheManager.clear(category: .subtitles, scope: cacheScope, protection: await cacheProtection())
+            } catch {
+                await handleSettingsError(error, operation: "clearSubtitlesCache", category: .cache)
+                return
+            }
+        } else {
+            clearDirectory(cacheScope.subtitleCacheURL)
+        }
         operationMessage = "Subtitles cache cleared."
         await refreshCacheSummary()
     }
 
+    public func clearMetadataCache() async {
+        guard let smartCacheManager = environment.smartCacheManager else {
+            operationMessage = "Metadata cache controls are unavailable until the local database is ready."
+            return
+        }
+        do {
+            _ = try await smartCacheManager.clear(category: .metadata, scope: cacheScope, protection: await cacheProtection())
+            operationMessage = "Metadata cache cleared."
+            await refreshCacheSummary()
+        } catch {
+            await handleSettingsError(error, operation: "clearMetadataCache", category: .cache)
+        }
+    }
+
     public func clearAllCache() async {
-        await clearImageCache()
-        clearDirectory(cacheBaseURL.appendingPathComponent("TorrentCache", isDirectory: true))
-        clearDirectory(cacheBaseURL.appendingPathComponent("Subtitles", isDirectory: true))
+        if let smartCacheManager = environment.smartCacheManager {
+            do {
+                let protection = await cacheProtection()
+                for category in SmartCacheCategory.allCases {
+                    _ = try await smartCacheManager.clear(category: category, scope: cacheScope, protection: protection)
+                }
+            } catch {
+                await handleSettingsError(error, operation: "clearAllCache", category: .cache)
+                return
+            }
+        } else {
+            await clearImageCache()
+            clearDirectory(cacheScope.torrentCacheURL)
+            clearDirectory(cacheScope.subtitleCacheURL)
+        }
         operationMessage = "All cache cleared."
         await refreshCacheSummary()
+    }
+
+    public func runCacheAutoClean() async {
+        guard let smartCacheManager = environment.smartCacheManager else {
+            operationMessage = "Smart cache cleanup is unavailable until the local database is ready."
+            return
+        }
+        do {
+            let result = try await smartCacheManager.runAutoClean(
+                policy: settings.storage.smartCachePolicy,
+                scope: cacheScope,
+                protection: await cacheProtection()
+            )
+            operationMessage = "Smart cleanup removed \(result.removedItemCount) items and freed \(cacheLabel(result.freedBytes))."
+            await refreshCacheSummary()
+        } catch {
+            await handleSettingsError(error, operation: "cache.autoClean", category: .cache)
+        }
+    }
+
+    public func clearTitleCache(itemID: String) async {
+        guard let smartCacheManager = environment.smartCacheManager else { return }
+        do {
+            let result = try await smartCacheManager.clearTitleCache(
+                itemID: itemID,
+                scope: cacheScope,
+                protection: await cacheProtection()
+            )
+            operationMessage = result.protectedItemCount > 0
+                ? "This cache item is protected while playback is active or marked to keep."
+                : "Cached data cleared."
+            await refreshCacheSummary()
+        } catch {
+            await handleSettingsError(error, operation: "cache.clearTitle", category: .cache, metadata: ["itemID": itemID])
+        }
+    }
+
+    public func setTitleCacheKeepForLater(itemID: String, keep: Bool) async {
+        guard let smartCacheManager = environment.smartCacheManager else { return }
+        do {
+            try await smartCacheManager.setKeepForLater(itemID: itemID, keep: keep)
+            operationMessage = keep ? "Cache item kept for later." : "Cache item can be cleaned automatically."
+            await refreshCacheSummary()
+        } catch {
+            await handleSettingsError(error, operation: "cache.keepForLater", category: .cache, metadata: ["itemID": itemID])
+        }
     }
 
     public func checkForUpdates() async {
@@ -651,6 +849,43 @@ public final class SettingsViewModel: ObservableObject {
         return values.filter { seen.insert($0).inserted }
     }
 
+    private var cacheScope: SmartCacheScope {
+        SmartCacheScope(
+            torrentCacheURL: URL(fileURLWithPath: settings.storage.torrentCacheFolderPath, isDirectory: true),
+            subtitleCacheURL: cacheBaseURL.appendingPathComponent("Subtitles", isDirectory: true)
+        )
+    }
+
+    private func cacheProtection() async -> SmartCacheProtection {
+        let status = await environment.playbackService.currentStatus
+        var urls: [URL] = []
+        var ids: [String] = []
+        if let media = status.media {
+            urls.append(media.url)
+            ids.append(media.id)
+            if let release = media.release {
+                ids.append(release.id)
+                if let torrentFileURL = release.torrentFileURL {
+                    urls.append(torrentFileURL)
+                }
+            }
+        }
+        return SmartCacheProtection(activeFileURLs: urls, activeIDs: ids)
+    }
+
+    private func fallbackCacheBuckets(
+        imageBytes: Int64?,
+        torrentBytes: Int64,
+        subtitleBytes: Int64
+    ) -> [SmartCacheBucketSummary] {
+        [
+            SmartCacheBucketSummary(category: .images, sizeBytes: imageBytes ?? 0),
+            SmartCacheBucketSummary(category: .torrents, sizeBytes: torrentBytes, path: cacheScope.torrentCacheURL.path),
+            SmartCacheBucketSummary(category: .subtitles, sizeBytes: subtitleBytes, path: cacheScope.subtitleCacheURL.path),
+            SmartCacheBucketSummary(category: .metadata, sizeBytes: 0)
+        ]
+    }
+
     private func directorySize(_ url: URL) -> Int64 {
         guard let enumerator = fileManager.enumerator(
             at: url,
@@ -703,6 +938,20 @@ public final class SettingsViewModel: ObservableObject {
             create: true
         )) ?? fileManager.temporaryDirectory
         return base.appendingPathComponent("Streamly", isDirectory: true)
+    }
+}
+
+private extension SettingsCacheSummary {
+    init(summary: SmartCacheSummary) {
+        self.init(
+            imageBytes: summary.buckets.first(where: { $0.category == .images })?.sizeBytes,
+            torrentBytes: summary.buckets.first(where: { $0.category == .torrents })?.sizeBytes ?? 0,
+            subtitleBytes: summary.buckets.first(where: { $0.category == .subtitles })?.sizeBytes ?? 0,
+            metadataBytes: summary.buckets.first(where: { $0.category == .metadata })?.sizeBytes ?? 0,
+            buckets: summary.buckets,
+            titleItems: summary.titleItems,
+            maxSizeBytes: summary.maxSizeBytes
+        )
     }
 }
 

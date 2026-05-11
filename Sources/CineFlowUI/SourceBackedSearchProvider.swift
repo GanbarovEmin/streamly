@@ -60,6 +60,7 @@ private extension SearchTorrentRelease {
             uploadDate: release.uploadDate ?? Date(timeIntervalSince1970: 0),
             audioLanguages: release.audioLanguages,
             subtitleLanguages: release.subtitleLanguages,
+            availability: release.availability,
             rankingScore: rankedRelease.score,
             rankingReasons: rankedRelease.reasons
         )

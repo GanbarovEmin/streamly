@@ -67,6 +67,22 @@ public enum SourceAuthenticationStatus: Codable, Equatable, Sendable {
     case invalid(reason: String)
 }
 
+public enum SourceHealthStatus: String, Codable, Equatable, Sendable {
+    case disabled
+    case healthy
+    case needsAuthentication
+    case degraded
+    case unavailable
+}
+
+public enum SourceStatus: String, Codable, Equatable, Sendable {
+    case online
+    case slow
+    case authRequired
+    case error
+    case disabled
+}
+
 public struct SourceErrorState: Codable, Equatable, Sendable {
     public let message: String
     public let occurredAt: Date
@@ -87,6 +103,11 @@ public struct SourceSettings: Codable, Equatable, Sendable {
     public var lastCheckedAt: Date?
     public var errorState: SourceErrorState?
     public var credentialKeychainID: String?
+    public var requestTimeoutSeconds: Double
+    public var maxRetryCount: Int
+    public var successfulCheckCount: Int
+    public var failedCheckCount: Int
+    public var averageResponseTimeMilliseconds: Double?
 
     public init(
         sourceId: String,
@@ -95,7 +116,12 @@ public struct SourceSettings: Codable, Equatable, Sendable {
         lastSyncAt: Date? = nil,
         lastCheckedAt: Date? = nil,
         errorState: SourceErrorState? = nil,
-        credentialKeychainID: String? = nil
+        credentialKeychainID: String? = nil,
+        requestTimeoutSeconds: Double = 8,
+        maxRetryCount: Int = 1,
+        successfulCheckCount: Int = 0,
+        failedCheckCount: Int = 0,
+        averageResponseTimeMilliseconds: Double? = nil
     ) {
         self.sourceId = sourceId
         self.isEnabled = isEnabled
@@ -104,6 +130,63 @@ public struct SourceSettings: Codable, Equatable, Sendable {
         self.lastCheckedAt = lastCheckedAt
         self.errorState = errorState
         self.credentialKeychainID = credentialKeychainID
+        self.requestTimeoutSeconds = max(0.1, requestTimeoutSeconds)
+        self.maxRetryCount = max(0, maxRetryCount)
+        self.successfulCheckCount = max(0, successfulCheckCount)
+        self.failedCheckCount = max(0, failedCheckCount)
+        self.averageResponseTimeMilliseconds = averageResponseTimeMilliseconds
+    }
+
+    public var healthStatus: SourceHealthStatus {
+        guard isEnabled else { return .disabled }
+
+        switch authenticationStatus {
+        case .unauthenticated, .invalid:
+            return .needsAuthentication
+        case .authenticated, .notRequired:
+            break
+        }
+
+        if let errorState {
+            return errorState.isRecoverable ? .degraded : .unavailable
+        }
+
+        return .healthy
+    }
+
+    public var sourceStatus: SourceStatus {
+        guard isEnabled else { return .disabled }
+
+        switch authenticationStatus {
+        case .unauthenticated, .invalid:
+            return .authRequired
+        case .authenticated, .notRequired:
+            break
+        }
+
+        if errorState != nil {
+            if errorState?.message.localizedCaseInsensitiveContains("too long") == true {
+                return .slow
+            }
+            if let averageResponseTimeMilliseconds,
+               averageResponseTimeMilliseconds > requestTimeoutSeconds * 1_000 * 0.8 {
+                return .slow
+            }
+            return .error
+        }
+
+        if let averageResponseTimeMilliseconds,
+           averageResponseTimeMilliseconds > requestTimeoutSeconds * 1_000 * 0.8 {
+            return .slow
+        }
+
+        return .online
+    }
+
+    public var successRate: Double {
+        let total = successfulCheckCount + failedCheckCount
+        guard total > 0 else { return 0 }
+        return Double(successfulCheckCount) / Double(total)
     }
 }
 
@@ -112,6 +195,7 @@ public enum SourceProviderError: LocalizedError, Equatable {
     case authenticationRequired(sourceId: String)
     case releaseNotFound(sourceId: String, releaseId: String)
     case providerUnavailable(sourceId: String, reason: String)
+    case timedOut(sourceId: String, seconds: Double)
 
     public var errorDescription: String? {
         switch self {
@@ -123,7 +207,62 @@ public enum SourceProviderError: LocalizedError, Equatable {
             "Release \(releaseId) was not found in source \(sourceId)."
         case .providerUnavailable(let sourceId, let reason):
             "Source \(sourceId) is unavailable: \(reason)"
+        case .timedOut(let sourceId, let seconds):
+            "Source \(sourceId) timed out after \(seconds) seconds."
         }
+    }
+}
+
+private extension SourceSettings {
+    enum CodingKeys: String, CodingKey {
+        case sourceId
+        case isEnabled
+        case authenticationStatus
+        case lastSyncAt
+        case lastCheckedAt
+        case errorState
+        case credentialKeychainID
+        case requestTimeoutSeconds
+        case maxRetryCount
+        case successfulCheckCount
+        case failedCheckCount
+        case averageResponseTimeMilliseconds
+    }
+}
+
+public extension SourceSettings {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sourceId: try container.decode(String.self, forKey: .sourceId),
+            isEnabled: try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true,
+            authenticationStatus: try container.decodeIfPresent(SourceAuthenticationStatus.self, forKey: .authenticationStatus) ?? .notRequired,
+            lastSyncAt: try container.decodeIfPresent(Date.self, forKey: .lastSyncAt),
+            lastCheckedAt: try container.decodeIfPresent(Date.self, forKey: .lastCheckedAt),
+            errorState: try container.decodeIfPresent(SourceErrorState.self, forKey: .errorState),
+            credentialKeychainID: try container.decodeIfPresent(String.self, forKey: .credentialKeychainID),
+            requestTimeoutSeconds: try container.decodeIfPresent(Double.self, forKey: .requestTimeoutSeconds) ?? 8,
+            maxRetryCount: try container.decodeIfPresent(Int.self, forKey: .maxRetryCount) ?? 1,
+            successfulCheckCount: try container.decodeIfPresent(Int.self, forKey: .successfulCheckCount) ?? 0,
+            failedCheckCount: try container.decodeIfPresent(Int.self, forKey: .failedCheckCount) ?? 0,
+            averageResponseTimeMilliseconds: try container.decodeIfPresent(Double.self, forKey: .averageResponseTimeMilliseconds)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sourceId, forKey: .sourceId)
+        try container.encode(isEnabled, forKey: .isEnabled)
+        try container.encode(authenticationStatus, forKey: .authenticationStatus)
+        try container.encodeIfPresent(lastSyncAt, forKey: .lastSyncAt)
+        try container.encodeIfPresent(lastCheckedAt, forKey: .lastCheckedAt)
+        try container.encodeIfPresent(errorState, forKey: .errorState)
+        try container.encodeIfPresent(credentialKeychainID, forKey: .credentialKeychainID)
+        try container.encode(requestTimeoutSeconds, forKey: .requestTimeoutSeconds)
+        try container.encode(maxRetryCount, forKey: .maxRetryCount)
+        try container.encode(successfulCheckCount, forKey: .successfulCheckCount)
+        try container.encode(failedCheckCount, forKey: .failedCheckCount)
+        try container.encodeIfPresent(averageResponseTimeMilliseconds, forKey: .averageResponseTimeMilliseconds)
     }
 }
 

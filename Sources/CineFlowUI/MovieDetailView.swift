@@ -16,12 +16,14 @@ public struct MovieDetailView: View {
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         detailProvider: (any MovieDetailProviderProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
+        settingsRepository: (any SettingsRepositoryProtocol)? = nil,
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         _viewModel = StateObject(wrappedValue: MovieDetailViewModel(
             mediaID: mediaID,
             provider: detailProvider ?? MockMovieDetailProvider(),
             libraryRepository: libraryRepository,
+            settingsRepository: settingsRepository,
             userMediaSourceRepository: userMediaSourceRepository,
             diagnosticsService: diagnosticsService
         ))
@@ -29,15 +31,7 @@ public struct MovieDetailView: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                content
-            }
-            .padding(.horizontal, 30)
-            .padding(.top, 24)
-            .padding(.bottom, 46)
-        }
-        .scrollIndicators(.hidden)
+        content
         .background(CFColors.clear)
         .task {
             if viewModel.state == .loading {
@@ -52,17 +46,181 @@ public struct MovieDetailView: View {
         case .loading:
             MovieDetailLoadingView()
         case .empty:
-            EmptyState(title: t(.detailEmptyTitle), message: t(.detailEmptyMessage), systemImage: "film")
+            EmptyState(
+                title: t(.detailEmptyTitle),
+                message: t(.detailEmptyMessage),
+                systemImage: "film",
+                actionTitle: t(.detailEmptyAction),
+                actionSystemImage: "magnifyingglass"
+            ) {
+                navigationCoordinator.focusSearchField()
+            }
                 .frame(maxWidth: .infinity, minHeight: 520)
-        case .failed(let message):
-            ErrorState(title: t(.detailErrorTitle), message: message)
+        case .failed:
+            ErrorState(
+                title: t(.detailErrorTitle),
+                message: t(.detailErrorMessage),
+                recoverySuggestion: t(.detailErrorRecovery),
+                actionTitle: t(.detailEmptyAction)
+            ) {
+                navigationCoordinator.focusSearchField()
+            }
         case .loaded:
             if let movie = viewModel.movie {
-                hero(movie)
-                tabs
-                tabContent
+                cinematicMovie(movie)
             }
         }
+    }
+
+    private func cinematicMovie(_ movie: MovieDetail) -> some View {
+        GeometryReader { proxy in
+            let railWidth = max(360, min(430, proxy.size.width * 0.28))
+            ZStack(alignment: .bottomLeading) {
+                MovieBackdrop(accentIndex: movie.backdropAccentIndex, title: movie.title, backdropURL: movie.backdropURL)
+                    .ignoresSafeArea()
+
+                LinearGradient(
+                    colors: [
+                        CFColors.backgroundPrimary.opacity(0.86),
+                        CFColors.backgroundPrimary.opacity(0.50),
+                        CFColors.backgroundPrimary.opacity(0.18)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .ignoresSafeArea()
+
+                LinearGradient(
+                    colors: [CFColors.clear, CFColors.backgroundPrimary.opacity(0.78)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                HStack(alignment: .top, spacing: CFSpacing.lg) {
+                    movieMetadataPanel(movie, compact: proxy.size.width < 1180)
+                        .padding(.leading, CFSpacing.xxl)
+                        .padding(.top, CFSpacing.xxl + CFSpacing.md)
+                        .padding(.bottom, 116)
+
+                    Spacer(minLength: CFSpacing.lg)
+
+                    SourceRail(
+                        releases: viewModel.releases,
+                        copyTitle: t(.detailCopyMagnet),
+                        playTitle: t(.detailWatch),
+                        seedersHelp: t(.tooltipSeeders),
+                        rankingHelp: t(.tooltipRankingScore),
+                        advancedTitle: t(.releaseExplanationAdvanced),
+                        language: selectedLanguage,
+                        sourcesTitle: t(.detailSourcesTitle),
+                        sourcesSubtitle: sourceRailSubtitle(count: viewModel.releases.count),
+                        sourcesEmptyMessage: t(.sourcesEmptyMessage),
+                        onPlay: { release in
+                            playManualMovieRelease(release, movieID: movie.id)
+                        },
+                        onCopy: { release in
+                            viewModel.copyMagnet(release)
+                        }
+                    )
+                    .frame(width: railWidth)
+                    .padding(.trailing, CFSpacing.xl)
+                    .padding(.top, CFSpacing.xxl + CFSpacing.xs)
+                    .padding(.bottom, CFSpacing.xl)
+                }
+
+                movieActionDock(movie)
+                    .frame(maxWidth: max(420, proxy.size.width - railWidth - 132), alignment: .leading)
+                    .padding(.leading, CFSpacing.xxl)
+                    .padding(.bottom, CFSpacing.xl)
+            }
+        }
+        .frame(minHeight: 720)
+    }
+
+    private func movieMetadataPanel(_ movie: MovieDetail, compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(movie.title)
+                    .font(compact ? .system(size: 48, weight: .bold, design: .rounded) : CFTypography.heroTitle)
+                    .foregroundStyle(CFColors.textPrimary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+
+                HStack(spacing: 26) {
+                    Text(movie.runtime)
+                    Text(String(movie.year))
+                    Text(movie.imdbRating)
+                    IMDbBadge()
+                }
+                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .foregroundStyle(CFColors.textPrimary)
+            }
+
+            metadataSection(title: "ЖАНРЫ", values: movie.genres)
+            metadataSection(title: "АКТЁРЫ", values: viewModel.cast.prefix(3).map(\.name))
+
+            VStack(alignment: .leading, spacing: 9) {
+                Text("ОПИСАНИЕ")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                Text(movie.overview)
+                    .font(CFTypography.body)
+                    .foregroundStyle(CFColors.textPrimary.opacity(0.92))
+                    .lineSpacing(5)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: compact ? 620 : 760, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: 820, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func metadataSection<T: Sequence>(title: String, values: T) -> some View where T.Element == String {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textMuted)
+            HStack(spacing: 10) {
+                ForEach(Array(values), id: \.self) { value in
+                    Text(value)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textPrimary)
+                        .padding(.horizontal, 16)
+                        .frame(height: 32)
+                        .background(Capsule().fill(CFColors.dockFill))
+                }
+            }
+        }
+    }
+
+    private func movieActionDock(_ movie: MovieDetail) -> some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: CFSpacing.sm) {
+                DockButton(title: "Трейлер", systemImage: "movieclapper") {
+                    viewModel.selectedTab = .trailers
+                }
+                DockIconButton(systemImage: "folder.badge.plus", title: viewModel.isInLibrary ? "В библиотеке" : "Добавить в библиотеку") {
+                    viewModel.addToLibrary()
+                }
+                DockIconButton(systemImage: viewModel.isWatched ? "eye.fill" : "eye", title: "Отметить просмотренным") {
+                    viewModel.markWatched()
+                }
+                DockIconButton(systemImage: "hand.thumbsup", title: "Оценить") {
+                    viewModel.setUserRating(8)
+                }
+                DockIconButton(systemImage: viewModel.isFavorite ? "heart.fill" : "heart", title: "Избранное") {
+                    viewModel.toggleFavorite()
+                }
+                DockIconButton(systemImage: "play.fill", title: t(.detailWatchBest)) {
+                    playBestMovie(movie)
+                }
+                DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(movie.title, forType: .string)
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
     }
 
     private func hero(_ movie: MovieDetail) -> some View {
@@ -84,9 +242,15 @@ public struct MovieDetailView: View {
                         releases: viewModel.releases,
                         copyTitle: t(.detailCopyMagnet),
                         playTitle: t(.detailWatch),
+                        seedersHelp: t(.tooltipSeeders),
+                        rankingHelp: t(.tooltipRankingScore),
+                        advancedTitle: t(.releaseExplanationAdvanced),
+                        language: selectedLanguage,
+                        sourcesTitle: t(.detailSourcesTitle),
+                        sourcesSubtitle: sourceRailSubtitle(count: viewModel.releases.count),
+                        sourcesEmptyMessage: t(.sourcesEmptyMessage),
                         onPlay: { release in
-                            viewModel.play(release)
-                            navigationCoordinator.navigate(to: .player(mediaID: movie.id, release: release))
+                            playManualMovieRelease(release, movieID: movie.id)
                         },
                         onCopy: { release in
                             viewModel.copyMagnet(release)
@@ -94,7 +258,7 @@ public struct MovieDetailView: View {
                     )
                     .frame(width: proxy.size.width < 1100 ? 330 : 390)
                 }
-                .padding(30)
+                .padding(CFSpacing.xl)
             }
             .clipShape(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
             .overlay(
@@ -177,14 +341,17 @@ public struct MovieDetailView: View {
                                 .frame(maxWidth: 420)
                             SecondaryButton(t(.detailContinue), systemImage: "play.fill") {
                                 viewModel.continueWatching()
-                                playMovie(movie)
+                                playBestMovie(movie)
                             }
                         }
                     }
 
             HStack(spacing: CFSpacing.md) {
-                PrimaryButton(t(.detailWatch), systemImage: "play.fill") {
-                    playMovie(movie)
+                PrimaryButton(t(.detailWatchBest), systemImage: "play.fill") {
+                    playBestMovie(movie)
+                }
+                SecondaryButton(t(.detailChooseRelease), systemImage: "list.bullet.rectangle") {
+                    viewModel.selectedTab = .releases
                 }
                 SecondaryButton(t(.detailLibrary), systemImage: "plus") {
                     viewModel.addToLibrary()
@@ -200,7 +367,29 @@ public struct MovieDetailView: View {
         .frame(maxWidth: 820, alignment: .leading)
     }
 
-    private func playMovie(_ movie: MovieDetail) {
+    private func playBestMovie(_ movie: MovieDetail) {
+        if let release = viewModel.playBestRelease() {
+            navigationCoordinator.navigate(to: .player(
+                mediaID: movie.id,
+                release: release,
+                fallbackReleases: viewModel.releases.map(\.release)
+            ))
+            return
+        }
+
+        playLocalMovie(movie)
+    }
+
+    private func playManualMovieRelease(_ release: TorrentRelease, movieID: String) {
+        viewModel.playManualRelease(release)
+        navigationCoordinator.navigate(to: .player(
+            mediaID: movieID,
+            release: release,
+            fallbackReleases: viewModel.releases.map(\.release)
+        ))
+    }
+
+    private func playLocalMovie(_ movie: MovieDetail) {
         if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
             viewModel.selectUserSource(source)
             navigationCoordinator.navigate(to: .player(mediaID: movie.id, sourceID: source.id))
@@ -284,10 +473,13 @@ public struct MovieDetailView: View {
                         ),
                         copyTitle: t(.detailCopyMagnet),
                         playTitle: t(.detailWatch),
+                        seedersHelp: t(.tooltipSeeders),
+                        rankingHelp: t(.tooltipRankingScore),
+                        advancedTitle: t(.releaseExplanationAdvanced),
+                        language: selectedLanguage,
                         onPlay: {
-                            viewModel.play(ranked.release)
                             if let movieID = viewModel.movie?.id {
-                                navigationCoordinator.navigate(to: .player(mediaID: movieID, release: ranked.release))
+                                playManualMovieRelease(ranked.release, movieID: movieID)
                             }
                         },
                         onCopy: {
@@ -313,7 +505,7 @@ public struct MovieDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
                         RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                            .fill(CFColors.elevatedFill)
+                            .fill(CFColors.panelFill)
                             .overlay(
                                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                                     .stroke(CFColors.separator, lineWidth: CFSeparators.width)
@@ -345,6 +537,10 @@ public struct MovieDetailView: View {
     private func t(_ key: L10nKey) -> String {
         L10n.string(key, language: selectedLanguage)
     }
+
+    private func sourceRailSubtitle(count: Int) -> String {
+        count == 0 ? t(.detailSourcesEmptySubtitle) : L10n.format(.detailSourcesCountFormat, language: selectedLanguage, count)
+    }
 }
 
 struct DetailTabButton: View {
@@ -361,7 +557,7 @@ struct DetailTabButton: View {
                 .frame(height: 34)
                 .background(
                     Capsule()
-                        .fill(isSelected ? CFColors.activeFill : CFColors.elevatedFill)
+                        .fill(isSelected ? CFColors.activeFill : CFColors.panelFill)
                         .overlay(Capsule().stroke(isSelected ? CFColors.focusRing.opacity(0.52) : CFColors.separator, lineWidth: CFSeparators.width))
                 )
                 .overlay(alignment: .bottom) {
@@ -374,6 +570,9 @@ struct DetailTabButton: View {
                 }
         }
         .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .cfFocusRing(cornerRadius: CFRadius.pill)
     }
 }
@@ -421,6 +620,13 @@ private struct SourceRail: View {
     let releases: [RankedRelease]
     let copyTitle: String
     let playTitle: String
+    let seedersHelp: String
+    let rankingHelp: String
+    let advancedTitle: String
+    let language: AppLanguage
+    let sourcesTitle: String
+    let sourcesSubtitle: String
+    let sourcesEmptyMessage: String
     let onPlay: (TorrentRelease) -> Void
     let onCopy: (TorrentRelease) -> Void
 
@@ -428,10 +634,10 @@ private struct SourceRail: View {
         VStack(alignment: .leading, spacing: CFSpacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Sources")
+                    Text(sourcesTitle)
                         .font(CFTypography.bodyEmphasis)
                         .foregroundStyle(CFColors.textPrimary)
-                    Text(releases.isEmpty ? "No active sources" : "\(releases.count) ranked releases")
+                    Text(sourcesSubtitle)
                         .font(CFTypography.caption)
                         .foregroundStyle(CFColors.textMuted)
                 }
@@ -448,7 +654,7 @@ private struct SourceRail: View {
                     Image(systemName: "antenna.radiowaves.left.and.right.slash")
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(CFColors.textMuted)
-                    Text("Enable Torrentio in Settings or attach a local file.")
+                    Text(sourcesEmptyMessage)
                         .font(CFTypography.caption)
                         .foregroundStyle(CFColors.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -462,6 +668,10 @@ private struct SourceRail: View {
                                 ranked: ranked,
                                 playTitle: playTitle,
                                 copyTitle: copyTitle,
+                                seedersHelp: seedersHelp,
+                                rankingHelp: rankingHelp,
+                                advancedTitle: advancedTitle,
+                                language: language,
                                 onPlay: { onPlay(ranked.release) },
                                 onCopy: { onCopy(ranked.release) }
                             )
@@ -472,16 +682,109 @@ private struct SourceRail: View {
             }
         }
         .padding(CFSpacing.lg)
-        .frame(maxHeight: 380)
-        .background(
-            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.backgroundPrimary.opacity(0.78))
-                .overlay(
-                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                )
+        .frame(maxHeight: .infinity)
+        .cfPanelBackground(fill: CFColors.railFill, shadow: .panel)
+    }
+}
+
+struct IMDbBadge: View {
+    var body: some View {
+        Text("IMDb")
+            .font(.system(size: 11, weight: .black, design: .rounded))
+            .foregroundStyle(.black)
+            .padding(.horizontal, 5)
+            .frame(height: 18)
+            .background(RoundedRectangle(cornerRadius: CFRadius.badge, style: .continuous).fill(Color.yellow))
+    }
+}
+
+struct DockButton: View {
+    let title: String
+    let systemImage: String
+    let action: () -> Void
+
+    @Environment(\.cfReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: CFSpacing.sm) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 17, weight: .semibold))
+                Text(title)
+                    .lineLimit(1)
+            }
+            .font(CFTypography.callout)
+            .foregroundStyle(CFColors.textPrimary)
+            .padding(.horizontal, CFSpacing.lg)
+            .frame(height: 52)
+            .background(
+                Capsule()
+                    .fill(isHovering ? CFColors.dockHoverFill : CFColors.dockFill)
+                    .overlay(Capsule().stroke(isHovering ? CFColors.focusRing.opacity(0.48) : CFColors.separatorSubtle, lineWidth: CFSeparators.width))
+            )
+            .scaleEffect(scaleValue)
+            .cfAnimation(CFMotion.spring, value: isHovering, reduceMotion: reduceMotion)
+            .cfAnimation(CFMotion.quick, value: isPressed, reduceMotion: reduceMotion)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .onHover { isHovering = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
         )
-        .cfShadow(.elevated)
+        .cfFocusRing(cornerRadius: CFRadius.pill)
+    }
+
+    private var scaleValue: CGFloat {
+        if reduceMotion { return 1 }
+        return isPressed ? CFMotion.activeScale : (isHovering ? CFMotion.hoverScale : 1)
+    }
+}
+
+struct DockIconButton: View {
+    let systemImage: String
+    let title: String
+    let action: () -> Void
+
+    @Environment(\.cfReduceMotion) private var reduceMotion
+    @State private var isHovering = false
+    @State private var isPressed = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(CFColors.textPrimary)
+                .frame(width: 52, height: 52)
+                .background(
+                    Capsule()
+                        .fill(isHovering ? CFColors.dockHoverFill : CFColors.dockFill)
+                        .overlay(Capsule().stroke(isHovering ? CFColors.focusRing.opacity(0.48) : CFColors.separatorSubtle, lineWidth: CFSeparators.width))
+                )
+                .scaleEffect(scaleValue)
+                .cfAnimation(CFMotion.spring, value: isHovering, reduceMotion: reduceMotion)
+                .cfAnimation(CFMotion.quick, value: isPressed, reduceMotion: reduceMotion)
+        }
+        .buttonStyle(.plain)
+        .help(title)
+        .accessibilityLabel(title)
+        .onHover { isHovering = $0 }
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
+        .cfFocusRing(cornerRadius: CFRadius.pill)
+    }
+
+    private var scaleValue: CGFloat {
+        if reduceMotion { return 1 }
+        return isPressed ? CFMotion.activeScale : (isHovering ? CFMotion.hoverScale : 1)
     }
 }
 
@@ -489,6 +792,10 @@ private struct SourceRailRow: View {
     let ranked: RankedRelease
     let playTitle: String
     let copyTitle: String
+    let seedersHelp: String
+    let rankingHelp: String
+    let advancedTitle: String
+    let language: AppLanguage
     let onPlay: () -> Void
     let onCopy: () -> Void
 
@@ -514,8 +821,11 @@ private struct SourceRailRow: View {
                     .foregroundStyle(CFColors.textPrimary)
                     .lineLimit(1)
 
+                ReleaseExplanationBadges(ranked: ranked, language: language)
+
                 HStack(spacing: 6) {
                     Label("\(ranked.release.seeders)", systemImage: "person.fill")
+                        .help(seedersHelp)
                     Label(ranked.release.humanReadableSize, systemImage: "externaldrive.fill")
                 }
                 .font(CFTypography.caption)
@@ -526,6 +836,8 @@ private struct SourceRailRow: View {
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
                     .lineLimit(1)
+
+                ReleaseExplanationSummary(ranked: ranked, language: language)
             }
 
             Spacer(minLength: 0)
@@ -543,17 +855,24 @@ private struct SourceRailRow: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous)
                 .fill(isHovering ? CFColors.hoverFill : CFColors.surfaceOverlay.opacity(0.56))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous)
                         .stroke(isHovering ? CFColors.focusRing.opacity(0.34) : CFColors.separator, lineWidth: CFSeparators.width)
                 )
         )
-        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous))
         .onTapGesture(perform: onPlay)
         .onHover { isHovering = $0 }
-        .help(playTitle)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(playTitle)
+        .help(localizedReleaseTooltip(for: ranked, language: language, rankingHelp: rankingHelp))
+    }
+
+    private var accessibilityLabel: String {
+        "\(ranked.release.title), \(ranked.release.sourceName), \(sourceSubtitle), \(ranked.release.humanReadableSize), \(ranked.release.seeders) seeders"
     }
 
     private var sourceSubtitle: String {
@@ -579,6 +898,10 @@ private struct MovieReleaseRow: View {
     let languagesText: String
     let copyTitle: String
     let playTitle: String
+    let seedersHelp: String
+    let rankingHelp: String
+    let advancedTitle: String
+    let language: AppLanguage
     let onPlay: () -> Void
     let onCopy: () -> Void
 
@@ -593,12 +916,14 @@ private struct MovieReleaseRow: View {
                     .lineLimit(1)
 
                 HStack(spacing: CFSpacing.sm) {
+                    ReleaseExplanationBadges(ranked: ranked, language: language)
                     QualityBadge(ranked.release.qualityLabel)
                     if ranked.release.hdr != .none, ranked.release.hdr != .unknown {
                         CFBadge(ranked.release.hdr.rawValue, tone: .quality)
                     }
                     CFBadge(ranked.release.codec.rawValue, tone: .source)
                     SeedersBadge(ranked.release.seeders)
+                        .help(seedersHelp)
                 SourceBadge(ranked.release.sourceName)
                     CFBadge(ranked.release.humanReadableSize, tone: .source)
                 }
@@ -607,6 +932,9 @@ private struct MovieReleaseRow: View {
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textSecondary)
                     .lineLimit(1)
+
+                ReleaseExplanationSummary(ranked: ranked, language: language)
+                ReleaseAdvancedDetails(ranked: ranked, title: advancedTitle, language: language)
             }
 
             Spacer()
@@ -620,7 +948,7 @@ private struct MovieReleaseRow: View {
         .padding(CFSpacing.lg)
         .background(
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                    .fill(isHovering ? CFColors.hoverFill : CFColors.elevatedFill)
+                    .fill(isHovering ? CFColors.hoverFill : CFColors.panelFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                             .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
@@ -636,8 +964,15 @@ private struct MovieReleaseRow: View {
             }
         }
         .onHover { isHovering = $0 }
-        .help(ranked.explanation)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(playTitle)
+        .help(localizedReleaseTooltip(for: ranked, language: language, rankingHelp: rankingHelp))
         .cfFocusRing(cornerRadius: CFRadius.panel)
+    }
+
+    private var accessibilityLabel: String {
+        "\(ranked.release.title), \(ranked.release.sourceName), \(ranked.release.qualityLabel), \(ranked.release.humanReadableSize), \(ranked.release.seeders) seeders"
     }
 }
 

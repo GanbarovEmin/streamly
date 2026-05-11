@@ -1,4 +1,5 @@
 import AppKit
+import CineFlowLocalization
 import SwiftUI
 
 public typealias CFImageDataLoader = @Sendable (URL) async throws -> Data
@@ -41,6 +42,7 @@ public struct PosterCard: View {
     private let imageDataLoader: CFImageDataLoader?
     private let action: () -> Void
 
+    @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     public init(model: CFMediaCardModel, action: @escaping () -> Void = {}, imageDataLoader: CFImageDataLoader? = nil) {
@@ -104,10 +106,14 @@ public struct PosterCard: View {
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
             }
-            .scaleEffect(isHovering ? 1.012 : 1)
-            .animation(CFMotion.quick, value: isHovering)
+            .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.012 : 1))
+            .cfAnimation(CFMotion.quick, value: isHovering, reduceMotion: reduceMotion)
         }
         .buttonStyle(.plain)
+        .help(accessibilityLabel)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(L10n.string(.accessibilityCardOpenDetails))
         .onHover { isHovering = $0 }
         .contextMenu { cardContextMenu }
         .cfFocusRing()
@@ -139,6 +145,13 @@ public struct PosterCard: View {
             .cfShadow(.none)
     }
 
+    private var accessibilityLabel: String {
+        [model.title, model.metadata, model.badge].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: ", ")
+    }
+
     @ViewBuilder
     private var cardContextMenu: some View {
         Button("Watch", systemImage: "play.fill", action: action)
@@ -152,6 +165,7 @@ public struct LandscapeCard: View {
     private let imageDataLoader: CFImageDataLoader?
     private let action: () -> Void
 
+    @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     public init(model: CFMediaCardModel, action: @escaping () -> Void = {}, imageDataLoader: CFImageDataLoader? = nil) {
@@ -221,13 +235,24 @@ public struct LandscapeCard: View {
                             .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
                     )
             )
-            .scaleEffect(isHovering ? 1.008 : 1)
-            .animation(CFMotion.quick, value: isHovering)
+            .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.008 : 1))
+            .cfAnimation(CFMotion.quick, value: isHovering, reduceMotion: reduceMotion)
         }
         .buttonStyle(.plain)
+        .help(accessibilityLabel)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(L10n.string(.accessibilityCardOpenDetails))
         .onHover { isHovering = $0 }
         .contextMenu { cardContextMenu }
         .cfFocusRing(cornerRadius: CFRadius.panel)
+    }
+
+    private var accessibilityLabel: String {
+        [model.title, model.metadata, model.badge].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -292,6 +317,9 @@ public struct MediaCarousel: View {
                 .padding(.horizontal, 1)
             }
             .scrollIndicators(.hidden)
+            .focusable(true)
+            .accessibilityLabel(title)
+            .accessibilityHint(L10n.string(.accessibilityCarouselHint))
             .task(id: prefetchKey) {
                 await prefetchArtwork()
             }
@@ -326,6 +354,7 @@ public struct CFCachedAsyncImage: View {
     private static let fallbackMemoryCache = NSCache<NSURL, NSData>()
 
     @State private var phase: Phase = .idle
+    @Environment(\.cfReduceMotion) private var reduceMotion
 
     public init(url: URL?, contentMode: ContentMode = .fill, imageDataLoader: CFImageDataLoader? = nil) {
         self.url = url
@@ -348,7 +377,7 @@ public struct CFCachedAsyncImage: View {
             }
         }
         .clipped()
-        .animation(CFMotion.standard, value: phase)
+        .cfAnimation(CFMotion.standard, value: phase, reduceMotion: reduceMotion)
         .task(id: url) {
             await load()
         }
@@ -368,7 +397,7 @@ public struct CFCachedAsyncImage: View {
                     endPoint: .trailing
                 )
             }
-            .accessibilityLabel("Loading image")
+            .accessibilityLabel(L10n.string(.accessibilityImageLoading))
     }
 
     private var errorFallback: some View {
@@ -379,7 +408,7 @@ public struct CFCachedAsyncImage: View {
                     .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(CFColors.textMuted)
             }
-            .accessibilityLabel("Image unavailable")
+            .accessibilityLabel(L10n.string(.accessibilityImageUnavailable))
     }
 
     @MainActor

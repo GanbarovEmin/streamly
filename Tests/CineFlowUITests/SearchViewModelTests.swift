@@ -37,6 +37,16 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSearchTorrentRowsExposeCompactReleaseHealth() async {
+        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+
+        await viewModel.searchNow(query: "matrix")
+
+        XCTAssertEqual(viewModel.results.torrentReleases.map(\.releaseHealth), [.excellent, .excellent, .excellent])
+        XCTAssertEqual(viewModel.results.torrentReleases.map(\.releaseHealthLabel), ["Excellent", "Excellent", "Excellent"])
+    }
+
+    @MainActor
     func testFiltersConstrainTypeQualitySourceYearAndLanguages() async {
         let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
 

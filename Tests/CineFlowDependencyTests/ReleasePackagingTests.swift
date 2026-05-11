@@ -28,6 +28,8 @@ final class ReleasePackagingTests: XCTestCase {
         XCTAssertEqual(plist["CFBundleExecutable"] as? String, "Streamly")
         XCTAssertEqual(plist["CFBundleIdentifier"] as? String, "com.streamly.app")
         XCTAssertEqual(plist["SUFeedURL"] as? String, "https://ganbarovemin.github.io/streamly/appcast.xml")
+        XCTAssertNotEqual(plist["SUPublicEDKey"] as? String, "REPLACE_WITH_SPARKLE_EDDSA_PUBLIC_KEY")
+        XCTAssertFalse((plist["SUPublicEDKey"] as? String)?.isEmpty ?? true)
     }
 
     func testSwiftPackageExposesStreamlyExecutableProduct() throws {
@@ -112,5 +114,33 @@ final class ReleasePackagingTests: XCTestCase {
         XCTAssertTrue(source.contains("shouldSeedDevelopmentData"))
         XCTAssertTrue(source.contains("subtitleService: SubtitleService()"))
         XCTAssertFalse(source.contains("subtitleService: MockSubtitleService()"))
+    }
+
+    func testProductionAppWiresSparkleUpdater() throws {
+        let appURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/CineFlowApp/CineFlowApp.swift")
+        let source = try String(contentsOf: appURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("private let updateService: SparkleUpdateService"))
+        XCTAssertTrue(source.contains("SparkleUpdateService(startingUpdater: true)"))
+        XCTAssertFalse(source.contains("let updateService = GitHubReleaseUpdateService()"))
+    }
+
+    func testReleaseWorkflowPublishesSparkleAppcast() throws {
+        let workflowURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".github/workflows/release.yml")
+        let workflow = try String(contentsOf: workflowURL, encoding: .utf8)
+
+        XCTAssertTrue(workflow.contains("generate_appcast"))
+        XCTAssertTrue(workflow.contains("appcast.xml"))
+        XCTAssertTrue(workflow.contains("actions/deploy-pages"))
+        XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY"))
+        XCTAssertTrue(workflow.contains("--ed-key-file"))
     }
 }

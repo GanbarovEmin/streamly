@@ -13,7 +13,13 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
     case history
     case settings
     case mediaDetail(id: String)
-    case player(mediaID: String, sourceID: String? = nil, release: TorrentRelease? = nil)
+    case player(
+        mediaID: String,
+        sourceID: String? = nil,
+        release: TorrentRelease? = nil,
+        fallbackReleases: [TorrentRelease] = [],
+        nextEpisodePrompt: PlayerNextEpisodePrompt? = nil
+    )
     case settingsSection(id: String)
 
     public var id: String {
@@ -38,8 +44,8 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             "settings"
         case .mediaDetail(let id):
             "mediaDetail:\(id)"
-        case .player(let mediaID, let sourceID, let release):
-            "player:\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release")"
+        case .player(let mediaID, let sourceID, let release, let fallbackReleases, let nextEpisodePrompt):
+            "player:\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(nextEpisodePrompt?.title ?? "no-next")"
         case .settingsSection(let id):
             "settingsSection:\(id)"
         }

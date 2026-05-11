@@ -28,11 +28,24 @@ public struct EmptyState: View {
     private let title: String
     private let message: String
     private let systemImage: String
+    private let actionTitle: String?
+    private let actionSystemImage: String
+    private let action: (() -> Void)?
 
-    public init(title: String, message: String, systemImage: String = "tray") {
+    public init(
+        title: String,
+        message: String,
+        systemImage: String = "tray",
+        actionTitle: String? = nil,
+        actionSystemImage: String = "arrow.right",
+        action: (() -> Void)? = nil
+    ) {
         self.title = title
         self.message = message
         self.systemImage = systemImage
+        self.actionTitle = actionTitle
+        self.actionSystemImage = actionSystemImage
+        self.action = action
     }
 
     public var body: some View {
@@ -48,6 +61,11 @@ public struct EmptyState: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(CFColors.textSecondary)
                 .frame(maxWidth: 360)
+
+            if let actionTitle, let action {
+                SecondaryButton(actionTitle, systemImage: actionSystemImage, action: action)
+                    .padding(.top, CFSpacing.xs)
+            }
         }
         .padding(CFSpacing.xl)
     }
@@ -56,10 +74,22 @@ public struct EmptyState: View {
 public struct ErrorState: View {
     private let title: String
     private let message: String
+    private let recoverySuggestion: String?
+    private let actionTitle: String?
+    private let action: (() -> Void)?
 
-    public init(title: String, message: String) {
+    public init(
+        title: String,
+        message: String,
+        recoverySuggestion: String? = nil,
+        actionTitle: String? = nil,
+        action: (() -> Void)? = nil
+    ) {
         self.title = title
         self.message = message
+        self.recoverySuggestion = recoverySuggestion
+        self.actionTitle = actionTitle
+        self.action = action
     }
 
     public var body: some View {
@@ -74,6 +104,21 @@ public struct ErrorState: View {
                 Text(message)
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textSecondary)
+
+                if let recoverySuggestion, !recoverySuggestion.isEmpty {
+                    Text(recoverySuggestion)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
+            }
+
+            if let actionTitle, let action {
+                Spacer(minLength: CFSpacing.md)
+                Button(action: action) {
+                    Label(actionTitle, systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
             }
         }
         .padding(CFSpacing.md)

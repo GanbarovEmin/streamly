@@ -153,6 +153,12 @@ public actor MockTorrentEngine: TorrentEngineProtocol {
         sessions[sessionId] = record
     }
 
+    public func setBandwidthLimits(sessionId: String, _ limits: TorrentBandwidthLimits) async throws {
+        try updateStatus(sessionId: sessionId) { status in
+            status = status.replacing(bandwidthLimits: limits)
+        }
+    }
+
     public func getStreamingURL(sessionId: String) async throws -> URL {
         guard let record = sessions[sessionId] else {
             throw TorrentEngineError.sessionNotFound(sessionId)
@@ -182,17 +188,19 @@ public actor MockTorrentEngine: TorrentEngineProtocol {
         switch policy {
         case .all:
             removedSessionIds = Array(sessions.keys).sorted()
-        case .olderThan(let date):
+        case .olderThan(let date, let protecting):
             removedSessionIds = sessions.values
                 .filter { $0.session.createdAt < date }
+                .filter { !protecting.contains($0.session.id) }
                 .map(\.session.id)
                 .sorted()
-        case .exceedingCacheSize(let maxBytes):
+        case .exceedingCacheSize(let maxBytes, let protecting):
             let totalBytes = sessions.values.reduce(Int64(0)) { $0 + $1.sizeBytes }
             guard totalBytes > maxBytes else {
                 return TorrentCleanupResult(removedSessionIds: [], freedBytes: 0)
             }
             removedSessionIds = sessions.values
+                .filter { !protecting.contains($0.session.id) }
                 .sorted { $0.session.createdAt < $1.session.createdAt }
                 .map(\.session.id)
         }
@@ -206,6 +214,31 @@ public actor MockTorrentEngine: TorrentEngineProtocol {
         }
 
         return TorrentCleanupResult(removedSessionIds: removedSessionIds, freedBytes: freedBytes)
+    }
+
+    public func shutdown() async throws {
+        for sessionId in sessions.keys {
+            try? await stop(sessionId: sessionId)
+        }
+    }
+
+    public func markSessionCreatedAt(_ sessionId: String, _ date: Date) async throws {
+        guard var record = sessions[sessionId] else {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        record.session = TorrentSession(
+            id: record.session.id,
+            releaseId: record.session.releaseId,
+            sourceId: record.session.sourceId,
+            magnetURI: record.session.magnetURI,
+            torrentFileURL: record.session.torrentFileURL,
+            storageURL: record.session.storageURL,
+            selectedFileId: record.session.selectedFileId,
+            streamingURL: record.session.streamingURL,
+            isSequentialDownloadEnabled: record.session.isSequentialDownloadEnabled,
+            createdAt: date
+        )
+        sessions[sessionId] = record
     }
 
     private func createSession(
@@ -335,7 +368,8 @@ private extension TorrentStatus {
         selectedFileId: String? = nil,
         isSequentialDownloadEnabled: Bool? = nil,
         streamingURL: URL? = nil,
-        downloadSpeedBytesPerSecond: Int64? = nil
+        downloadSpeedBytesPerSecond: Int64? = nil,
+        bandwidthLimits: TorrentBandwidthLimits? = nil
     ) -> TorrentStatus {
         let updatedProgress: TorrentProgress
         if let downloadSpeedBytesPerSecond {
@@ -358,6 +392,7 @@ private extension TorrentStatus {
             selectedFileId: selectedFileId ?? self.selectedFileId,
             isSequentialDownloadEnabled: isSequentialDownloadEnabled ?? self.isSequentialDownloadEnabled,
             streamingURL: streamingURL ?? self.streamingURL,
+            bandwidthLimits: bandwidthLimits ?? self.bandwidthLimits,
             updatedAt: Date()
         )
     }

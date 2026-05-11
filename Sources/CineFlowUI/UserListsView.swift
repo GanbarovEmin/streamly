@@ -1,5 +1,6 @@
 import CineFlowCore
 import CineFlowDesignSystem
+import CineFlowLocalization
 import SwiftUI
 
 public struct UserListsView: View {
@@ -10,6 +11,7 @@ public struct UserListsView: View {
     @State private var renameName = ""
     @State private var renameDescription = ""
     @ObservedObject private var imagePipeline: CineFlowImagePipeline
+    @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
     public init(viewModel: UserListsViewModel, navigationCoordinator: NavigationCoordinator, imagePipeline: CineFlowImagePipeline) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -34,10 +36,10 @@ public struct UserListsView: View {
     private var listSidebar: some View {
         VStack(alignment: .leading, spacing: CFSpacing.lg) {
             VStack(alignment: .leading, spacing: CFSpacing.xs) {
-                Text("Списки")
+                Text(t(.listsTitle))
                     .font(CFTypography.largeTitle)
                     .foregroundStyle(CFColors.textPrimary)
-                Text("Собственные подборки для просмотра.")
+                Text(t(.listsSubtitle))
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textSecondary)
             }
@@ -82,11 +84,11 @@ public struct UserListsView: View {
 
     private var createControls: some View {
         VStack(alignment: .leading, spacing: CFSpacing.sm) {
-            TextField("Название списка", text: $newListName)
+            TextField(t(.listsCreateNamePlaceholder), text: $newListName)
                 .textFieldStyle(.roundedBorder)
-            TextField("Описание", text: $newListDescription)
+            TextField(t(.listsCreateDescriptionPlaceholder), text: $newListDescription)
                 .textFieldStyle(.roundedBorder)
-            SecondaryButton("Создать список", systemImage: "plus") {
+            SecondaryButton(t(.listsCreateAction), systemImage: "plus") {
                 let name = newListName
                 let description = newListDescription
                 Task {
@@ -104,12 +106,27 @@ public struct UserListsView: View {
         switch viewModel.state {
         case .loading:
             LoadingSkeleton(height: 420, cornerRadius: CFRadius.panel)
-                .padding(30)
-        case .failed(let message):
-            ErrorState(title: "Не удалось открыть списки", message: message)
-                .padding(30)
+                .padding(CFSpacing.xl)
+        case .failed:
+            ErrorState(
+                title: t(.listsErrorTitle),
+                message: t(.listsErrorMessage),
+                recoverySuggestion: t(.listsErrorRecovery),
+                actionTitle: t(.commonRetry)
+            ) {
+                Task { await viewModel.load() }
+            }
+                .padding(CFSpacing.xl)
         case .empty:
-            EmptyState(title: "Списков пока нет", message: "Создайте первый список для фильмов и сериалов.", systemImage: "list.bullet.rectangle")
+            EmptyState(
+                title: t(.listsEmptyTitle),
+                message: t(.listsEmptyMessage),
+                systemImage: "list.bullet.rectangle",
+                actionTitle: t(.listsEmptyAction),
+                actionSystemImage: "plus"
+            ) {
+                Task { await viewModel.createDefaultList() }
+            }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded:
             selectedListDetail
@@ -161,20 +178,21 @@ public struct UserListsView: View {
                         }
                     }
                     .padding(CFSpacing.xl)
-                    .background(
-                        RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                            .fill(CFColors.elevatedFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                                    .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                            )
-                    )
+                    .cfPanelBackground(fill: CFColors.panelFill)
 
                     if viewModel.visibleItems.isEmpty {
-                        EmptyState(title: "В списке пока пусто", message: "Добавьте фильмы или сериалы из detail screen, библиотеки или контекстного меню.", systemImage: "rectangle.stack.badge.plus")
+                        EmptyState(
+                            title: t(.listsSelectedEmptyTitle),
+                            message: t(.listsSelectedEmptyMessage),
+                            systemImage: "rectangle.stack.badge.plus",
+                            actionTitle: t(.listsSelectedEmptyAction),
+                            actionSystemImage: "magnifyingglass"
+                        ) {
+                            navigationCoordinator.focusSearchField()
+                        }
                             .frame(maxWidth: .infinity, minHeight: 340)
                     } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 18)], spacing: 18) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
                             ForEach(viewModel.visibleItems) { item in
                                 PosterCard(model: viewModel.cardModel(for: item)) {
                                     navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
@@ -197,7 +215,7 @@ public struct UserListsView: View {
                     }
                 }
             }
-            .padding(30)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
     }
@@ -207,6 +225,14 @@ public struct UserListsView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private var selectedLanguage: AppLanguage {
+        languageSettingsStore.selectedLanguage
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: selectedLanguage)
     }
 }
 
@@ -235,7 +261,7 @@ private struct UserListRow: View {
         .padding(CFSpacing.md)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                .fill(isSelected ? CFColors.activeFill : CFColors.elevatedFill)
+                .fill(isSelected ? CFColors.activeFill : CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                         .stroke(isSelected ? CFColors.focusRing : CFColors.separator, lineWidth: CFSeparators.width)

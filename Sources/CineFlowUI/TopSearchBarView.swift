@@ -27,12 +27,12 @@ public struct TopSearchBarView: View {
     }
 
     public var body: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: CFSpacing.md) {
             searchField
 
-            Spacer(minLength: 24)
+            Spacer(minLength: CFSpacing.lg)
 
-            HStack(spacing: 10) {
+            HStack(spacing: CFSpacing.sm) {
                 ForEach(controls) { control in
                     IconButton(
                         systemImage: control.systemImage,
@@ -41,10 +41,10 @@ public struct TopSearchBarView: View {
                 }
             }
         }
-        .padding(.leading, 30)
-        .padding(.trailing, 28)
-        .padding(.top, 18)
-        .padding(.bottom, 16)
+        .padding(.leading, CFSpacing.xl)
+        .padding(.trailing, CFSpacing.xl)
+        .padding(.top, CFSpacing.md)
+        .padding(.bottom, CFSpacing.md)
         .background(.ultraThinMaterial)
         .overlay(CFColors.backgroundPrimary.opacity(0.72))
         .overlay(alignment: .bottom) {
@@ -73,6 +73,8 @@ public struct TopSearchBarView: View {
                 .tint(CFColors.accentPrimary)
                 .focused($isSearchFocused)
                 .onSubmit(onSearchFocus)
+                .accessibilityLabel(L10n.string(.commandSearch, language: languageSettingsStore.selectedLanguage))
+                .accessibilityHint(L10n.string(.commandFocusSearch, language: languageSettingsStore.selectedLanguage))
         }
         .padding(.horizontal, 15)
         .frame(width: 440, height: 42)
@@ -94,6 +96,7 @@ public struct TopSearchBarView: View {
             }
         }
         .onTapGesture(perform: onSearchFocus)
+        .help(L10n.string(.searchPlaceholder, language: languageSettingsStore.selectedLanguage))
         .onChange(of: focusRequestID) { _ in
             isSearchFocused = true
         }

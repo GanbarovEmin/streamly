@@ -16,6 +16,8 @@ public struct CFShadowToken: Equatable, Sendable {
     public static let none = CFShadowToken(color: .clear, radius: 0, x: 0, y: 0)
     public static let hover = CFShadowToken(color: CFColors.accentSecondary.opacity(0.24), radius: 22, x: 0, y: 0)
     public static let elevated = CFShadowToken(color: CFColors.backgroundTertiary.opacity(0.42), radius: 34, x: 0, y: 18)
+    public static let panel = CFShadowToken(color: CFColors.backgroundPrimary.opacity(0.34), radius: 24, x: 0, y: 12)
+    public static let softGlow = CFShadowToken(color: CFColors.accentSecondary.opacity(0.18), radius: 28, x: 0, y: 0)
     public static let icon = CFShadowToken(color: CFColors.backgroundPrimary.opacity(0.35), radius: 8, x: 0, y: 4)
 }
 

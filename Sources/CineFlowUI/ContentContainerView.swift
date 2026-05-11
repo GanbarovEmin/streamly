@@ -94,6 +94,7 @@ public struct ContentContainerView: View {
                         torrentAggregator: sourceManager.map { TorrentSearchAggregator(sourceManager: $0) }
                     ),
                     userMediaSourceRepository: environment.userMediaSourceRepository,
+                    settingsRepository: environment.settingsRepository,
                     diagnosticsService: environment.diagnosticsService
                 )
             } else {
@@ -106,6 +107,7 @@ public struct ContentContainerView: View {
                         torrentAggregator: sourceManager.map { TorrentSearchAggregator(sourceManager: $0) }
                     ),
                     userMediaSourceRepository: environment.userMediaSourceRepository,
+                    settingsRepository: environment.settingsRepository,
                     diagnosticsService: environment.diagnosticsService
                 )
             }
@@ -121,9 +123,7 @@ public struct ContentContainerView: View {
 
                 contentBody
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 28)
-            .padding(.bottom, 44)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
         .background(CFColors.clear)
@@ -131,7 +131,7 @@ public struct ContentContainerView: View {
     }
 
     private var hero: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
             Text(t(route.titleKey).uppercased())
                 .font(CFTypography.overline)
                 .tracking(1.4)
@@ -162,7 +162,7 @@ public struct ContentContainerView: View {
                 }
             }
         }
-        .padding(30)
+        .padding(CFSpacing.xl)
         .frame(maxWidth: .infinity, minHeight: 318, alignment: .bottomLeading)
         .background(CFHeroSurface())
     }
@@ -177,27 +177,30 @@ public struct ContentContainerView: View {
         case .mediaDetail(let id):
             DeepLinkPlaceholderView(
                 title: t(.navigationMediaDetail),
-                subtitle: id,
+                subtitle: "Откройте экран детализации из поиска, библиотеки или домашней подборки.",
                 systemImage: "info.circle.fill",
                 actionTitle: t(.deepLinkOpenPlayer)
             ) {
                 navigationCoordinator.navigate(to: .player(mediaID: id))
             }
-        case .player(let mediaID, let sourceID, let release):
+        case .player(let mediaID, let sourceID, let release, let fallbackReleases, let nextEpisodePrompt):
             PlayerRouteView(
                 mediaID: mediaID,
                 sourceID: sourceID,
                 release: release,
+                fallbackReleases: fallbackReleases,
+                nextEpisodePrompt: nextEpisodePrompt,
                 environment: environment,
                 playbackService: viewModel.playbackService,
-                playbackProgressRecorder: playbackProgressRecorder
+                playbackProgressRecorder: playbackProgressRecorder,
+                language: selectedLanguage
             ) {
                 navigationCoordinator.goBack()
             }
-        case .settingsSection(let id):
+        case .settingsSection:
             DeepLinkPlaceholderView(
                 title: t(.navigationSettingsSection),
-                subtitle: id,
+                subtitle: "Расширенный раздел настроек.",
                 systemImage: "slider.horizontal.3",
                 actionTitle: t(.deepLinkBack)
             ) {
@@ -346,38 +349,59 @@ private struct PlayerRouteView: View {
     let mediaID: String
     let sourceID: String?
     let release: TorrentRelease?
+    let fallbackReleases: [TorrentRelease]
+    let nextEpisodePrompt: PlayerNextEpisodePrompt?
     let environment: AppEnvironment
     let playbackService: any PlaybackServiceProtocol
     let playbackProgressRecorder: PlaybackProgressRecorder?
+    let language: AppLanguage
     let onExit: () -> Void
 
     @State private var state: RouteState = .loading
+    @State private var rankingPreferences = RankingPreferences()
 
     var body: some View {
         Group {
             switch state {
             case .loading:
                 LoadingSkeleton(height: 420, cornerRadius: CFRadius.hero)
-                    .padding(30)
+                    .padding(CFSpacing.xl)
             case .missingSource:
                 EmptyState(
-                    title: "Choose a source",
-                    message: "Streamly does not include media files. Open the movie or series detail page and choose a local file you control.",
-                    systemImage: "play.slash"
+                    title: t(.playerMissingSourceTitle),
+                    message: t(.playerMissingSourceMessage),
+                    systemImage: "play.slash",
+                    actionTitle: t(.playerMissingSourceAction),
+                    actionSystemImage: "chevron.left",
+                    action: onExit
                 )
                 .frame(maxWidth: .infinity, minHeight: 520)
-            case .unsupportedSource(let title):
+            case .unsupportedSource:
                 ErrorState(
-                    title: "Source is not playable yet",
-                    message: "\(title) is saved, but torrent streaming requires the production libtorrent bridge. Local files are playable now."
+                    title: t(.playerUnsupportedSourceTitle),
+                    message: t(.playerUnsupportedSourceMessage),
+                    recoverySuggestion: t(.playerUnsupportedSourceRecovery),
+                    actionTitle: t(.playerMissingSourceAction),
+                    action: onExit
                 )
-                .padding(30)
-            case .torrentFailed(let message):
+                .padding(CFSpacing.xl)
+            case .torrentFailed(_, let suggestion):
                 ErrorState(
-                    title: "Torrent source is not ready",
-                    message: message
+                    title: t(.playerTorrentErrorTitle),
+                    message: t(.playerTorrentErrorMessage),
+                    recoverySuggestion: t(.playerTorrentErrorRecovery),
+                    actionTitle: suggestion?.nextBestRelease == nil ? t(.playerMissingSourceAction) : t(.playerFallbackTryNext),
+                    action: {
+                        if let release = suggestion?.nextBestRelease?.release {
+                            Task { await loadTorrentRelease(release) }
+                        } else {
+                            onExit()
+                        }
+                    }
                 )
-                .padding(30)
+                .padding(CFSpacing.xl)
+            case .chooseMediaFile(let session, let release, let options):
+                mediaFileSelectionView(session: session, release: release, options: options)
             case .ready(let source):
                 PlayerView(
                     viewModel: PlayerViewModel(
@@ -386,13 +410,19 @@ private struct PlayerRouteView: View {
                         subtitleService: environment.subtitleService,
                         diagnosticsService: environment.diagnosticsService,
                         progressRecorder: playbackProgressRecorder,
-                        progressRepository: environment.playbackProgressRepository
+                        progressRepository: environment.playbackProgressRepository,
+                        fallbackReleases: fallbackReleases,
+                        fallbackPreferences: rankingPreferences,
+                        fallbackHandler: { release in
+                            await loadTorrentRelease(release)
+                        },
+                        nextEpisodePrompt: nextEpisodePrompt
                     ),
                     onExit: onExit
                 )
             }
         }
-        .task(id: "\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release")") {
+        .task(id: "\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(nextEpisodePrompt?.title ?? "no-next")") {
             await load()
         }
     }
@@ -442,25 +472,39 @@ private struct PlayerRouteView: View {
     private func loadTorrentRelease(_ release: TorrentRelease) async {
         do {
             let session = try await environment.torrentEngine.startStreaming(release)
-            let files = try await environment.torrentEngine.getFileList(sessionId: session.id)
-            if session.selectedFileId == nil,
-               let mediaFile = selectedMediaFile(for: release, files: files) {
-                try await environment.torrentEngine.selectMediaFile(sessionId: session.id, fileId: mediaFile.id)
-            }
-            let streamingURL = try await environment.torrentEngine.getStreamingURL(sessionId: session.id)
-            state = .ready(
-                PlaybackMediaSource(
-                    id: mediaID,
-                    title: release.title,
-                    url: streamingURL,
-                    release: release,
-                    qualityLabel: release.qualityLabel,
-                    sourceName: release.sourceName
-                )
+            let appSettings = await environment.settingsRepository.appSettings
+            let subtitleLanguages = await environment.settingsRepository.subtitleLanguagePriority
+            rankingPreferences = appSettings.playback.rankingPreferences(
+                preferredSubtitleLanguages: subtitleLanguages,
+                supportsHDR: true
             )
+            try await environment.torrentEngine.setBandwidthLimits(sessionId: session.id, appSettings.storage.torrentBandwidthLimits)
+            let files = try await environment.torrentEngine.getFileList(sessionId: session.id)
+            if session.selectedFileId == nil {
+                guard let selection = TorrentMediaFileSelector.selection(for: release, files: files) else {
+                    state = .torrentFailed(
+                        CineFlowError.defaultUserMessage(for: .torrent),
+                        fallbackSuggestion(for: release, reason: .missingMediaFile)
+                    )
+                    await logFallbackFailure(release: release, reason: .missingMediaFile)
+                    return
+                }
+
+                if selection.manualOptions.count > 1 {
+                    state = .chooseMediaFile(session, release, selection.manualOptions)
+                    return
+                }
+
+                try await environment.torrentEngine.selectMediaFile(sessionId: session.id, fileId: selection.selectedFile.id)
+            }
+            try await finishTorrentPlayback(session: session, release: release)
+        } catch let error as PlaybackServiceError where error == .invalidMediaURL {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .playback)
+            state = .torrentFailed(cineFlowError.userMessage, fallbackSuggestion(for: release, reason: .unsupportedFile))
+            await logFallbackFailure(release: release, reason: .unsupportedFile, error: error)
         } catch {
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .torrent)
-            state = .torrentFailed(cineFlowError.userMessage)
+            state = .torrentFailed(cineFlowError.userMessage, fallbackSuggestion(for: release, reason: .failedToStart))
             await environment.diagnosticsService.log(
                 cineFlowError,
                 operation: "player.route.torrent",
@@ -469,21 +513,117 @@ private struct PlayerRouteView: View {
         }
     }
 
-    private func selectedMediaFile(for release: TorrentRelease, files: [TorrentFile]) -> TorrentFile? {
-        if let preferredFileIndex = release.preferredFileIndex,
-           let preferredFile = files.first(where: { Int($0.id) == preferredFileIndex && $0.isMediaFile }) {
-            return preferredFile
+    private func finishTorrentPlayback(session: TorrentSession, release: TorrentRelease) async throws {
+        let streamingURL = try await environment.torrentEngine.getStreamingURL(sessionId: session.id)
+        guard streamingURL.isCineFlowPlayableMediaURL else {
+            throw PlaybackServiceError.invalidMediaURL
         }
+        state = .ready(
+            PlaybackMediaSource(
+                id: mediaID,
+                title: release.title,
+                url: streamingURL,
+                release: release,
+                qualityLabel: release.qualityLabel,
+                sourceName: release.sourceName
+            )
+        )
+    }
 
-        return files.first(where: \.isMediaFile)
+    private func chooseMediaFile(session: TorrentSession, release: TorrentRelease, fileID: String) async {
+        do {
+            try await environment.torrentEngine.selectMediaFile(sessionId: session.id, fileId: fileID)
+            try await finishTorrentPlayback(session: session, release: release)
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .torrent)
+            state = .torrentFailed(cineFlowError.userMessage, fallbackSuggestion(for: release, reason: .unsupportedFile))
+            await logFallbackFailure(release: release, reason: .unsupportedFile, error: error)
+        }
+    }
+
+    private func mediaFileSelectionView(session: TorrentSession, release: TorrentRelease, options: [TorrentMediaFileOption]) -> some View {
+        VStack(alignment: .leading, spacing: CFSpacing.lg) {
+            EmptyState(
+                title: t(.playerFileSelectionTitle),
+                message: t(.playerFileSelectionMessage),
+                systemImage: "film.stack",
+                actionTitle: options.first.map { fileOptionTitle($0) } ?? t(.playerMissingSourceAction),
+                actionSystemImage: "play.fill"
+            ) {
+                if let option = options.first {
+                    Task { await chooseMediaFile(session: session, release: release, fileID: option.file.id) }
+                } else {
+                    onExit()
+                }
+            }
+
+            VStack(spacing: CFSpacing.sm) {
+                ForEach(options) { option in
+                    Button {
+                        Task { await chooseMediaFile(session: session, release: release, fileID: option.file.id) }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.file.name)
+                                    .font(CFTypography.body.weight(.semibold))
+                                    .foregroundStyle(CFColors.textPrimary)
+                                Text(fileOptionTitle(option))
+                                    .font(CFTypography.caption)
+                                    .foregroundStyle(CFColors.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "play.fill")
+                                .foregroundStyle(CFColors.accentPrimary)
+                        }
+                        .padding(CFSpacing.md)
+                        .background(CFColors.panelFill, in: RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(CFSpacing.xl)
+    }
+
+    private func fileOptionTitle(_ option: TorrentMediaFileOption) -> String {
+        "\(option.file.lengthBytes / 1_000_000_000) GB · \(option.file.path)"
+    }
+
+    private func fallbackSuggestion(for release: TorrentRelease, reason: ReleaseFallbackReason) -> ReleaseFallbackSuggestion? {
+        ReleaseFallbackPlanner.suggestion(
+            for: release,
+            in: fallbackReleases,
+            reason: reason,
+            preferences: rankingPreferences
+        )
+    }
+
+    private func logFallbackFailure(release: TorrentRelease, reason: ReleaseFallbackReason, error: Error? = nil) async {
+        await environment.diagnosticsService.log(
+            level: .warning,
+            subsystem: .playback,
+            message: error.map { CineFlowError.from($0, fallbackCategory: .torrent).technicalDescription } ?? reason.userFacingSummary,
+            metadata: [
+                "operation": "player.fallback.suggest",
+                "mediaID": mediaID,
+                "releaseID": release.id,
+                "sourceID": release.sourceId,
+                "reason": reason.rawValue
+            ]
+        )
     }
 
     private enum RouteState: Equatable {
         case loading
         case missingSource
         case unsupportedSource(String)
-        case torrentFailed(String)
+        case torrentFailed(String, ReleaseFallbackSuggestion?)
+        case chooseMediaFile(TorrentSession, TorrentRelease, [TorrentMediaFileOption])
         case ready(PlaybackMediaSource)
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: language)
     }
 }
 
@@ -522,7 +662,7 @@ private struct LanguageSettingsCard: View {
         .frame(maxWidth: 680, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)
@@ -537,15 +677,16 @@ private struct LanguageSettingsCard: View {
 
 private struct ImageCacheSettingsCard: View {
     @ObservedObject var viewModel: CineFlowRootViewModel
+    @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: CFSpacing.md) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: CFSpacing.xs) {
-                    Text("Image Cache")
+                    Text(t(.cacheHeaderTitle))
                         .font(CFTypography.bodyEmphasis)
                         .foregroundStyle(CFColors.textPrimary)
-                    Text("Posters, backdrops and thumbnails stored locally for smoother browsing.")
+                    Text(t(.cacheHeaderSubtitle))
                         .font(CFTypography.caption)
                         .foregroundStyle(CFColors.textMuted)
                 }
@@ -558,25 +699,21 @@ private struct ImageCacheSettingsCard: View {
                     .monospacedDigit()
             }
 
-            if let error = viewModel.imageCacheErrorDescription {
-                InlineErrorState(
-                    CineFlowError(
-                        category: .cache,
-                        technicalDescription: error,
-                        userMessage: error,
-                        recoverySuggestion: CineFlowError.defaultRecoverySuggestion(for: .cache),
-                        logLevel: .error
-                    )
+            if viewModel.imageCacheErrorDescription != nil {
+                ErrorState(
+                    title: t(.cacheErrorTitle),
+                    message: t(.cacheErrorMessage),
+                    recoverySuggestion: t(.cacheErrorRecovery)
                 )
             }
 
             HStack(spacing: CFSpacing.sm) {
-                SecondaryButton("Clear unused", systemImage: "clock.badge.xmark") {
+                SecondaryButton(t(.cacheClearUnused), systemImage: "clock.badge.xmark") {
                     Task { await viewModel.clearUnusedImageCache() }
                 }
                 .disabled(viewModel.isClearingImageCache)
 
-                SecondaryButton("Clear cache", systemImage: "trash") {
+                SecondaryButton(t(.cacheClearAll), systemImage: "trash") {
                     Task { await viewModel.clearImageCache() }
                 }
                 .disabled(viewModel.isClearingImageCache)
@@ -585,7 +722,7 @@ private struct ImageCacheSettingsCard: View {
         .padding(CFSpacing.lg)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)
@@ -594,6 +731,10 @@ private struct ImageCacheSettingsCard: View {
         .task {
             await viewModel.refreshImageCacheSize()
         }
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: languageSettingsStore.selectedLanguage)
     }
 }
 
@@ -658,7 +799,7 @@ private struct SubtitleSettingsCard: View {
         .padding(CFSpacing.lg)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)
@@ -736,7 +877,7 @@ private struct ShellMetric: View {
         .frame(minWidth: 172, minHeight: 68, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)

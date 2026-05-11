@@ -1,9 +1,11 @@
 import CineFlowDesignSystem
+import CineFlowLocalization
 import SwiftUI
 
 public struct ContinueWatchingView: View {
     @StateObject private var viewModel: ContinueWatchingViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
+    @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
     public init(viewModel: ContinueWatchingViewModel, navigationCoordinator: NavigationCoordinator) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -16,9 +18,7 @@ public struct ContinueWatchingView: View {
                 header(title: "Продолжить просмотр", subtitle: "Незавершенные фильмы и эпизоды, отсортированные по последнему просмотру.")
                 content
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 28)
-            .padding(.bottom, 44)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
         .background(CFColors.clear)
@@ -30,10 +30,25 @@ public struct ContinueWatchingView: View {
         switch viewModel.state {
         case .loading:
             LoadingSkeleton(height: 260, cornerRadius: CFRadius.panel)
-        case .failed(let message):
-            ErrorState(title: "Не удалось загрузить прогресс", message: message)
+        case .failed:
+            ErrorState(
+                title: t(.continueErrorTitle),
+                message: t(.continueErrorMessage),
+                recoverySuggestion: t(.continueErrorRecovery),
+                actionTitle: t(.commonRetry)
+            ) {
+                Task { await viewModel.load() }
+            }
         case .empty:
-            EmptyState(title: "Нет незавершенного просмотра", message: "Начните просмотр, и Streamly сохранит позицию для продолжения.", systemImage: "play.rectangle")
+            EmptyState(
+                title: t(.continueEmptyTitle),
+                message: t(.continueEmptyMessage),
+                systemImage: "play.rectangle",
+                actionTitle: t(.continueEmptyAction),
+                actionSystemImage: "rectangle.stack"
+            ) {
+                navigationCoordinator.selectSidebarRoute(.library)
+            }
                 .frame(maxWidth: .infinity, minHeight: 360)
         case .loaded:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 430), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
@@ -53,11 +68,20 @@ public struct ContinueWatchingView: View {
             }
         }
     }
+
+    private var selectedLanguage: AppLanguage {
+        languageSettingsStore.selectedLanguage
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: selectedLanguage)
+    }
 }
 
 public struct WatchHistoryView: View {
     @StateObject private var viewModel: WatchHistoryViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
+    @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
     public init(viewModel: WatchHistoryViewModel, navigationCoordinator: NavigationCoordinator) {
         _viewModel = StateObject(wrappedValue: viewModel)
@@ -88,9 +112,7 @@ public struct WatchHistoryView: View {
 
                 content
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 28)
-            .padding(.bottom, 44)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
         .background(CFColors.clear)
@@ -102,14 +124,37 @@ public struct WatchHistoryView: View {
         switch viewModel.state {
         case .loading:
             LoadingSkeleton(height: 320, cornerRadius: CFRadius.panel)
-        case .failed(let message):
-            ErrorState(title: "Не удалось загрузить историю", message: message)
+        case .failed:
+            ErrorState(
+                title: t(.historyErrorTitle),
+                message: t(.historyErrorMessage),
+                recoverySuggestion: t(.historyErrorRecovery),
+                actionTitle: t(.commonRetry)
+            ) {
+                Task { await viewModel.load() }
+            }
         case .empty:
-            EmptyState(title: "История пуста", message: "После просмотра фильмы и серии появятся здесь.", systemImage: "clock.arrow.circlepath")
+            EmptyState(
+                title: t(.historyEmptyTitle),
+                message: t(.historyEmptyMessage),
+                systemImage: "clock.arrow.circlepath",
+                actionTitle: t(.historyEmptyAction),
+                actionSystemImage: "rectangle.stack"
+            ) {
+                navigationCoordinator.selectSidebarRoute(.library)
+            }
                 .frame(maxWidth: .infinity, minHeight: 360)
         case .loaded:
             if viewModel.visibleEntries.isEmpty {
-                EmptyState(title: "Нет элементов по фильтру", message: "Выберите другой тип контента.", systemImage: "line.3.horizontal.decrease.circle")
+                EmptyState(
+                    title: t(.historyFilterEmptyTitle),
+                    message: t(.historyFilterEmptyMessage),
+                    systemImage: "line.3.horizontal.decrease.circle",
+                    actionTitle: t(.historyFilterEmptyAction),
+                    actionSystemImage: "line.3.horizontal.decrease.circle"
+                ) {
+                    viewModel.setFilter(.all)
+                }
                     .frame(maxWidth: .infinity, minHeight: 300)
             } else {
                 VStack(alignment: .leading, spacing: CFSpacing.xl) {
@@ -142,6 +187,14 @@ public struct WatchHistoryView: View {
         case .series:
             "Сериалы"
         }
+    }
+
+    private var selectedLanguage: AppLanguage {
+        languageSettingsStore.selectedLanguage
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: selectedLanguage)
     }
 }
 

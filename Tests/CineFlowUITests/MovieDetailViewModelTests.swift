@@ -34,6 +34,65 @@ final class MovieDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testGlobalQualityPreferencesAffectDetailReleaseRanking() async {
+        let settingsRepository = CoreMockSettingsRepository(
+            settings: AppSettings(
+                playback: PlaybackSettings(
+                    preferredQuality: .p1080,
+                    maxFileSizeBytes: 20_000_000_000
+                )
+            )
+        )
+        let viewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: MockMovieDetailProvider(),
+            settingsRepository: settingsRepository
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.releases.first?.release.id, "matrix-1080p-bluray")
+        XCTAssertTrue(viewModel.releases.first?.reasons.contains(.preferredQuality(.p1080)) == true)
+        XCTAssertTrue(viewModel.releases.dropFirst().allSatisfy { $0.reasons.contains(.maxFileSizeLimit(20_000_000_000)) })
+    }
+
+    @MainActor
+    func testSmartWatchUsesBestReleaseAndRemembersManualOverridePerMovie() async throws {
+        let selectionStore = InMemoryReleaseSelectionStore()
+        let first = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: MockMovieDetailProvider(),
+            releaseSelectionStore: selectionStore
+        )
+        await first.load()
+
+        let automaticRelease = try XCTUnwrap(first.playBestRelease())
+        XCTAssertEqual(automaticRelease.id, "matrix-2160p-hdr-remux")
+        XCTAssertEqual(first.lastPlayedReleaseID, "matrix-2160p-hdr-remux")
+        XCTAssertNil(selectionStore.releaseID(for: "tmdb:movie:603"))
+
+        let manualRelease = try XCTUnwrap(first.releases.first { $0.release.id == "matrix-1080p-bluray" }?.release)
+        first.playManualRelease(manualRelease)
+
+        XCTAssertEqual(first.lastPlayedReleaseID, "matrix-1080p-bluray")
+        XCTAssertEqual(selectionStore.releaseID(for: "tmdb:movie:603"), "matrix-1080p-bluray")
+
+        let second = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: MockMovieDetailProvider(),
+            releaseSelectionStore: selectionStore
+        )
+        await second.load()
+
+        XCTAssertEqual(second.bestPlayableRelease?.release.id, "matrix-1080p-bluray")
+        XCTAssertEqual(second.releases.map(\.release.id), [
+            "matrix-2160p-hdr-remux",
+            "matrix-2160p-web",
+            "matrix-1080p-bluray"
+        ])
+    }
+
+    @MainActor
     func testLibraryActionsAndRatingMutateViewModelState() async {
         let viewModel = MovieDetailViewModel(mediaID: "tmdb:movie:603", provider: MockMovieDetailProvider())
         await viewModel.load()
@@ -51,6 +110,27 @@ final class MovieDetailViewModelTests: XCTestCase {
         viewModel.toggleFavorite()
 
         XCTAssertFalse(viewModel.isFavorite)
+    }
+
+    @MainActor
+    func testMarkWatchedUpdatesMovieStateAndRepositoryHistory() async throws {
+        let repository = MovieDetailInMemoryLibraryRepository()
+        let viewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: MockMovieDetailProvider(),
+            libraryRepository: repository
+        )
+        await viewModel.load()
+
+        XCTAssertFalse(viewModel.isWatched)
+
+        viewModel.markWatched()
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        let watchedItems = try await repository.watchedItems()
+        XCTAssertTrue(viewModel.isWatched)
+        XCTAssertEqual(watchedItems.map(\.item.id), ["tmdb:movie:603"])
+        XCTAssertEqual(watchedItems.first?.positionSeconds, 0)
     }
 
     @MainActor
@@ -244,5 +324,119 @@ private actor InMemoryUserMediaSourceRepository: UserMediaSourceRepositoryProtoc
 
     func delete(id: String) async throws {
         sourcesByID.removeValue(forKey: id)
+    }
+}
+
+final class InMemoryReleaseSelectionStore: ReleaseSelectionStoreProtocol {
+    private var releaseIDByMediaID: [String: String] = [:]
+
+    func releaseID(for mediaID: String) -> String? {
+        releaseIDByMediaID[mediaID]
+    }
+
+    func setReleaseID(_ releaseID: String?, for mediaID: String) {
+        releaseIDByMediaID[mediaID] = releaseID
+    }
+}
+
+private actor MovieDetailInMemoryLibraryRepository: LibraryRepositoryProtocol {
+    private var storedItems: [MediaItem] = []
+    private var storedFavorites: [MediaItem] = []
+    private var storedWatchedItems: [WatchedMediaItem] = []
+    private var storedRatedItems: [RatedMediaItem] = []
+    private var storedLists: [UserList] = []
+
+    func items() async throws -> [MediaItem] { storedItems }
+
+    func add(_ item: MediaItem) async throws {
+        upsert(item)
+    }
+
+    func remove(mediaID: String) async throws {
+        storedItems.removeAll { $0.id == mediaID }
+        storedFavorites.removeAll { $0.id == mediaID }
+        storedWatchedItems.removeAll { $0.item.id == mediaID }
+        storedRatedItems.removeAll { $0.item.id == mediaID }
+    }
+
+    func favorites() async throws -> [MediaItem] { storedFavorites }
+
+    func addFavorite(_ item: MediaItem) async throws {
+        upsert(item)
+        storedFavorites.removeAll { $0.id == item.id }
+        storedFavorites.insert(item, at: 0)
+    }
+
+    func removeFavorite(mediaID: String) async throws {
+        storedFavorites.removeAll { $0.id == mediaID }
+    }
+
+    func watchedItems() async throws -> [WatchedMediaItem] { storedWatchedItems }
+
+    func markWatched(_ item: MediaItem, positionSeconds: Double) async throws {
+        upsert(item)
+        storedWatchedItems.removeAll { $0.item.id == item.id }
+        storedWatchedItems.insert(WatchedMediaItem(item: item, positionSeconds: positionSeconds), at: 0)
+    }
+
+    func ratedItems() async throws -> [RatedMediaItem] { storedRatedItems }
+
+    func setRating(_ item: MediaItem, rating: Int) async throws {
+        upsert(item)
+        storedRatedItems.removeAll { $0.item.id == item.id }
+        storedRatedItems.insert(RatedMediaItem(item: item, rating: rating), at: 0)
+    }
+
+    func lists() async throws -> [UserList] { storedLists }
+
+    func defaultList() async throws -> UserList {
+        if let existing = storedLists.first(where: \.isDefault) { return existing }
+        let list = UserList(id: "default-watchlist", name: "Хочу посмотреть", isDefault: true)
+        storedLists.insert(list, at: 0)
+        return list
+    }
+
+    func createList(name: String) async throws -> UserList {
+        try await createList(name: name, description: nil)
+    }
+
+    func createList(name: String, description: String?) async throws -> UserList {
+        let list = UserList(name: name, description: description)
+        storedLists.insert(list, at: 0)
+        return list
+    }
+
+    func renameList(id: String, name: String, description: String?) async throws {}
+
+    func deleteList(id: String) async throws {
+        storedLists.removeAll { $0.id == id && !$0.isDefault }
+    }
+
+    func add(_ item: MediaItem, to listID: String) async throws {
+        upsert(item)
+        storedLists = storedLists.map { list in
+            guard list.id == listID, !list.itemIDs.contains(item.id) else { return list }
+            return UserList(
+                id: list.id,
+                name: list.name,
+                description: list.description,
+                itemIDs: list.itemIDs + [item.id],
+                createdAt: list.createdAt,
+                updatedAt: Date(),
+                isDefault: list.isDefault
+            )
+        }
+    }
+
+    func remove(_ mediaID: String, from listID: String) async throws {}
+
+    func items(in listID: String) async throws -> [MediaItem] {
+        guard let list = storedLists.first(where: { $0.id == listID }) else { return [] }
+        return storedItems.filter { list.itemIDs.contains($0.id) }
+    }
+
+    private func upsert(_ item: MediaItem) {
+        storedItems.removeAll { $0.id == item.id }
+        storedItems.insert(item, at: 0)
     }
 }

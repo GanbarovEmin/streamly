@@ -111,6 +111,7 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
     public let uploadDate: Date
     public let audioLanguages: [String]
     public let subtitleLanguages: [String]
+    public let availability: Double?
     public var rankingScore: Double = 0
     public var rankingReasons: [ReleaseRankingReason] = []
 
@@ -132,6 +133,7 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
         uploadDate: Date,
         audioLanguages: [String],
         subtitleLanguages: [String],
+        availability: Double? = nil,
         rankingScore: Double = 0,
         rankingReasons: [ReleaseRankingReason] = []
     ) {
@@ -152,6 +154,7 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
         self.uploadDate = uploadDate
         self.audioLanguages = audioLanguages
         self.subtitleLanguages = subtitleLanguages
+        self.availability = availability
         self.rankingScore = rankingScore
         self.rankingReasons = rankingReasons
     }
@@ -175,6 +178,14 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
         rankingReasons.map(\.explanation).joined(separator: "\n")
     }
 
+    public var releaseHealth: ReleaseHealth {
+        torrentRelease.releaseHealth
+    }
+
+    public var releaseHealthLabel: String {
+        releaseHealth.label
+    }
+
     public var torrentRelease: TorrentRelease {
         TorrentRelease(
             id: id,
@@ -192,6 +203,7 @@ public struct SearchTorrentRelease: Identifiable, Equatable, Sendable {
             leechers: leechers,
             sizeBytes: sizeBytes,
             uploadDate: uploadDate,
+            availability: availability,
             rankScore: rankingScore
         )
     }
@@ -467,18 +479,22 @@ public final class SearchViewModel: ObservableObject {
 
     private let provider: any SearchProviderProtocol
     private let diagnosticsService: (any DiagnosticsServiceProtocol)?
+    private let settingsRepository: (any SettingsRepositoryProtocol)?
     private let debounceNanoseconds: UInt64
     private var debounceTask: Task<Void, Never>?
     private var lastResponse = SearchProviderResponse(media: [], releases: [])
     private var searchGeneration = 0
+    private var globalRankingPreferences = RankingPreferences(supportsHDR: true)
 
     public init(
         provider: any SearchProviderProtocol = MockSearchProvider(),
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil,
+        settingsRepository: (any SettingsRepositoryProtocol)? = nil,
         debounceNanoseconds: UInt64 = 350_000_000
     ) {
         self.provider = provider
         self.diagnosticsService = diagnosticsService
+        self.settingsRepository = settingsRepository
         self.debounceNanoseconds = debounceNanoseconds
     }
 
@@ -529,14 +545,17 @@ public final class SearchViewModel: ObservableObject {
         state = .loading
 
         do {
+            await refreshGlobalRankingPreferences()
             let response = try await provider.search(query: normalizedQuery)
             let filters = filters
             let sortOption = sortOption
+            let rankingPreferences = globalRankingPreferences
             let preparedResults = await Task.detached(priority: .userInitiated) {
                 SearchResultsBuilder.build(
                     response: response,
                     filters: filters,
-                    sortOption: sortOption
+                    sortOption: sortOption,
+                    rankingPreferences: rankingPreferences
                 )
             }.value
             guard generation == searchGeneration, !Task.isCancelled else { return }
@@ -584,6 +603,20 @@ public final class SearchViewModel: ObservableObject {
             torrentReleases: releases
         )
         state = results.isEmpty ? .empty : .loaded
+    }
+
+    private func refreshGlobalRankingPreferences() async {
+        guard let settingsRepository else {
+            globalRankingPreferences = RankingPreferences(supportsHDR: true)
+            return
+        }
+
+        let settings = await settingsRepository.appSettings
+        let subtitleLanguages = await settingsRepository.subtitleLanguagePriority
+        globalRankingPreferences = settings.playback.rankingPreferences(
+            preferredSubtitleLanguages: subtitleLanguages,
+            supportsHDR: true
+        )
     }
 
     private func updateAvailableFilterOptions(from response: SearchProviderResponse) {
@@ -688,9 +721,14 @@ public final class SearchViewModel: ObservableObject {
 
     private var searchRankingPreferences: RankingPreferences {
         RankingPreferences(
-            preferredAudioLanguages: filters.audioLanguage.map { [$0] } ?? [],
-            preferredSubtitleLanguages: filters.subtitleLanguage.map { [$0] } ?? [],
-            supportsHDR: true
+            preferredAudioLanguages: filters.audioLanguage.map { [$0] } ?? globalRankingPreferences.preferredAudioLanguages,
+            preferredSubtitleLanguages: filters.subtitleLanguage.map { [$0] } ?? globalRankingPreferences.preferredSubtitleLanguages,
+            supportsHDR: globalRankingPreferences.supportsHDR,
+            preferredQuality: globalRankingPreferences.preferredQuality,
+            hdrPreference: filters.requiresHDR ? .preferHDR : globalRankingPreferences.hdrPreference,
+            codecPreference: globalRankingPreferences.codecPreference,
+            maxFileSizeBytes: globalRankingPreferences.maxFileSizeBytes,
+            preferHighSeedersOverHighestQuality: globalRankingPreferences.preferHighSeedersOverHighestQuality
         )
     }
 }
@@ -699,10 +737,16 @@ private enum SearchResultsBuilder {
     static func build(
         response: SearchProviderResponse,
         filters: SearchFilters,
-        sortOption: SearchSortOption
+        sortOption: SearchSortOption,
+        rankingPreferences: RankingPreferences = RankingPreferences(supportsHDR: true)
     ) -> SearchResults {
         let media = filteredMedia(response.media, filters: filters)
-        let releases = sort(filteredReleases(response.releases, filters: filters), filters: filters, sortOption: sortOption)
+        let releases = sort(
+            filteredReleases(response.releases, filters: filters),
+            filters: filters,
+            sortOption: sortOption,
+            rankingPreferences: rankingPreferences
+        )
 
         return SearchResults(
             topMatches: Array(media.prefix(1)),
@@ -772,10 +816,11 @@ private enum SearchResultsBuilder {
     private static func sort(
         _ releases: [SearchTorrentRelease],
         filters: SearchFilters,
-        sortOption: SearchSortOption
+        sortOption: SearchSortOption,
+        rankingPreferences: RankingPreferences
     ) -> [SearchTorrentRelease] {
         if sortOption == .best {
-            let ranked = ReleaseRankingEngine(preferences: rankingPreferences(filters: filters))
+            let ranked = ReleaseRankingEngine(preferences: mergedRankingPreferences(filters: filters, global: rankingPreferences))
                 .rank(releases.map(\.torrentRelease))
             let byID = Dictionary(uniqueKeysWithValues: releases.map { ($0.id, $0) })
 
@@ -809,11 +854,16 @@ private enum SearchResultsBuilder {
         }
     }
 
-    private static func rankingPreferences(filters: SearchFilters) -> RankingPreferences {
+    private static func mergedRankingPreferences(filters: SearchFilters, global: RankingPreferences) -> RankingPreferences {
         RankingPreferences(
-            preferredAudioLanguages: filters.audioLanguage.map { [$0] } ?? [],
-            preferredSubtitleLanguages: filters.subtitleLanguage.map { [$0] } ?? [],
-            supportsHDR: true
+            preferredAudioLanguages: filters.audioLanguage.map { [$0] } ?? global.preferredAudioLanguages,
+            preferredSubtitleLanguages: filters.subtitleLanguage.map { [$0] } ?? global.preferredSubtitleLanguages,
+            supportsHDR: global.supportsHDR,
+            preferredQuality: global.preferredQuality,
+            hdrPreference: filters.requiresHDR ? .preferHDR : global.hdrPreference,
+            codecPreference: global.codecPreference,
+            maxFileSizeBytes: global.maxFileSizeBytes,
+            preferHighSeedersOverHighestQuality: global.preferHighSeedersOverHighestQuality
         )
     }
 }

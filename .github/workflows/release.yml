@@ -25,6 +25,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -35,6 +37,7 @@ jobs:
     name: Build unsigned Streamly DMG
     runs-on: macos-15
     env:
+      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
       GIT_CONFIG_COUNT: "1"
       GIT_CONFIG_KEY_0: submodule.SQLiteCustom/src.update
       GIT_CONFIG_VALUE_0: none
@@ -96,3 +99,38 @@ jobs:
           files: |
             dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg
             dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg.sha256
+
+      - name: Generate Sparkle appcast
+        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
+        shell: bash
+        run: |
+          DMG="dist/dmg/Streamly-${{ steps.version.outputs.version }}.dmg"
+          SPARKLE_DIR="dist/sparkle"
+          SPARKLE_KEY="$RUNNER_TEMP/sparkle_private_key"
+          mkdir -p "$SPARKLE_DIR"
+          cp "$DMG" "$SPARKLE_DIR/"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$SPARKLE_KEY"
+          chmod 600 "$SPARKLE_KEY"
+          .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
+            --ed-key-file "$SPARKLE_KEY" \
+            --download-url-prefix "https://github.com/GanbarovEmin/streamly/releases/download/${{ steps.version.outputs.tag }}" \
+            "$SPARKLE_DIR"
+          test -f "$SPARKLE_DIR/appcast.xml"
+
+      - name: Stage Pages with appcast
+        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
+        shell: bash
+        run: |
+          mkdir -p dist/pages
+          cp -R landing/. dist/pages/
+          cp dist/sparkle/appcast.xml dist/pages/appcast.xml
+
+      - name: Upload Pages artifact
+        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pages
+
+      - name: Deploy Pages appcast
+        if: ${{ env.SPARKLE_PRIVATE_KEY != '' }}
+        uses: actions/deploy-pages@v4

@@ -266,20 +266,36 @@ extension SubtitleServiceError: CineFlowErrorConvertible {
 extension SourceProviderError: CineFlowErrorConvertible {
     public var cineFlowError: CineFlowError {
         switch self {
-        case .authenticationRequired, .authenticationUnsupported:
+        case .authenticationUnsupported, .authenticationRequired:
             CineFlowError(
                 category: .authentication,
                 technicalDescription: errorDescription ?? String(describing: self),
-                userMessage: CineFlowError.defaultUserMessage(for: .authentication),
-                recoverySuggestion: CineFlowError.defaultRecoverySuggestion(for: .authentication),
+                userMessage: "Sign in again for this source.",
+                recoverySuggestion: "Open Source settings and refresh the source session.",
                 logLevel: .warning
             )
-        case .providerUnavailable, .releaseNotFound:
+        case .timedOut:
             CineFlowError(
                 category: .source,
                 technicalDescription: errorDescription ?? String(describing: self),
-                userMessage: CineFlowError.defaultUserMessage(for: .source),
-                recoverySuggestion: CineFlowError.defaultRecoverySuggestion(for: .source),
+                userMessage: "This source took too long to respond.",
+                recoverySuggestion: "Retry the search or temporarily disable this source.",
+                logLevel: .warning
+            )
+        case .providerUnavailable:
+            CineFlowError(
+                category: .source,
+                technicalDescription: errorDescription ?? String(describing: self),
+                userMessage: "This source is temporarily unavailable.",
+                recoverySuggestion: "Retry later or disable this source in Settings.",
+                logLevel: .warning
+            )
+        case .releaseNotFound:
+            CineFlowError(
+                category: .source,
+                technicalDescription: errorDescription ?? String(describing: self),
+                userMessage: "This release is no longer available from the source.",
+                recoverySuggestion: "Choose another release or refresh sources.",
                 logLevel: .warning
             )
         }

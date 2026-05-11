@@ -13,6 +13,8 @@ public struct MainShellView: View {
     @StateObject private var viewModel: CineFlowRootViewModel
     @StateObject private var searchViewModel: SearchViewModel
     @StateObject private var imagePipeline: CineFlowImagePipeline
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @AppStorage("streamly.reduceMotion") private var appReduceMotion = false
     private let showsPerformanceOverlay: Bool
 
     public init(
@@ -27,7 +29,11 @@ public struct MainShellView: View {
         self.playbackProgressRecorder = playbackProgressRecorder
         self.navigationCoordinator = navigationCoordinator
         _viewModel = StateObject(wrappedValue: CineFlowRootViewModel(environment: environment))
-        _searchViewModel = StateObject(wrappedValue: SearchViewModel(provider: searchProvider, diagnosticsService: environment.diagnosticsService))
+        _searchViewModel = StateObject(wrappedValue: SearchViewModel(
+            provider: searchProvider,
+            diagnosticsService: environment.diagnosticsService,
+            settingsRepository: environment.settingsRepository
+        ))
         _imagePipeline = StateObject(wrappedValue: CineFlowImagePipeline(imageCacheService: environment.imageCacheService))
         showsPerformanceOverlay = ProcessInfo.processInfo.environment["CINEFLOW_PERFORMANCE_OVERLAY"] == "1"
     }
@@ -64,7 +70,7 @@ public struct MainShellView: View {
                         imagePipeline: imagePipeline
                     )
                     .id(navigationCoordinator.currentRoute.id)
-                    .transition(.opacity.combined(with: .scale(scale: 0.995)))
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.995)))
                 }
             }
 
@@ -73,9 +79,14 @@ public struct MainShellView: View {
             }
         }
         .background(CFColors.clear)
-        .animation(.easeInOut(duration: 0.22), value: navigationCoordinator.currentRoute)
+        .environment(\.cfReduceMotion, reduceMotion)
+        .cfAnimation(.easeInOut(duration: 0.22), value: navigationCoordinator.currentRoute, reduceMotion: reduceMotion)
         .task {
             await viewModel.load()
         }
+    }
+
+    private var reduceMotion: Bool {
+        systemReduceMotion || appReduceMotion
     }
 }

@@ -490,9 +490,9 @@ private enum HomeContentBuilder {
     private static func card(from progress: PlaybackProgress, mediaItem: MediaItem?) -> CFMediaCardModel {
         CFMediaCardModel(
             id: progress.episodeID ?? progress.mediaID,
-            title: mediaItem?.displayTitle ?? progress.episodeID ?? progress.mediaID,
+            title: mediaItem?.displayTitle ?? (progress.episodeID == nil ? "Фильм" : "Серия"),
             metadata: "\(Int(progress.progressPercent.rounded()))% watched",
-            badge: progress.releaseID,
+            badge: nil,
             progress: progress.progressPercent / 100,
             accentIndex: abs((progress.episodeID ?? progress.mediaID).hashValue),
             artworkURL: mediaItem?.bestBackdropURL ?? mediaItem?.bestPosterURL

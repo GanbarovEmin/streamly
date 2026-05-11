@@ -31,13 +31,52 @@ public enum TorrentEngineError: LocalizedError, Equatable, Sendable {
 
 public enum TorrentSessionState: Codable, Equatable, Sendable {
     case idle
+    case connecting
+    case metadataLoading
     case checking
     case downloading
+    case buffering
     case streaming
+    case stalled
     case paused
     case seeding
+    case completed
     case stopped
+    case error(reason: String)
     case failed(reason: String)
+
+    public var userFacingLabel: String {
+        switch self {
+        case .idle:
+            "Idle"
+        case .connecting:
+            "Connecting"
+        case .metadataLoading:
+            "Loading metadata"
+        case .checking:
+            "Checking files"
+        case .downloading:
+            "Downloading"
+        case .buffering:
+            "Buffering"
+        case .streaming:
+            "Streaming"
+        case .stalled:
+            "Connection stalled"
+        case .paused:
+            "Paused"
+        case .seeding:
+            "Seeding"
+        case .completed:
+            "Completed"
+        case .stopped:
+            "Stopped"
+        case .error:
+            "Error"
+        case .failed:
+            "Error"
+        }
+    }
 }
 
 public enum TorrentFilePriority: Int, Codable, Comparable, Sendable {
@@ -81,6 +120,18 @@ public struct TorrentProgress: Codable, Equatable, Sendable {
         guard totalBytes > 0 else { return 0 }
         return min(1, max(0, Double(bufferedBytes) / Double(totalBytes)))
     }
+}
+
+public struct TorrentBandwidthLimits: Codable, Equatable, Sendable {
+    public let downloadBytesPerSecond: Int64?
+    public let uploadBytesPerSecond: Int64?
+
+    public init(downloadBytesPerSecond: Int64? = nil, uploadBytesPerSecond: Int64? = nil) {
+        self.downloadBytesPerSecond = downloadBytesPerSecond.map { max(0, $0) }
+        self.uploadBytesPerSecond = uploadBytesPerSecond.map { max(0, $0) }
+    }
+
+    public static let unlimited = TorrentBandwidthLimits()
 }
 
 public struct TorrentHealth: Codable, Equatable, Sendable {
@@ -175,6 +226,7 @@ public struct TorrentStatus: Codable, Equatable, Sendable {
     public let selectedFileId: String?
     public let isSequentialDownloadEnabled: Bool
     public let streamingURL: URL?
+    public let bandwidthLimits: TorrentBandwidthLimits?
     public let updatedAt: Date
 
     public init(
@@ -185,6 +237,7 @@ public struct TorrentStatus: Codable, Equatable, Sendable {
         selectedFileId: String? = nil,
         isSequentialDownloadEnabled: Bool = false,
         streamingURL: URL? = nil,
+        bandwidthLimits: TorrentBandwidthLimits? = nil,
         updatedAt: Date = Date()
     ) {
         self.sessionId = sessionId
@@ -194,14 +247,15 @@ public struct TorrentStatus: Codable, Equatable, Sendable {
         self.selectedFileId = selectedFileId
         self.isSequentialDownloadEnabled = isSequentialDownloadEnabled
         self.streamingURL = streamingURL
+        self.bandwidthLimits = bandwidthLimits
         self.updatedAt = updatedAt
     }
 }
 
 public enum TorrentCleanupPolicy: Codable, Equatable, Sendable {
     case all
-    case olderThan(Date)
-    case exceedingCacheSize(maxBytes: Int64)
+    case olderThan(Date, protecting: Set<String> = [])
+    case exceedingCacheSize(maxBytes: Int64, protecting: Set<String> = [])
 }
 
 public struct TorrentCleanupResult: Codable, Equatable, Sendable {

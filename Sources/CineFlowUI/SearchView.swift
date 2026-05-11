@@ -15,14 +15,12 @@ public struct SearchView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: CFSpacing.lg) {
                 header
                 filterBar
                 stateContent
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 24)
-            .padding(.bottom, 46)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
         .background(CFColors.clear)
@@ -131,14 +129,7 @@ public struct SearchView: View {
             .scrollIndicators(.hidden)
         }
         .padding(CFSpacing.lg)
-        .background(
-            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.backgroundSecondary.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                )
-        )
+        .cfPanelBackground(fill: CFColors.panelFill)
         .overlay(alignment: .topLeading) {
             Capsule()
                 .fill(CFColors.horizontalGradient)
@@ -154,8 +145,12 @@ public struct SearchView: View {
             EmptyState(
                 title: t(.searchStateIdleTitle),
                 message: t(.searchStateIdleMessage),
-                systemImage: "magnifyingglass"
-            )
+                systemImage: "magnifyingglass",
+                actionTitle: t(.searchStateIdleAction),
+                actionSystemImage: "magnifyingglass"
+            ) {
+                navigationCoordinator.focusSearchField()
+            }
             .frame(maxWidth: .infinity, minHeight: 420)
         case .loading:
             SearchLoadingView(title: t(.searchStateLoading))
@@ -163,16 +158,33 @@ public struct SearchView: View {
             EmptyState(
                 title: t(.searchStateEmptyTitle),
                 message: t(.searchStateEmptyMessage),
-                systemImage: "rectangle.stack.badge.minus"
-            )
+                systemImage: "rectangle.stack.badge.minus",
+                actionTitle: t(.searchStateEmptyAction),
+                actionSystemImage: "line.3.horizontal.decrease.circle"
+            ) {
+                viewModel.filters = SearchFilters()
+                viewModel.refreshWithCurrentFilters()
+            }
             .frame(maxWidth: .infinity, minHeight: 420)
-        case .failed(let message):
+        case .failed:
             if let error = viewModel.lastError {
-                ErrorCard(title: t(.searchStateErrorTitle), error: error) {
+                ErrorState(
+                    title: t(.searchStateErrorTitle),
+                    message: t(.searchStateErrorMessage),
+                    recoverySuggestion: error.recoverySuggestion,
+                    actionTitle: t(.commonRetry)
+                ) {
                     Task { await viewModel.retryLastSearch() }
                 }
             } else {
-                ErrorState(title: t(.searchStateErrorTitle), message: message)
+                ErrorState(
+                    title: t(.searchStateErrorTitle),
+                    message: t(.searchStateErrorMessage),
+                    recoverySuggestion: t(.searchStateErrorRecovery),
+                    actionTitle: t(.commonRetry)
+                ) {
+                    Task { await viewModel.retryLastSearch() }
+                }
             }
         case .loaded:
             resultsContent
@@ -180,7 +192,7 @@ public struct SearchView: View {
     }
 
     private var resultsContent: some View {
-        VStack(alignment: .leading, spacing: 30) {
+        VStack(alignment: .leading, spacing: CFSpacing.xl) {
             mediaSection(t(.searchSectionTopMatches), items: viewModel.results.topMatches)
             mediaSection(t(.searchSectionMovies), items: viewModel.results.movies)
             mediaSection(t(.searchSectionSeries), items: viewModel.results.series)
@@ -235,6 +247,8 @@ public struct SearchView: View {
                     ForEach(viewModel.results.torrentReleases) { release in
                         TorrentReleaseRow(
                             release: release,
+                            seedersHelp: t(.tooltipSeeders),
+                            rankingHelp: t(.tooltipRankingScore),
                             seedersText: L10n.format(
                                 .searchReleaseSeedersFormat,
                                 language: selectedLanguage,
@@ -247,13 +261,20 @@ public struct SearchView: View {
                                 release.audioLanguages.joined(separator: ", "),
                                 release.subtitleLanguages.joined(separator: ", ")
                             ),
+                            healthText: releaseHealthText(release.releaseHealth),
                             playTitle: t(.searchActionPlay),
                             addTitle: t(.searchActionAddLibrary),
                             onOpen: {
                                 navigationCoordinator.navigate(to: .mediaDetail(id: release.mediaID))
                             },
                             onPlay: {
-                                navigationCoordinator.navigate(to: .player(mediaID: release.mediaID, release: release.torrentRelease))
+                                navigationCoordinator.navigate(to: .player(
+                                    mediaID: release.mediaID,
+                                    release: release.torrentRelease,
+                                    fallbackReleases: viewModel.results.torrentReleases
+                                        .filter { $0.mediaID == release.mediaID }
+                                        .map(\.torrentRelease)
+                                ))
                             },
                             onAdd: {
                                 navigationCoordinator.navigate(to: .mediaDetail(id: release.mediaID))
@@ -308,6 +329,21 @@ public struct SearchView: View {
     private func t(_ key: L10nKey) -> String {
         L10n.string(key, language: selectedLanguage)
     }
+
+    private func releaseHealthText(_ health: ReleaseHealth) -> String {
+        switch health {
+        case .excellent:
+            return t(.releaseHealthExcellent)
+        case .good:
+            return t(.releaseHealthGood)
+        case .weak:
+            return t(.releaseHealthWeak)
+        case .noSeeders:
+            return t(.releaseHealthNoSeeders)
+        case .unknown:
+            return t(.releaseHealthUnknown)
+        }
+    }
 }
 
 private struct FilterToggleButton: View {
@@ -324,7 +360,7 @@ private struct FilterToggleButton: View {
                 .frame(height: 30)
                 .background(
                     Capsule()
-                        .fill(isSelected ? CFColors.activeFill : CFColors.elevatedFill)
+                    .fill(isSelected ? CFColors.activeFill : CFColors.panelFill)
                         .overlay(Capsule().stroke(isSelected ? CFColors.focusRing.opacity(0.52) : CFColors.separator, lineWidth: CFSeparators.width))
                 )
                 .overlay(alignment: .bottom) {
@@ -370,7 +406,7 @@ private struct SearchFilterMenu: View {
             .frame(height: 30)
             .background(
                 Capsule()
-                    .fill(CFColors.elevatedFill)
+                    .fill(CFColors.panelFill)
                     .overlay(Capsule().stroke(CFColors.separator, lineWidth: CFSeparators.width))
             )
         }
@@ -380,14 +416,18 @@ private struct SearchFilterMenu: View {
 
 private struct TorrentReleaseRow: View {
     let release: SearchTorrentRelease
+    let seedersHelp: String
+    let rankingHelp: String
     let seedersText: String
     let languagesText: String
+    let healthText: String
     let playTitle: String
     let addTitle: String
     let onOpen: () -> Void
     let onPlay: () -> Void
     let onAdd: () -> Void
 
+    @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     var body: some View {
@@ -402,6 +442,7 @@ private struct TorrentReleaseRow: View {
 
                         QualityBadge(release.qualityLabel)
                         SourceBadge(release.source)
+                        HealthBadge(healthText, tone: healthTone(release.releaseHealth))
                     }
 
                     Text("\(release.mediaTitle) · \(release.mediaYear) · \(release.sizeLabel)")
@@ -418,6 +459,7 @@ private struct TorrentReleaseRow: View {
                 Spacer(minLength: CFSpacing.lg)
 
                 SeedersBadge(release.seeders)
+                    .help(seedersHelp)
 
                 Text(seedersText)
                     .font(CFTypography.compactNumber)
@@ -432,7 +474,7 @@ private struct TorrentReleaseRow: View {
             .padding(CFSpacing.lg)
             .background(
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                    .fill(isHovering ? CFColors.hoverFill : CFColors.elevatedFill)
+                    .fill(isHovering ? CFColors.hoverFill : CFColors.panelFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                             .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
@@ -447,18 +489,36 @@ private struct TorrentReleaseRow: View {
                         .padding(.bottom, CFSpacing.sm)
                 }
             }
-            .scaleEffect(isHovering ? 1.006 : 1)
-            .animation(CFMotion.spring, value: isHovering)
+            .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.006 : 1))
+            .cfAnimation(CFMotion.spring, value: isHovering, reduceMotion: reduceMotion)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(playTitle)
         .onHover { isHovering = $0 }
         .contextMenu {
             Button(playTitle, systemImage: "play.fill", action: onPlay)
             Button(addTitle, systemImage: "plus", action: onAdd)
             Button("Open Details", systemImage: "info.circle", action: onOpen)
         }
-        .help(release.rankingExplanation.isEmpty ? release.title : release.rankingExplanation)
+        .help(release.rankingExplanation.isEmpty ? rankingHelp : "\(release.rankingExplanation)\n\(rankingHelp)")
         .cfFocusRing(cornerRadius: CFRadius.panel)
+    }
+
+    private var accessibilityLabel: String {
+        "\(release.title), \(release.mediaTitle), \(release.qualityLabel), \(healthText), \(release.sizeLabel), \(seedersText)"
+    }
+
+    private func healthTone(_ health: ReleaseHealth) -> CFBadgeTone {
+        switch health {
+        case .excellent, .good:
+            return .success
+        case .weak, .unknown:
+            return .warning
+        case .noSeeders:
+            return .error
+        }
     }
 }
 
@@ -488,7 +548,7 @@ private struct EmptyInlineRow: View {
             .frame(maxWidth: .infinity, minHeight: 76)
             .background(
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                    .fill(CFColors.elevatedFill)
+                    .fill(CFColors.panelFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                             .stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width)

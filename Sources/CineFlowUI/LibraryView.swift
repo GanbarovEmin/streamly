@@ -1,11 +1,13 @@
 import CineFlowCore
 import CineFlowDesignSystem
+import CineFlowLocalization
 import SwiftUI
 
 public struct LibraryView: View {
     @ObservedObject private var viewModel: LibraryViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @ObservedObject private var imagePipeline: CineFlowImagePipeline
+    @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
 
     private let initialSection: LibrarySection
 
@@ -28,9 +30,7 @@ public struct LibraryView: View {
                 controls
                 content
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 28)
-            .padding(.bottom, 44)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
         .background(CFColors.clear)
@@ -42,18 +42,18 @@ public struct LibraryView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: CFSpacing.md) {
-            Text("LIBRARY")
+            Text(t(.libraryEyebrow).uppercased())
                 .font(CFTypography.overline)
                 .tracking(1.4)
                 .foregroundStyle(CFColors.accentPrimary)
 
             HStack(alignment: .bottom, spacing: CFSpacing.xl) {
                 VStack(alignment: .leading, spacing: CFSpacing.xs) {
-                    Text("Моя библиотека")
+                    Text(t(.libraryTitle))
                         .font(CFTypography.largeTitle)
                         .foregroundStyle(CFColors.textPrimary)
 
-                    Text("Избранное, списки, просмотренное и личные оценки в одном месте.")
+                    Text(t(.librarySubtitle))
                         .font(CFTypography.body)
                         .foregroundStyle(CFColors.textSecondary)
                 }
@@ -65,14 +65,7 @@ public struct LibraryView: View {
             }
         }
         .padding(CFSpacing.xl)
-        .background(
-            RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous)
-                .fill(CFColors.backgroundSecondary.opacity(0.72))
-                .overlay(
-                    RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous)
-                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                )
-        )
+        .cfPanelBackground(radius: CFRadius.hero, fill: CFColors.panelFill, shadow: .panel)
         .overlay(alignment: .topLeading) {
             Capsule()
                 .fill(CFColors.horizontalGradient)
@@ -107,7 +100,7 @@ public struct LibraryView: View {
             .scrollIndicators(.hidden)
 
             HStack(spacing: CFSpacing.md) {
-                TextField("Поиск в библиотеке", text: Binding(
+                TextField(t(.librarySearchPlaceholder), text: Binding(
                     get: { viewModel.searchQuery },
                     set: { viewModel.updateSearchQuery($0) }
                 ))
@@ -117,7 +110,7 @@ public struct LibraryView: View {
                 .frame(height: 40)
                 .background(
                     RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                        .fill(CFColors.elevatedFill)
+                        .fill(CFColors.panelFill)
                         .overlay(
                             RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                                 .stroke(CFColors.separator, lineWidth: CFSeparators.width)
@@ -155,7 +148,7 @@ public struct LibraryView: View {
     private var listPicker: some View {
         HStack(spacing: CFSpacing.sm) {
             if viewModel.lists.isEmpty {
-                SecondaryButton("Создать список", systemImage: "plus") {
+                SecondaryButton(t(.listsCreateAction), systemImage: "plus") {
                     Task { _ = try? await viewModel.defaultList() }
                 }
             } else {
@@ -173,8 +166,15 @@ public struct LibraryView: View {
         switch viewModel.state {
         case .loading:
             loadingGrid
-        case .failed(let message):
-            ErrorState(title: "Не удалось открыть библиотеку", message: message)
+        case .failed:
+            ErrorState(
+                title: t(.libraryErrorTitle),
+                message: t(.libraryErrorMessage),
+                recoverySuggestion: t(.libraryErrorRecovery),
+                actionTitle: t(.commonRetry)
+            ) {
+                Task { await viewModel.load() }
+            }
         case .empty:
             emptyState
         case .loaded:
@@ -187,7 +187,7 @@ public struct LibraryView: View {
     }
 
     private var posterGrid: some View {
-        LazyVGrid(columns: columns, spacing: 18) {
+        LazyVGrid(columns: columns, spacing: CFSpacing.md) {
             ForEach(viewModel.visibleItems) { item in
                 LibraryPosterCard(
                     model: viewModel.cardModel(for: item),
@@ -223,7 +223,7 @@ public struct LibraryView: View {
     }
 
     private var loadingGrid: some View {
-        LazyVGrid(columns: columns, spacing: 18) {
+        LazyVGrid(columns: columns, spacing: CFSpacing.md) {
             ForEach(0..<8, id: \.self) { _ in
                 LoadingSkeleton(height: 310, cornerRadius: CFRadius.panel)
             }
@@ -234,12 +234,16 @@ public struct LibraryView: View {
         EmptyState(
             title: emptyTitle,
             message: emptyMessage,
-            systemImage: emptyIcon
-        )
+            systemImage: emptyIcon,
+            actionTitle: emptyActionTitle,
+            actionSystemImage: emptyActionIcon
+        ) {
+            emptyAction()
+        }
         .frame(maxWidth: .infinity, minHeight: 360)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)
@@ -248,40 +252,60 @@ public struct LibraryView: View {
     }
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 18)]
+        [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: CFSpacing.md)]
     }
 
     private var emptyTitle: String {
         switch viewModel.selectedSection {
         case .favorites:
-            "В избранном пока пусто"
+            t(.libraryEmptyFavoritesTitle)
         case .lists:
-            "Списков пока нет"
+            t(.libraryEmptyListsTitle)
         case .watched:
-            "История просмотров пуста"
+            t(.libraryEmptyWatchedTitle)
         case .ratings:
-            "Оценок пока нет"
+            t(.libraryEmptyRatingsTitle)
         case .movies:
-            "Фильмов в библиотеке нет"
+            t(.libraryEmptyMoviesTitle)
         case .series:
-            "Сериалов в библиотеке нет"
+            t(.libraryEmptySeriesTitle)
         case .all:
-            "Библиотека пуста"
+            t(.libraryEmptyAllTitle)
         }
     }
 
     private var emptyMessage: String {
         switch viewModel.selectedSection {
         case .favorites:
-            "Добавляйте фильмы и сериалы в избранное из карточек или detail screen."
+            t(.libraryEmptyFavoritesMessage)
         case .lists:
-            "Создайте список и собирайте в нем подборку для просмотра."
+            t(.libraryEmptyListsMessage)
         case .watched:
-            "Отмеченные как просмотренные элементы появятся здесь."
+            t(.libraryEmptyWatchedMessage)
         case .ratings:
-            "Поставьте личную оценку, чтобы быстро вернуться к лучшим тайтлам."
+            t(.libraryEmptyRatingsMessage)
+        case .movies:
+            t(.libraryEmptyMoviesMessage)
+        case .series:
+            t(.libraryEmptySeriesMessage)
         default:
-            "Добавьте контент из detail screen, поиска или домашней подборки."
+            t(.libraryEmptyAllMessage)
+        }
+    }
+
+    private var emptyActionTitle: String {
+        viewModel.selectedSection == .lists ? t(.libraryEmptyActionList) : t(.libraryEmptyActionSearch)
+    }
+
+    private var emptyActionIcon: String {
+        viewModel.selectedSection == .lists ? "plus" : "magnifyingglass"
+    }
+
+    private func emptyAction() {
+        if viewModel.selectedSection == .lists {
+            navigationCoordinator.selectSidebarRoute(.lists)
+        } else {
+            navigationCoordinator.focusSearchField()
         }
     }
 
@@ -360,6 +384,14 @@ public struct LibraryView: View {
             "Оценка"
         }
     }
+
+    private var selectedLanguage: AppLanguage {
+        languageSettingsStore.selectedLanguage
+    }
+
+    private func t(_ key: L10nKey) -> String {
+        L10n.string(key, language: selectedLanguage)
+    }
 }
 
 private struct LibraryMetric: View {
@@ -380,7 +412,7 @@ private struct LibraryMetric: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                .fill(CFColors.elevatedFill)
+                .fill(CFColors.panelFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)

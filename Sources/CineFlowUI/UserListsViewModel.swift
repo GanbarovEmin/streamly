@@ -70,6 +70,20 @@ public final class UserListsViewModel: ObservableObject {
         return list
     }
 
+    public func createDefaultList() async {
+        do {
+            let list = try await repository.defaultList()
+            selectedListID = list.id
+            await load()
+            selectedListID = list.id
+            try await refreshVisibleItems()
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .database)
+            errorMessage = cineFlowError.userMessage
+            state = .failed(cineFlowError.userMessage)
+        }
+    }
+
     public func renameSelectedList(name: String, description: String?) async throws {
         guard let selectedList else { return }
         try await repository.renameList(id: selectedList.id, name: name, description: description)

@@ -81,6 +81,35 @@ final class SeriesDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSmartWatchUsesSelectedEpisodeBestReleaseAndPersistsManualOverride() async throws {
+        let selectionStore = InMemoryReleaseSelectionStore()
+        let first = SeriesDetailViewModel(
+            seriesID: "tmdb:tv:1399",
+            provider: MockSeriesDetailProvider(),
+            releaseSelectionStore: selectionStore
+        )
+        await first.load()
+
+        let automaticRelease = try XCTUnwrap(first.playBestRelease())
+        XCTAssertEqual(automaticRelease.id, "got-series-2160p")
+        XCTAssertEqual(first.lastPlayedEpisodeID, "got-s1-e1")
+
+        let manualRelease = try XCTUnwrap(first.releases.first { $0.release.id == "got-s1-e2-1080p" }?.release)
+        first.playManualRelease(manualRelease)
+
+        XCTAssertEqual(selectionStore.releaseID(for: "tmdb:tv:1399:got-s1-e1"), "got-s1-e2-1080p")
+
+        let second = SeriesDetailViewModel(
+            seriesID: "tmdb:tv:1399",
+            provider: MockSeriesDetailProvider(),
+            releaseSelectionStore: selectionStore
+        )
+        await second.load()
+
+        XCTAssertEqual(second.bestPlayableRelease?.release.id, "got-s1-e2-1080p")
+    }
+
+    @MainActor
     func testSelectingEpisodeReloadsReleasesForThatEpisode() async {
         let provider = EpisodeReleaseProvider()
         let viewModel = SeriesDetailViewModel(seriesID: "imdb:series:tt0944947", provider: provider)
@@ -95,6 +124,51 @@ final class SeriesDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.releases.map(\.scope), [.episode("tt0944947:1:2")])
         let recordedEpisodeIDs = await provider.recordedEpisodeIDs()
         XCTAssertEqual(recordedEpisodeIDs, ["tt0944947:1:2"])
+    }
+
+    @MainActor
+    func testFutureEpisodeIsUpcomingAndDoesNotLoadReleases() async {
+        let provider = FutureEpisodeProvider()
+        let viewModel = SeriesDetailViewModel(seriesID: "series:future", provider: provider)
+
+        await viewModel.load()
+
+        let upcoming = viewModel.visibleEpisodes[1]
+        XCTAssertTrue(upcoming.isUpcoming)
+
+        await viewModel.selectEpisodeAndLoadReleases(id: upcoming.id)
+
+        let recordedEpisodeIDs = await provider.recordedEpisodeIDs()
+        XCTAssertEqual(viewModel.selectedEpisode?.id, upcoming.id)
+        XCTAssertTrue(viewModel.releases.isEmpty)
+        XCTAssertTrue(recordedEpisodeIDs.isEmpty)
+    }
+
+    @MainActor
+    func testEpisodeNotificationTogglePersistsPerSeries() async {
+        let store = UserDefaultsSeriesNotificationStore(
+            userDefaults: UserDefaults(suiteName: "SeriesDetailViewModelTests.notifications")!
+        )
+        await store.setNotificationsEnabled(false, seriesID: "tmdb:tv:1399")
+        let first = SeriesDetailViewModel(
+            seriesID: "tmdb:tv:1399",
+            provider: MockSeriesDetailProvider(),
+            notificationStore: store
+        )
+
+        await first.load()
+        XCTAssertFalse(first.episodeNotificationsEnabled)
+
+        await first.setEpisodeNotificationsEnabled(true)
+
+        let second = SeriesDetailViewModel(
+            seriesID: "tmdb:tv:1399",
+            provider: MockSeriesDetailProvider(),
+            notificationStore: store
+        )
+        await second.load()
+
+        XCTAssertTrue(second.episodeNotificationsEnabled)
     }
 
     @MainActor
@@ -186,7 +260,7 @@ private actor EpisodeReleaseProvider: SeriesDetailProviderProtocol {
         episodeIDs
     }
 
-    private static func release(id: String, title: String) -> TorrentRelease {
+    fileprivate static func release(id: String, title: String) -> TorrentRelease {
         TorrentRelease(
             id: id,
             sourceId: "torrentio",
@@ -196,5 +270,62 @@ private actor EpisodeReleaseProvider: SeriesDetailProviderProtocol {
             quality: .fullHD,
             seeders: 100
         )
+    }
+}
+
+private actor FutureEpisodeProvider: SeriesDetailProviderProtocol {
+    private var episodeIDs: [String] = []
+
+    func seriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        let releasedEpisode = SeriesEpisode(
+            id: "future-s1-e1",
+            seasonID: "future-s1",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            title: "Already Here",
+            runtime: "44m",
+            overview: "Released episode.",
+            airDate: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let futureEpisode = SeriesEpisode(
+            id: "future-s1-e2",
+            seasonID: "future-s1",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            title: "Tomorrow",
+            runtime: "44m",
+            overview: "Upcoming episode.",
+            airDate: Date().addingTimeInterval(86_400)
+        )
+        return SeriesDetailResponse(
+            series: SeriesDetail(
+                id: id,
+                title: "Future Show",
+                yearRange: "2026-",
+                seasonsCount: 1,
+                rating: "7.1",
+                genres: ["Drama"],
+                overview: "Future episodes.",
+                backdropAccentIndex: 2
+            ),
+            seasons: [
+                SeriesSeason(id: "future-s1", seasonNumber: 1, title: "Season 1", episodes: [releasedEpisode, futureEpisode])
+            ],
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progressByEpisodeID: [:],
+            lastWatchedEpisodeID: nil
+        )
+    }
+
+    func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
+        episodeIDs.append(episodeID)
+        return [(EpisodeReleaseProvider.release(id: "release-\(episodeID)", title: "Future Show \(episodeID)"), .episode(episodeID))]
+    }
+
+    func recordedEpisodeIDs() -> [String] {
+        episodeIDs
     }
 }

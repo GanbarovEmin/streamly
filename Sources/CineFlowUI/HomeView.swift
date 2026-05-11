@@ -16,12 +16,10 @@ public struct HomeView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 34) {
+            VStack(alignment: .leading, spacing: CFSpacing.xl) {
                 content
             }
-            .padding(.horizontal, 30)
-            .padding(.top, 28)
-            .padding(.bottom, 52)
+            .cfSectionPadding()
         }
         .scrollIndicators(.hidden)
         .background(CFColors.clear)
@@ -41,12 +39,23 @@ public struct HomeView: View {
             EmptyState(
                 title: t(.homeEmptyTitle),
                 message: t(.homeEmptyMessage),
-                systemImage: "film.stack"
-            )
+                systemImage: "film.stack",
+                actionTitle: t(.homeEmptyAction),
+                actionSystemImage: "gearshape"
+            ) {
+                navigationCoordinator.selectSidebarRoute(.settings)
+            }
             .frame(maxWidth: .infinity, minHeight: 520)
-        case .failed(let message):
+        case .failed:
             VStack(alignment: .leading, spacing: CFSpacing.xl) {
-                ErrorState(title: t(.homeErrorTitle), message: message)
+                ErrorState(
+                    title: t(.homeErrorTitle),
+                    message: t(.homeErrorMessage),
+                    recoverySuggestion: t(.homeErrorRecovery),
+                    actionTitle: t(.homeEmptyAction)
+                ) {
+                    navigationCoordinator.selectSidebarRoute(.settings)
+                }
                 HomeLoadingView(title: t(.homeLoading))
                     .opacity(0.42)
             }
@@ -76,7 +85,13 @@ public struct HomeView: View {
 
             ForEach(viewModel.sections) { section in
                 if section.items.isEmpty {
-                    HomeEmptySection(title: localizedSectionTitle(section.kind))
+                    HomeEmptySection(
+                        title: localizedSectionTitle(section.kind),
+                        message: L10n.format(.emptyInlineMessageFormat, language: selectedLanguage, localizedSectionTitle(section.kind)),
+                        actionTitle: t(.emptyInlineAction)
+                    ) {
+                        navigationCoordinator.focusSearchField()
+                    }
                 } else {
                     MediaCarousel(
                         title: localizedSectionTitle(section.kind),
@@ -115,7 +130,11 @@ public struct HomeView: View {
     }
 
     private func t(_ key: L10nKey) -> String {
-        L10n.string(key, language: languageSettingsStore.selectedLanguage)
+        L10n.string(key, language: selectedLanguage)
+    }
+
+    private var selectedLanguage: AppLanguage {
+        languageSettingsStore.selectedLanguage
     }
 }
 
@@ -160,7 +179,7 @@ private struct HomeHeroView: View {
 
                     featuredDots
                 }
-                .padding(30)
+                .padding(CFSpacing.xl)
             }
             .clipShape(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
             .overlay(
@@ -273,7 +292,7 @@ private struct HomeLoadingView: View {
     let title: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 34) {
+        VStack(alignment: .leading, spacing: CFSpacing.xl) {
             VStack(alignment: .leading, spacing: CFSpacing.lg) {
                 LoadingSkeleton(height: 18, cornerRadius: CFRadius.pill)
                     .frame(width: 126)
@@ -284,7 +303,7 @@ private struct HomeLoadingView: View {
                 LoadingSkeleton(height: 72, cornerRadius: CFRadius.component)
                     .frame(maxWidth: 560)
             }
-            .padding(30)
+            .padding(CFSpacing.xl)
             .frame(maxWidth: .infinity, minHeight: 430, alignment: .bottomLeading)
             .background(CFHeroSurface())
             .accessibilityLabel(title)
@@ -308,6 +327,9 @@ private struct HomeLoadingView: View {
 
 private struct HomeEmptySection: View {
     let title: String
+    let message: String
+    let actionTitle: String
+    let action: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: CFSpacing.md) {
@@ -317,13 +339,16 @@ private struct HomeEmptySection: View {
 
             EmptyState(
                 title: title,
-                message: "",
-                systemImage: "rectangle.stack.badge.minus"
+                message: message,
+                systemImage: "rectangle.stack.badge.minus",
+                actionTitle: actionTitle,
+                actionSystemImage: "magnifyingglass",
+                action: action
             )
             .frame(maxWidth: .infinity, minHeight: 160)
             .background(
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                    .fill(CFColors.elevatedFill)
+                    .fill(CFColors.panelFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                             .stroke(CFColors.separator, lineWidth: CFSeparators.width)

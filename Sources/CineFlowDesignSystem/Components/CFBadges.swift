@@ -133,3 +133,17 @@ public struct SeedersBadge: View {
         CFBadge("\(count)", tone: .seeders)
     }
 }
+
+public struct HealthBadge: View {
+    private let text: String
+    private let tone: CFBadgeTone
+
+    public init(_ text: String, tone: CFBadgeTone) {
+        self.text = text
+        self.tone = tone
+    }
+
+    public var body: some View {
+        CFBadge(text, tone: tone)
+    }
+}

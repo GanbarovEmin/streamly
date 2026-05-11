@@ -55,7 +55,7 @@ public final class ContinueWatchingViewModel: ObservableObject {
             id: progress.episodeID ?? progress.mediaID,
             title: title(for: progress),
             metadata: "\(Int(progress.progressPercent.rounded()))% · \(timeLabel(progress.positionSeconds))",
-            badge: progress.releaseID,
+            badge: nil,
             progress: progress.progressPercent / 100,
             accentIndex: abs((progress.episodeID ?? progress.mediaID).hashValue)
         )
@@ -63,9 +63,9 @@ public final class ContinueWatchingViewModel: ObservableObject {
 
     private func title(for progress: PlaybackProgress) -> String {
         if progress.mediaID.contains(":tv:") {
-            return progress.episodeID.map { "Series · \($0)" } ?? "Series"
+            return progress.episodeID == nil ? "Сериал" : "Серия"
         }
-        return progress.mediaID
+        return "Фильм"
     }
 
     private func timeLabel(_ seconds: Double) -> String {
@@ -152,9 +152,9 @@ public final class WatchHistoryViewModel: ObservableObject {
 
     private func title(for entry: WatchHistoryItem) -> String {
         if entry.mediaID.contains(":tv:") {
-            return entry.episodeID.map { "Series · \($0)" } ?? "Series"
+            return entry.episodeID == nil ? "Сериал" : "Серия"
         }
-        return entry.mediaID
+        return "Фильм"
     }
 
     private func dateTitle(_ date: Date) -> String {
