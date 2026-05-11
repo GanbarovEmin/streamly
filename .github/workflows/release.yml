@@ -113,7 +113,7 @@ jobs:
           chmod 600 "$SPARKLE_KEY"
           .build/artifacts/sparkle/Sparkle/bin/generate_appcast \
             --ed-key-file "$SPARKLE_KEY" \
-            --download-url-prefix "https://github.com/GanbarovEmin/streamly/releases/download/${{ steps.version.outputs.tag }}" \
+            --download-url-prefix "https://github.com/GanbarovEmin/streamly/releases/download/${{ steps.version.outputs.tag }}/" \
             "$SPARKLE_DIR"
           test -f "$SPARKLE_DIR/appcast.xml"
 
