@@ -24,6 +24,7 @@ public final class WatchHistoryRepository: WatchHistoryRepositoryProtocol {
 
     public func record(_ progress: PlaybackProgress) async throws {
         try databaseManager.write { db in
+            try ensureMediaItemExists(db: db, mediaID: progress.mediaID)
             try db.execute(
                 sql: """
                     INSERT INTO watch_history (

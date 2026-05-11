@@ -27,6 +27,24 @@ func mediaItem(from row: Row) -> MediaItem {
     )
 }
 
+func ensureMediaItemExists(db: Database, mediaID: String) throws {
+    let kind = mediaID.contains(":series:") || mediaID.contains(":tv:") ? MediaKind.series : .movie
+    try db.execute(
+        sql: """
+            INSERT OR IGNORE INTO media_items (
+                id,
+                title,
+                kind,
+                overview,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+        arguments: [mediaID, mediaID, kind.rawValue]
+    )
+}
+
 func timestamp(_ date: Date = Date()) -> String {
     ISO8601DateFormatter().string(from: date)
 }

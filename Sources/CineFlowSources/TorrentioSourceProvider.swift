@@ -250,7 +250,7 @@ public struct TorrentioStreamMapper: Sendable {
 
     private func release(from stream: StremioStream, mediaID: String) -> TorrentRelease? {
         guard let infoHash = stream.infoHash?.trimmedNonEmpty else { return nil }
-        let fileIndex = stream.fileIdx ?? 0
+        let fileIndexIdentifier = stream.fileIdx.map(String.init) ?? "auto"
         let title = stream.behaviorHints?.filename?.trimmedNonEmpty ?? stream.title?.firstLine ?? stream.name?.firstLine ?? infoHash
         let searchText = [
             stream.name,
@@ -262,7 +262,7 @@ public struct TorrentioStreamMapper: Sendable {
         .joined(separator: " ")
 
         return TorrentRelease(
-            id: "torrentio:\(mediaID):\(infoHash):\(fileIndex)",
+            id: "torrentio:\(mediaID):\(infoHash):\(fileIndexIdentifier)",
             sourceId: "torrentio",
             sourceName: providerName(from: stream.title) ?? "Torrentio",
             title: title,
@@ -275,7 +275,7 @@ public struct TorrentioStreamMapper: Sendable {
             seeders: seeders(from: stream.title),
             leechers: 0,
             sizeBytes: sizeBytes(from: stream.title),
-            preferredFileIndex: fileIndex
+            preferredFileIndex: stream.fileIdx
         )
     }
 

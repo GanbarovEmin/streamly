@@ -325,6 +325,35 @@ final class DatabaseLayerTests: XCTestCase {
         XCTAssertEqual(allContinueWatching.map(\.mediaID), [item.id])
     }
 
+    func testPlaybackProgressCreatesPlaceholderForSourceOnlyMedia() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let progressRepository = PlaybackProgressRepository(databaseManager: databaseManager)
+        let historyRepository = WatchHistoryRepository(databaseManager: databaseManager)
+
+        try await progressRepository.saveProgress(
+            PlaybackProgress(
+                mediaID: "imdb:movie:tt16431404",
+                releaseID: "torrentio:apex",
+                positionSeconds: 12,
+                durationSeconds: 6000
+            )
+        )
+        try await historyRepository.record(
+            PlaybackProgress(
+                mediaID: "imdb:movie:tt16431404",
+                releaseID: "torrentio:apex",
+                positionSeconds: 12,
+                durationSeconds: 6000
+            )
+        )
+
+        let storedProgress = try await progressRepository.progress(mediaID: "imdb:movie:tt16431404")
+        let historyEntries = try await historyRepository.entries()
+
+        XCTAssertEqual(storedProgress?.mediaID, "imdb:movie:tt16431404")
+        XCTAssertEqual(historyEntries.first?.mediaID, "imdb:movie:tt16431404")
+    }
+
     func testPlaybackProgressKeepsSeparateSeriesEpisodes() async throws {
         let databaseManager = try DatabaseManager.inMemory()
         let series = MediaItem(

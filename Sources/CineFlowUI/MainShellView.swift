@@ -40,37 +40,31 @@ public struct MainShellView: View {
 
     public var body: some View {
         ZStack(alignment: .topTrailing) {
-            HStack(spacing: 0) {
-                SidebarView(navigationCoordinator: navigationCoordinator)
-                    .frame(width: 244)
+            if isPlayerRoute {
+                contentContainer
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                HStack(spacing: 0) {
+                    SidebarView(navigationCoordinator: navigationCoordinator)
+                        .frame(width: 244)
 
-                VStack(spacing: 0) {
-                    TopSearchBarView(
-                        controls: MainShellState.defaultTopControls,
-                        focusRequestID: navigationCoordinator.searchFocusRequestID,
-                        queryText: searchViewModel.queryText,
-                        onQueryChange: { query in
-                            searchViewModel.updateQuery(query)
-                            navigationCoordinator.selectSidebarRoute(.search)
-                        },
-                        onSearchFocus: {
-                            navigationCoordinator.selectSidebarRoute(.search)
-                        }
-                    )
-                        .frame(height: 92)
+                    VStack(spacing: 0) {
+                        TopSearchBarView(
+                            controls: MainShellState.defaultTopControls,
+                            focusRequestID: navigationCoordinator.searchFocusRequestID,
+                            queryText: searchViewModel.queryText,
+                            onQueryChange: { query in
+                                searchViewModel.updateQuery(query)
+                                navigationCoordinator.selectSidebarRoute(.search)
+                            },
+                            onSearchFocus: {
+                                navigationCoordinator.selectSidebarRoute(.search)
+                            }
+                        )
+                            .frame(height: 92)
 
-                    ContentContainerView(
-                        route: navigationCoordinator.currentRoute,
-                        environment: environment,
-                        viewModel: viewModel,
-                        searchViewModel: searchViewModel,
-                        navigationCoordinator: navigationCoordinator,
-                        sourceManager: sourceManager,
-                        playbackProgressRecorder: playbackProgressRecorder,
-                        imagePipeline: imagePipeline
-                    )
-                    .id(navigationCoordinator.currentRoute.id)
-                    .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.995)))
+                        contentContainer
+                    }
                 }
             }
 
@@ -88,5 +82,27 @@ public struct MainShellView: View {
 
     private var reduceMotion: Bool {
         systemReduceMotion || appReduceMotion
+    }
+
+    private var isPlayerRoute: Bool {
+        if case .player = navigationCoordinator.currentRoute {
+            return true
+        }
+        return false
+    }
+
+    private var contentContainer: some View {
+        ContentContainerView(
+            route: navigationCoordinator.currentRoute,
+            environment: environment,
+            viewModel: viewModel,
+            searchViewModel: searchViewModel,
+            navigationCoordinator: navigationCoordinator,
+            sourceManager: sourceManager,
+            playbackProgressRecorder: playbackProgressRecorder,
+            imagePipeline: imagePipeline
+        )
+        .id(navigationCoordinator.currentRoute.id)
+        .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.995)))
     }
 }

@@ -83,7 +83,9 @@ public struct PlayerView: View {
 
     private var renderOverlay: some View {
         VStack {
-            HStack {
+            HStack(spacing: CFSpacing.md) {
+                backButton
+
                 VStack(alignment: .leading, spacing: 6) {
                     Text(viewModel.status.media?.title ?? t(.playerTitleFallback))
                         .font(CFTypography.title)
@@ -126,6 +128,13 @@ public struct PlayerView: View {
                 }
             }
             .padding(.bottom, 112)
+        }
+    }
+
+    private var backButton: some View {
+        IconButton(systemImage: "chevron.left", accessibilityLabel: t(.playerControlBack)) {
+            Task { await viewModel.stop() }
+            onExit()
         }
     }
 
@@ -467,11 +476,6 @@ public struct PlayerView: View {
                 }
                 .keyboardShortcut("d", modifiers: [.command])
 
-                IconButton(systemImage: "xmark", accessibilityLabel: t(.playerControlExit)) {
-                    Task { await viewModel.stop() }
-                    onExit()
-                }
-                .keyboardShortcut(.escape, modifiers: [])
             }
         }
         .padding(CFSpacing.lg)
@@ -490,49 +494,53 @@ public struct PlayerView: View {
     private var timelineControl: some View {
         VStack(alignment: .leading, spacing: 4) {
             GeometryReader { proxy in
-                ZStack(alignment: .topLeading) {
-                    Slider(
-                        value: Binding(
-                            get: { timelineScrubTime ?? viewModel.status.currentTime },
-                            set: { value in
-                                timelineScrubTime = value
-                                viewModel.requestTimelinePreview(at: value)
+                if hasKnownTimelineDuration {
+                    ZStack(alignment: .topLeading) {
+                        Slider(
+                            value: Binding(
+                                get: { min(max(timelineScrubTime ?? viewModel.status.currentTime, 0), timelineUpperBound) },
+                                set: { value in
+                                    timelineScrubTime = value
+                                    viewModel.requestTimelinePreview(at: value)
+                                }
+                            ),
+                            in: 0...timelineUpperBound,
+                            onEditingChanged: { editing in
+                                isScrubbingTimeline = editing
+                                if !editing, let timelineScrubTime {
+                                    let target = timelineScrubTime
+                                    self.timelineScrubTime = nil
+                                    Task { await viewModel.seek(to: target) }
+                                }
                             }
-                        ),
-                        in: 0...timelineUpperBound,
-                        onEditingChanged: { editing in
-                            isScrubbingTimeline = editing
-                            if !editing, let timelineScrubTime {
-                                let target = timelineScrubTime
-                                self.timelineScrubTime = nil
-                                Task { await viewModel.seek(to: target) }
+                        )
+                        .accessibilityLabel(t(.playerControlTimeline))
+                        .accessibilityValue("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
+                        .help("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                let width = max(1, proxy.size.width)
+                                let clampedX = min(max(0, location.x), width)
+                                timelineHoverX = clampedX
+                                let time = Double(clampedX / width) * timelineUpperBound
+                                viewModel.requestTimelinePreview(at: time)
+                            case .ended:
+                                if !isScrubbingTimeline {
+                                    timelineHoverX = nil
+                                    viewModel.hideTimelinePreview()
+                                }
                             }
                         }
-                    )
-                    .accessibilityLabel(t(.playerControlTimeline))
-                    .accessibilityValue("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
-                    .help("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case .active(let location):
-                            let width = max(1, proxy.size.width)
-                            let clampedX = min(max(0, location.x), width)
-                            timelineHoverX = clampedX
-                            let time = Double(clampedX / width) * timelineUpperBound
-                            viewModel.requestTimelinePreview(at: time)
-                        case .ended:
-                            if !isScrubbingTimeline {
-                                timelineHoverX = nil
-                                viewModel.hideTimelinePreview()
-                            }
-                        }
-                    }
 
-                    if let timelineHoverX, !viewModel.timelinePreview.isHidden {
-                        timelinePreviewBubble
-                            .offset(x: previewBubbleX(timelineHoverX, width: proxy.size.width), y: -94)
-                            .transition(.opacity)
+                        if let timelineHoverX, !viewModel.timelinePreview.isHidden {
+                            timelinePreviewBubble
+                                .offset(x: previewBubbleX(timelineHoverX, width: proxy.size.width), y: -94)
+                                .transition(.opacity)
+                        }
                     }
+                } else {
+                    unknownDurationTimelineRail
                 }
             }
             .frame(height: 30)
@@ -649,7 +657,23 @@ public struct PlayerView: View {
     }
 
     private var timelineUpperBound: Double {
-        max(viewModel.status.duration ?? 0, viewModel.status.currentTime + 1, 1)
+        max(viewModel.status.duration ?? 1, 1)
+    }
+
+    private var hasKnownTimelineDuration: Bool {
+        guard let duration = viewModel.status.duration else { return false }
+        return duration > 0
+    }
+
+    private var unknownDurationTimelineRail: some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(CFColors.separator.opacity(0.55))
+            .frame(height: 6)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .accessibilityLabel(t(.playerControlTimeline))
+            .accessibilityValue("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
+            .help("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
     }
 
     private var timelineDisplayLabel: String {

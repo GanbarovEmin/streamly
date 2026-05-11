@@ -221,6 +221,7 @@
 "player.control.speed" = "Speed";
 "player.control.pictureInPicture" = "Picture in picture";
 "player.control.fullscreen" = "Fullscreen";
+"player.control.back" = "Back";
 "player.control.exit" = "Exit player";
 "player.buffering.format" = "Buffering %d%%";
 

@@ -221,6 +221,7 @@
 "player.control.speed" = "Скорость";
 "player.control.pictureInPicture" = "Картинка в картинке";
 "player.control.fullscreen" = "Полный экран";
+"player.control.back" = "Назад";
 "player.control.exit" = "Закрыть плеер";
 "player.buffering.format" = "Буферизация %d%%";
 

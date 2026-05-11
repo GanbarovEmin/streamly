@@ -41,6 +41,34 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertTrue(TranscodingAVPlaybackService.playlistIsReadyForStartup(readyPlaylist))
     }
 
+    @MainActor
+    func testLocalHLSBridgeDurationIsTreatedAsUnknownDuringEventPlayback() {
+        let bridgeURL = URL(string: "http://127.0.0.1:49200/stream.m3u8")!
+        let directURL = URL(fileURLWithPath: "/tmp/movie.mp4")
+
+        XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(72, mediaURL: bridgeURL))
+        XCTAssertEqual(AVFoundationPlaybackService.effectiveDuration(7_200, mediaURL: directURL), 7_200)
+        XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(.nan, mediaURL: directURL))
+        XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(0, mediaURL: directURL))
+    }
+
+    @MainActor
+    func testLocalHLSInitialSeekTargetsEarliestAvailableRange() {
+        let ranges = [
+            CMTimeRange(
+                start: CMTime(seconds: 14, preferredTimescale: 600),
+                duration: CMTime(seconds: 6, preferredTimescale: 600)
+            ),
+            CMTimeRange(
+                start: CMTime(seconds: 2, preferredTimescale: 600),
+                duration: CMTime(seconds: 4, preferredTimescale: 600)
+            )
+        ]
+
+        XCTAssertEqual(TranscodingAVPlaybackService.initialHLSSeekTargetSeconds(from: ranges), 2)
+        XCTAssertEqual(TranscodingAVPlaybackService.initialHLSSeekTargetSeconds(from: []), 0)
+    }
+
     func testTimelinePreviewServiceGeneratesAndReusesLocalCacheWithoutRemoteGeneration() async throws {
         let cacheRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("TimelinePreviewServiceTests-\(UUID().uuidString)", isDirectory: true)

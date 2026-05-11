@@ -133,6 +133,7 @@ final class LocalizationTests: XCTestCase {
             .playerControlSpeed,
             .playerControlPictureInPicture,
             .playerControlFullscreen,
+            .playerControlBack,
             .playerControlExit,
             .playerResumeTitle,
             .playerResumeMessageFormat,

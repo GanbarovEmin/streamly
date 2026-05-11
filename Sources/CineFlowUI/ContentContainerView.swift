@@ -111,9 +111,57 @@ public struct ContentContainerView: View {
                     diagnosticsService: environment.diagnosticsService
                 )
             }
+        } else if case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt) = route {
+            playerRouteView(
+                mediaID: mediaID,
+                sourceID: sourceID,
+                release: release,
+                fallbackReleases: fallbackReleases,
+                selectionContext: selectionContext,
+                nextEpisodePrompt: nextEpisodePrompt
+            )
         } else {
             legacyBody
         }
+    }
+
+    private func playerRouteView(
+        mediaID: String,
+        sourceID: String?,
+        release: TorrentRelease?,
+        fallbackReleases: [TorrentRelease],
+        selectionContext: PlaybackSelectionContext?,
+        nextEpisodePrompt: PlayerNextEpisodePrompt?
+    ) -> some View {
+        PlayerRouteView(
+            mediaID: mediaID,
+            sourceID: sourceID,
+            release: release,
+            fallbackReleases: fallbackReleases,
+            selectionContext: selectionContext,
+            nextEpisodePrompt: nextEpisodePrompt,
+            environment: environment,
+            sourceManager: sourceManager,
+            playbackService: viewModel.playbackService,
+            playbackProgressRecorder: playbackProgressRecorder,
+            language: selectedLanguage,
+            onExit: {
+                navigationCoordinator.goBack()
+            },
+            onNextEpisode: { action in
+                if action.requiresManualReleaseSelection || action.release == nil {
+                    navigationCoordinator.goBack()
+                } else {
+                    navigationCoordinator.navigate(to: .player(
+                        mediaID: action.mediaID,
+                        sourceID: action.sourceID,
+                        release: action.release,
+                        fallbackReleases: action.fallbackReleases,
+                        selectionContext: action.selectionContext
+                    ))
+                }
+            }
+        )
     }
 
     private var legacyBody: some View {
@@ -201,34 +249,13 @@ public struct ContentContainerView: View {
                 navigationCoordinator.navigate(to: .player(mediaID: id))
             }
         case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt):
-            PlayerRouteView(
+            playerRouteView(
                 mediaID: mediaID,
                 sourceID: sourceID,
                 release: release,
                 fallbackReleases: fallbackReleases,
                 selectionContext: selectionContext,
-                nextEpisodePrompt: nextEpisodePrompt,
-                environment: environment,
-                sourceManager: sourceManager,
-                playbackService: viewModel.playbackService,
-                playbackProgressRecorder: playbackProgressRecorder,
-                language: selectedLanguage,
-                onExit: {
-                    navigationCoordinator.goBack()
-                },
-                onNextEpisode: { action in
-                    if action.requiresManualReleaseSelection || action.release == nil {
-                        navigationCoordinator.goBack()
-                    } else {
-                        navigationCoordinator.navigate(to: .player(
-                            mediaID: action.mediaID,
-                            sourceID: action.sourceID,
-                            release: action.release,
-                            fallbackReleases: action.fallbackReleases,
-                            selectionContext: action.selectionContext
-                        ))
-                    }
-                }
+                nextEpisodePrompt: nextEpisodePrompt
             )
         case .settingsSection:
             DeepLinkPlaceholderView(
@@ -397,6 +424,7 @@ private struct PlayerRouteView: View {
     @State private var rankingPreferences = RankingPreferences()
     @State private var activeFallbackReleases: [TorrentRelease] = []
     @State private var activeSelectionContext: PlaybackSelectionContext?
+    @State private var attemptedPlaybackReleaseIDs = Set<String>()
     @StateObject private var sessionCoordinator = PlaybackSessionCoordinator()
 
     var body: some View {
@@ -453,7 +481,7 @@ private struct PlayerRouteView: View {
                         diagnosticsService: environment.diagnosticsService,
                         progressRecorder: playbackProgressRecorder,
                         progressRepository: environment.playbackProgressRepository,
-                        fallbackReleases: effectiveFallbackReleases,
+                        fallbackReleases: playableFallbackReleases(for: source.release),
                         fallbackPreferences: rankingPreferences,
                         fallbackHandler: { release in
                             await loadTorrentRelease(release)
@@ -514,6 +542,7 @@ private struct PlayerRouteView: View {
     private func load() async {
         activeSelectionContext = selectionContext
         activeFallbackReleases = fallbackReleases
+        attemptedPlaybackReleaseIDs.removeAll()
 
         if let release {
             await loadTorrentRelease(release)
@@ -603,15 +632,25 @@ private struct PlayerRouteView: View {
         activeSelectionContext ?? selectionContext
     }
 
+    private func playableFallbackReleases(for currentRelease: TorrentRelease?) -> [TorrentRelease] {
+        effectiveFallbackReleases.filter { release in
+            release.id == currentRelease?.id || !attemptedPlaybackReleaseIDs.contains(release.id)
+        }
+    }
+
     private func loadTorrentRelease(
         _ release: TorrentRelease,
         fallbackReleases overrideFallbackReleases: [TorrentRelease]? = nil,
         selectionContext overrideSelectionContext: PlaybackSelectionContext? = nil
     ) async {
-        let resolvedFallbackReleases = overrideFallbackReleases ?? effectiveFallbackReleases
+        let baseFallbackReleases = overrideFallbackReleases ?? effectiveFallbackReleases
+        let resolvedFallbackReleases = baseFallbackReleases.filter {
+            $0.id == release.id || !attemptedPlaybackReleaseIDs.contains($0.id)
+        }
         let resolvedSelectionContext = overrideSelectionContext ?? effectiveSelectionContext
         activeFallbackReleases = resolvedFallbackReleases
         activeSelectionContext = resolvedSelectionContext
+        attemptedPlaybackReleaseIDs.insert(release.id)
 
         let requestID = await sessionCoordinator.beginNewSession(
             torrentEngine: environment.torrentEngine,
@@ -650,13 +689,16 @@ private struct PlayerRouteView: View {
         guard !Task.isCancelled, sessionCoordinator.isCurrent(requestID) else { return }
 
         switch result {
-        case .ready(let source, let session, _):
+        case .ready(let source, let session, let attempts):
+            attemptedPlaybackReleaseIDs.formUnion(attempts.map(\.release.id))
             sessionCoordinator.activate(session)
             state = .ready(source, session)
-        case .needsMediaFileSelection(let session, let release, let options, _):
+        case .needsMediaFileSelection(let session, let release, let options, let attempts):
+            attemptedPlaybackReleaseIDs.formUnion(attempts.map(\.release.id))
             sessionCoordinator.activate(session)
             state = .chooseMediaFile(session, release, options)
-        case .failed(let error, let suggestion, _):
+        case .failed(let error, let suggestion, let attempts):
+            attemptedPlaybackReleaseIDs.formUnion(attempts.map(\.release.id))
             state = .torrentFailed(error.userMessage, suggestion ?? fallbackSuggestion(for: release, reason: .failedToStart))
             await environment.diagnosticsService.log(
                 error,

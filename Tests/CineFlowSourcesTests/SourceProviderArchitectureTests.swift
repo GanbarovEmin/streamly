@@ -272,6 +272,28 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce") == true)
     }
 
+    func testTorrentioStreamWithoutFileIndexLetsPlaybackSelectBestMediaFile() throws {
+        let json = """
+        {
+          "streams": [
+            {
+              "title": "Apex 2021 1080p BluRay\\n👤 1096 💾 6.1 GB ⚙️ Rutor",
+              "infoHash": "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
+              "behaviorHints": {
+                "filename": "Apex.2021.1080p.BluRay.mkv"
+              }
+            }
+          ]
+        }
+        """
+        let response = try JSONDecoder().decode(StremioStreamResponse.self, from: Data(json.utf8))
+
+        let release = try XCTUnwrap(TorrentioStreamMapper().releases(from: response, mediaID: "tt16431404").first)
+
+        XCTAssertEqual(release.id, "torrentio:tt16431404:abcdefabcdefabcdefabcdefabcdefabcdefabcd:auto")
+        XCTAssertNil(release.preferredFileIndex)
+    }
+
     func testTorrentioProviderIsVisibleAndActiveByDefault() async throws {
         let settingsStore = InMemoryTorrentioSettingsStore()
         let catalog = SourceProviderCatalog.providers(

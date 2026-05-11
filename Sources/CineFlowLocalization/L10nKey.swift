@@ -366,6 +366,7 @@ public extension L10nKey {
     static let playerControlSpeed = Self(rawValue: "player.control.speed")
     static let playerControlPictureInPicture = Self(rawValue: "player.control.pictureInPicture")
     static let playerControlFullscreen = Self(rawValue: "player.control.fullscreen")
+    static let playerControlBack = Self(rawValue: "player.control.back")
     static let playerControlExit = Self(rawValue: "player.control.exit")
     static let playerBufferingFormat = Self(rawValue: "player.buffering.format")
 

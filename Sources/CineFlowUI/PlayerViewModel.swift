@@ -172,6 +172,8 @@ public enum PlayerKeyboardShortcut: Equatable, Sendable {
 
 @MainActor
 public final class PlayerViewModel: ObservableObject {
+    static let startupPlayableBufferTargetBytes: Int64 = 16 * 1024 * 1024
+
     @Published public private(set) var status: PlaybackStatus
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var controlsAreVisible = true
@@ -352,8 +354,11 @@ public final class PlayerViewModel: ObservableObject {
         }
 
         let torrentProgress = torrentStatus.progress
-        let progress = torrentProgress.totalBytes > 0 ? torrentProgress.progressFraction : playbackProgress
-        let percent = Int(progress * 100)
+        let downloadProgress = torrentProgress.totalBytes > 0 ? torrentProgress.progressFraction : nil
+        let playableBytes = max(0, torrentProgress.bufferedBytes)
+        let playableProgress = min(Double(playableBytes) / Double(Self.startupPlayableBufferTargetBytes), 1)
+        let playablePercent = Int(playableProgress * 100)
+        let downloadPercent = downloadProgress.map { Int($0 * 100) }
         var primaryDetails: [String] = []
 
         if torrentProgress.downloadSpeedBytesPerSecond > 0 {
@@ -364,26 +369,37 @@ public final class PlayerViewModel: ObservableObject {
 
         if torrentProgress.totalBytes > 0 {
             primaryDetails.append(
-                "Loaded: \(Self.byteCountLabel(torrentProgress.downloadedBytes)) / \(Self.byteCountLabel(torrentProgress.totalBytes)) (\(percent)%)"
+                "Loaded: \(Self.byteCountLabel(torrentProgress.downloadedBytes)) / \(Self.byteCountLabel(torrentProgress.totalBytes)) (\(downloadPercent ?? 0)%)"
             )
         } else {
             primaryDetails.append("Loaded: \(Self.byteCountLabel(torrentProgress.downloadedBytes))")
         }
 
-        primaryDetails.append("Playable buffer: \(Self.byteCountLabel(torrentProgress.bufferedBytes))")
+        primaryDetails.append(
+            "Playable start buffer: \(Self.byteCountLabel(playableBytes)) / \(Self.byteCountLabel(Self.startupPlayableBufferTargetBytes))"
+        )
 
         if torrentProgress.totalBytes > torrentProgress.downloadedBytes,
            torrentProgress.downloadSpeedBytesPerSecond > 0 {
             let remainingBytes = torrentProgress.totalBytes - torrentProgress.downloadedBytes
             let seconds = Double(remainingBytes) / Double(torrentProgress.downloadSpeedBytesPerSecond)
-            primaryDetails.append("ETA: \(Self.durationLabel(seconds))")
+            primaryDetails.append("Full file ETA: \(Self.durationLabel(seconds))")
         } else if torrentProgress.totalBytes > 0 && torrentProgress.downloadedBytes >= torrentProgress.totalBytes {
-            primaryDetails.append("ETA: Ready")
+            primaryDetails.append("Full file ETA: Ready")
         } else {
-            primaryDetails.append("ETA: Waiting for speed")
+            primaryDetails.append("Full file ETA: Waiting for speed")
         }
 
-        return ("Preparing stream · \(percent)%", progress, primaryDetails)
+        let message: String
+        if playableProgress >= 1 {
+            message = "Starting player"
+        } else if playableBytes > 0 {
+            message = "Preparing playable buffer · \(playablePercent)%"
+        } else {
+            message = "Waiting for playable pieces"
+        }
+
+        return (message, playableProgress, primaryDetails)
     }
 
     public var avPlayer: AVPlayer? {
@@ -394,7 +410,7 @@ public final class PlayerViewModel: ObservableObject {
         await loadPlayerPreferences()
         status = PlaybackStatus(media: mediaSource, state: .loading, bufferingState: .buffering(progress: 0))
         startTorrentStatusUpdates()
-        await perform {
+        do {
             self.resumeProgress = try await self.progressRepository?.progress(
                 mediaID: self.mediaSource.selectionContext?.mediaID ?? self.mediaSource.id,
                 episodeID: self.mediaSource.selectionContext?.episodeID
@@ -409,6 +425,13 @@ public final class PlayerViewModel: ObservableObject {
             }
             await self.refreshStatus()
             self.startStatusUpdates()
+        } catch {
+            await handlePlaybackFailure(
+                error,
+                subsystem: .playback,
+                operation: "playbackOperation",
+                allowAutomaticFallback: true
+            )
         }
     }
 
@@ -1284,35 +1307,114 @@ public final class PlayerViewModel: ObservableObject {
             try await operation()
             errorMessage = nil
         } catch {
-            let cineFlowError = CineFlowError.from(error, fallbackCategory: .playback)
-            errorMessage = cineFlowError.userMessage
-            if status.state.shouldFailFastInUI {
-                status = PlaybackStatus(
-                    media: status.media ?? mediaSource,
-                    state: .failed(reason: cineFlowError.technicalDescription),
-                    currentTime: status.currentTime,
-                    duration: status.duration,
-                    bufferingState: .idle,
-                    volume: status.volume,
-                    isMuted: status.isMuted,
-                    playbackSpeed: status.playbackSpeed,
-                    audioTracks: status.audioTracks,
-                    subtitleTracks: status.subtitleTracks,
-                    selectedAudioTrackId: status.selectedAudioTrackId,
-                    selectedSubtitleTrackId: status.selectedSubtitleTrackId,
-                    isFullscreen: status.isFullscreen,
-                    isPictureInPictureActive: status.isPictureInPictureActive,
-                    qualityLabel: status.qualityLabel,
-                    sourceName: status.sourceName,
-                    chapters: status.chapters,
-                    audioBoost: status.audioBoost,
-                    subtitleDelaySeconds: status.subtitleDelaySeconds,
-                    subtitleFontSize: status.subtitleFontSize,
-                    subtitleStyle: status.subtitleStyle
-                )
-            }
-            await logError(error, subsystem: subsystem, operation: name)
+            await handlePlaybackFailure(
+                error,
+                subsystem: subsystem,
+                operation: name,
+                allowAutomaticFallback: false
+            )
         }
+    }
+
+    private func handlePlaybackFailure(
+        _ error: Error,
+        subsystem: DiagnosticsSubsystem,
+        operation: String,
+        allowAutomaticFallback: Bool
+    ) async {
+        let cineFlowError = CineFlowError.from(error, fallbackCategory: .playback)
+        if status.state.shouldFailFastInUI,
+           allowAutomaticFallback,
+           startAutomaticFallback(reason: .failedToStart, failedStatus: status) {
+            await logError(error, subsystem: subsystem, operation: operation)
+            return
+        }
+
+        errorMessage = cineFlowError.userMessage
+        if status.state.shouldFailFastInUI {
+            status = PlaybackStatus(
+                media: status.media ?? mediaSource,
+                state: .failed(reason: cineFlowError.technicalDescription),
+                currentTime: status.currentTime,
+                duration: status.duration,
+                bufferingState: .idle,
+                volume: status.volume,
+                isMuted: status.isMuted,
+                playbackSpeed: status.playbackSpeed,
+                audioTracks: status.audioTracks,
+                subtitleTracks: status.subtitleTracks,
+                selectedAudioTrackId: status.selectedAudioTrackId,
+                selectedSubtitleTrackId: status.selectedSubtitleTrackId,
+                isFullscreen: status.isFullscreen,
+                isPictureInPictureActive: status.isPictureInPictureActive,
+                qualityLabel: status.qualityLabel,
+                sourceName: status.sourceName,
+                chapters: status.chapters,
+                audioBoost: status.audioBoost,
+                subtitleDelaySeconds: status.subtitleDelaySeconds,
+                subtitleFontSize: status.subtitleFontSize,
+                subtitleStyle: status.subtitleStyle
+            )
+        }
+        await logError(error, subsystem: subsystem, operation: operation)
+    }
+
+    @discardableResult
+    private func startAutomaticFallback(reason: ReleaseFallbackReason, failedStatus: PlaybackStatus) -> Bool {
+        guard fallbackHandler != nil,
+              let release = failedStatus.media?.release ?? mediaSource.release,
+              let suggestion = ReleaseFallbackPlanner.suggestion(
+                for: release,
+                in: fallbackReleases,
+                reason: reason,
+                preferences: recoveryFallbackPreferences(for: reason)
+              ),
+              let nextRelease = suggestion.nextBestRelease?.release,
+              !automaticallyTriedFallbackReleaseIDs.contains(nextRelease.id)
+        else { return false }
+
+        automaticallyTriedFallbackReleaseIDs.insert(nextRelease.id)
+        fallbackSuggestion = suggestion
+        errorMessage = nil
+        status = PlaybackStatus(
+            media: failedStatus.media ?? mediaSource,
+            state: .retrying,
+            currentTime: failedStatus.currentTime,
+            duration: failedStatus.duration,
+            bufferingState: .buffering(progress: 0),
+            volume: failedStatus.volume,
+            isMuted: failedStatus.isMuted,
+            playbackSpeed: failedStatus.playbackSpeed,
+            audioTracks: failedStatus.audioTracks,
+            subtitleTracks: failedStatus.subtitleTracks,
+            selectedAudioTrackId: failedStatus.selectedAudioTrackId,
+            selectedSubtitleTrackId: failedStatus.selectedSubtitleTrackId,
+            isFullscreen: failedStatus.isFullscreen,
+            isPictureInPictureActive: failedStatus.isPictureInPictureActive,
+            qualityLabel: failedStatus.qualityLabel,
+            sourceName: failedStatus.sourceName,
+            chapters: failedStatus.chapters,
+            audioBoost: failedStatus.audioBoost,
+            subtitleDelaySeconds: failedStatus.subtitleDelaySeconds,
+            subtitleFontSize: failedStatus.subtitleFontSize,
+            subtitleStyle: failedStatus.subtitleStyle
+        )
+        Task { await self.tryNextBestRelease() }
+        Task {
+            await diagnosticsService?.log(
+                level: .warning,
+                subsystem: .playback,
+                message: reason.userFacingSummary,
+                metadata: [
+                    "operation": "player.fallback.auto",
+                    "mediaID": mediaSource.id,
+                    "releaseID": release.id,
+                    "fallbackReleaseID": nextRelease.id,
+                    "reason": reason.rawValue
+                ]
+            )
+        }
+        return true
     }
 
     private func logError(_ error: Error, subsystem: DiagnosticsSubsystem, operation: String) async {
@@ -1345,7 +1447,7 @@ public final class PlayerViewModel: ObservableObject {
                 for: release,
                 in: fallbackReleases,
                 reason: reason,
-                preferences: fallbackPreferences
+                preferences: recoveryFallbackPreferences(for: reason)
               )
         else { return }
 
@@ -1391,6 +1493,24 @@ public final class PlayerViewModel: ObservableObject {
                     "reason": reason.rawValue
                 ]
             )
+        }
+    }
+
+    private func recoveryFallbackPreferences(for reason: ReleaseFallbackReason) -> RankingPreferences {
+        switch reason {
+        case .failedToStart, .noSeeders, .stalled:
+            RankingPreferences(
+                preferredAudioLanguages: fallbackPreferences.preferredAudioLanguages,
+                preferredSubtitleLanguages: fallbackPreferences.preferredSubtitleLanguages,
+                supportsHDR: fallbackPreferences.supportsHDR,
+                preferredQuality: fallbackPreferences.preferredQuality,
+                hdrPreference: fallbackPreferences.hdrPreference,
+                codecPreference: fallbackPreferences.codecPreference,
+                maxFileSizeBytes: fallbackPreferences.maxFileSizeBytes,
+                preferHighSeedersOverHighestQuality: true
+            )
+        case .unsupportedFile, .missingMediaFile:
+            fallbackPreferences
         }
     }
 

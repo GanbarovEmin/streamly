@@ -23,6 +23,7 @@ public final class PlaybackProgressRepository: PlaybackProgressRepositoryProtoco
 
     public func saveProgress(_ progress: PlaybackProgress) async throws {
         try databaseManager.write { db in
+            try ensureMediaItemExists(db: db, mediaID: progress.mediaID)
             try db.execute(
                 sql: """
                     INSERT INTO playback_progress (

@@ -208,6 +208,9 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
 
     public func selectMediaFile(sessionId: String, fileId: String) async throws {
         try await bridge.selectFile(handle: try handle(for: sessionId), fileId: fileId)
+        guard var record = sessionsByID[sessionId] else { return }
+        record.session.selectedFileId = fileId
+        sessionsByID[sessionId] = record
     }
 
     public func setSequentialDownload(sessionId: String, enabled: Bool) async throws {
@@ -227,7 +230,11 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
     }
 
     public func getStreamingURL(sessionId: String) async throws -> URL {
-        try await bridge.streamingURL(handle: try handle(for: sessionId))
+        let url = try await bridge.streamingURL(handle: try handle(for: sessionId))
+        guard var record = sessionsByID[sessionId] else { return url }
+        record.session.streamingURL = url
+        sessionsByID[sessionId] = record
+        return url
     }
 
     public nonisolated func statusUpdates(sessionId: String) -> AsyncThrowingStream<TorrentStatus, Error> {

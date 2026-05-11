@@ -908,7 +908,7 @@ final class PlayerViewModelTests: XCTestCase {
             progress: TorrentProgress(
                 downloadedBytes: 1_200_000_000,
                 totalBytes: 12_000_000_000,
-                bufferedBytes: 420_000_000,
+                bufferedBytes: PlayerViewModel.startupPlayableBufferTargetBytes / 2,
                 downloadSpeedBytesPerSecond: 3_400_000,
                 uploadSpeedBytesPerSecond: 128_000
             ),
@@ -928,17 +928,70 @@ final class PlayerViewModelTests: XCTestCase {
         try await Task.sleep(nanoseconds: 100_000_000)
 
         let presentation = viewModel.bufferingPresentation
-        XCTAssertEqual(try XCTUnwrap(presentation.progress), 0.1, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(presentation.progress), 0.5, accuracy: 0.001)
+        XCTAssertTrue(presentation.message.contains("50%"))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Download speed:") && $0.contains("/s") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("GB") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable buffer:") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("ETA:") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("GB") && $0.contains("(10%)") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer:") && $0.contains("16.0 MB") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Full file ETA:") }))
         XCTAssertFalse((presentation.primaryDetails + presentation.advancedDetails).contains(where: { $0.contains("unavailable") }))
 
         viewModel.setAdvancedDebugVisible(true)
 
         XCTAssertTrue(viewModel.bufferingPresentation.advancedDetails.contains(where: { $0.contains("Peers: 42") }))
         XCTAssertTrue(viewModel.bufferingPresentation.advancedDetails.contains(where: { $0.contains("Selected file: movie.mkv") }))
+    }
+
+    @MainActor
+    func testBufferingPresentationDoesNotTreatWholeFileDownloadAsPlayableProgress() async throws {
+        let release = TorrentRelease(
+            id: "release",
+            title: "Release",
+            quality: .fullHD,
+            seeders: 100,
+            availability: 1
+        )
+        let session = TorrentSession(
+            id: "session-zero-playable",
+            releaseId: release.id,
+            sourceId: release.sourceId,
+            magnetURI: release.magnetURI,
+            storageURL: URL(fileURLWithPath: "/tmp/streamly-test-cache"),
+            selectedFileId: "movie.mkv",
+            streamingURL: URL(string: "http://127.0.0.1:11470/stream/session-zero-playable/movie.mkv"),
+            isSequentialDownloadEnabled: true
+        )
+        let torrentStatus = TorrentStatus(
+            sessionId: session.id,
+            state: .streaming,
+            progress: TorrentProgress(
+                downloadedBytes: 1_200_000_000,
+                totalBytes: 12_000_000_000,
+                bufferedBytes: 0,
+                downloadSpeedBytesPerSecond: 3_400_000,
+                uploadSpeedBytesPerSecond: 128_000
+            ),
+            health: TorrentHealth(seeders: 100, leechers: 8, connectedPeers: 24, availability: 2.0),
+            selectedFileId: "movie.mkv",
+            isSequentialDownloadEnabled: true,
+            streamingURL: session.streamingURL
+        )
+        let viewModel = PlayerViewModel(
+            service: BufferingPlaybackService(release: release),
+            mediaSource: PlaybackMediaSource(release: release),
+            torrentEngine: StaticTorrentStatusEngine(status: torrentStatus),
+            torrentSession: session
+        )
+
+        await viewModel.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let presentation = viewModel.bufferingPresentation
+        XCTAssertEqual(try XCTUnwrap(presentation.progress), 0, accuracy: 0.001)
+        XCTAssertEqual(presentation.message, "Waiting for playable pieces")
+        XCTAssertFalse(presentation.message.contains("10%"))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("(10%)") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer: 0 B / 16.0 MB") }))
     }
 
     @MainActor
@@ -996,6 +1049,87 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertEqual(playedAfterFallback, [selected.id, fallback.id])
         let events = await diagnostics.events()
         XCTAssertTrue(events.contains(where: { $0.metadata["operation"] == "player.fallback.suggest" }))
+    }
+
+    @MainActor
+    func testPlayerViewModelAutomaticallyFallsBackWhenStartupPlaybackFails() async throws {
+        let selected = TorrentRelease(id: "weak-start", title: "Weak Startup", quality: .ultraHD, seeders: 2)
+        let fallback = TorrentRelease(id: "healthy-start", title: "Healthy Startup", quality: .fullHD, seeders: 140)
+        let service = StartupFailingPlaybackService()
+        let recorder = FallbackRecorder()
+        let source = PlaybackMediaSource(
+            id: "imdb:movie:tt16431404",
+            title: "Apex",
+            url: URL(fileURLWithPath: "/tmp/weak-start.mkv"),
+            release: selected
+        )
+        let viewModel = PlayerViewModel(
+            service: service,
+            mediaSource: source,
+            fallbackReleases: [selected, fallback],
+            fallbackHandler: { release in
+                await recorder.record(release.id)
+            }
+        )
+
+        await viewModel.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let playedReleaseIDs = await service.playedReleaseIDs()
+        let fallbackReleaseIDs = await recorder.releaseIDs()
+
+        XCTAssertEqual(playedReleaseIDs, [selected.id])
+        XCTAssertEqual(fallbackReleaseIDs, [fallback.id])
+        XCTAssertEqual(viewModel.fallbackSuggestion?.reason, .failedToStart)
+        XCTAssertNil(viewModel.errorMessage)
+    }
+
+    @MainActor
+    func testPlayerViewModelAutomaticStartupFallbackPrefersStreamableHighSeederRelease() async throws {
+        let selected = TorrentRelease(
+            id: "selected-4k",
+            title: "Selected 4K",
+            quality: .ultraHD,
+            seeders: 2,
+            sizeBytes: 15_000_000_000
+        )
+        let lowSeeder4K = TorrentRelease(
+            id: "low-seeder-4k",
+            title: "Low Seeder 4K",
+            quality: .ultraHD,
+            seeders: 3,
+            sizeBytes: 14_000_000_000
+        )
+        let highSeeder1080p = TorrentRelease(
+            id: "high-seeder-1080p",
+            title: "High Seeder 1080p",
+            quality: .fullHD,
+            seeders: 1_096,
+            sizeBytes: 6_100_000_000
+        )
+        let service = StartupFailingPlaybackService()
+        let recorder = FallbackRecorder()
+        let source = PlaybackMediaSource(
+            id: "imdb:movie:tt16431404",
+            title: "Apex",
+            url: URL(fileURLWithPath: "/tmp/selected-4k.mkv"),
+            release: selected
+        )
+        let viewModel = PlayerViewModel(
+            service: service,
+            mediaSource: source,
+            fallbackReleases: [selected, lowSeeder4K, highSeeder1080p],
+            fallbackHandler: { release in
+                await recorder.record(release.id)
+            }
+        )
+
+        await viewModel.start()
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let fallbackReleaseIDs = await recorder.releaseIDs()
+        XCTAssertEqual(fallbackReleaseIDs, [highSeeder1080p.id])
+        XCTAssertEqual(viewModel.fallbackSuggestion?.nextBestRelease?.release.id, highSeeder1080p.id)
     }
 }
 
@@ -1278,6 +1412,63 @@ private actor StalledPlaybackService: PlaybackServiceProtocol {
 
     func playedReleaseIDs() -> [String] {
         playedIDs
+    }
+}
+
+private actor StartupFailingPlaybackService: PlaybackServiceProtocol {
+    private var playedIDs: [String] = []
+
+    var currentState: PlaybackState {
+        get async { .idle }
+    }
+
+    var currentStatus: PlaybackStatus {
+        get async { PlaybackStatus() }
+    }
+
+    func play(_ source: PlaybackMediaSource) async throws {
+        if let release = source.release {
+            playedIDs.append(release.id)
+        }
+        throw PlaybackServiceError.unsupported(operation: "ffmpeg HLS startup timeout")
+    }
+
+    func play(_ release: TorrentRelease) async throws {
+        try await play(PlaybackMediaSource(release: release))
+    }
+
+    func pause() async throws {}
+    func resume() async throws {}
+    func stop() async throws {}
+    func seek(to time: Double) async throws {}
+    func setVolume(_ volume: Double) async throws {}
+    func setMuted(_ isMuted: Bool) async throws {}
+    func setPlaybackSpeed(_ speed: Double) async throws {}
+    func selectAudioTrack(id: String?) async throws {}
+    func selectSubtitleTrack(id: String?) async throws {}
+    func setFullscreen(_ isFullscreen: Bool) async throws {}
+    func setPictureInPicture(_ isActive: Bool) async throws {}
+
+    nonisolated func statusUpdates() -> AsyncThrowingStream<PlaybackStatus, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
+
+    func playedReleaseIDs() -> [String] {
+        playedIDs
+    }
+}
+
+private actor FallbackRecorder {
+    private var ids: [String] = []
+
+    func record(_ id: String) {
+        ids.append(id)
+    }
+
+    func releaseIDs() -> [String] {
+        ids
     }
 }
 
