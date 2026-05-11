@@ -2,7 +2,6 @@
   <img src="landing/assets/icons/streamly-logo-primary.png" width="96" alt="Streamly logo">
 </p>
 
-<h1 align="center">Streamly</h1>
 
 <p align="center">
   <strong>A native macOS media client for cinematic discovery, user-controlled sources and local-first playback.</strong>
