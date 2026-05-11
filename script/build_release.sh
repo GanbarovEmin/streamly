@@ -130,6 +130,20 @@ resolve_ffmpeg_executable() {
     return 1
 }
 
+cleanup_extended_attributes() {
+    local target="$1"
+    xattr -cr "$target" || true
+    find "$target" -depth -exec xattr -c {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d com.apple.FinderInfo {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d com.apple.ResourceFork {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d com.apple.provenance {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d 'com.apple.fileprovider.fpfs#P' {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d -s com.apple.FinderInfo {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d -s com.apple.ResourceFork {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d -s com.apple.provenance {} \; 2>/dev/null || true
+    find "$target" -depth -exec xattr -d -s 'com.apple.fileprovider.fpfs#P' {} \; 2>/dev/null || true
+}
+
 echo "Building $APP_NAME $VERSION ($BUILD_NUMBER) with SwiftPM product $PRODUCT_NAME..."
 (cd "$ROOT_DIR" && swift build -c release --product "$PRODUCT_NAME")
 BIN_DIR="$(cd "$ROOT_DIR" && swift build -c release --product "$PRODUCT_NAME" --show-bin-path)"
@@ -215,11 +229,8 @@ if ! otool -l "$APP_BUNDLE/Contents/MacOS/$APP_NAME" | grep -q '@executable_path
 fi
 
 chmod -R u+rwX "$APP_BUNDLE"
-xattr -crs "$APP_BUNDLE" || true
 dot_clean "$APP_BUNDLE" || true
-find "$APP_BUNDLE" -exec xattr -c -s {} \; 2>/dev/null || true
-find "$APP_BUNDLE" -exec xattr -d -s com.apple.FinderInfo {} \; 2>/dev/null || true
-find "$APP_BUNDLE" -exec xattr -d -s com.apple.ResourceFork {} \; 2>/dev/null || true
+cleanup_extended_attributes "$APP_BUNDLE"
 
 if find "$APP_BUNDLE" \( -name '*.local.json' -o -name '*.ed25519' -o -name '*.sparkle-private-key' -o -name '.env' \) -print -quit | grep -q .; then
     echo "Refusing to package local config or secret-like files in $APP_BUNDLE" >&2
@@ -228,12 +239,19 @@ fi
 
 if [[ "$SKIP_SIGN" -eq 0 ]]; then
     echo "Codesigning with identity: $SIGN_IDENTITY"
-    SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
-    SIGN_ARGS+=(--options runtime --timestamp)
+    if [[ "$SIGN_IDENTITY" == "-" ]]; then
+        SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
+    else
+        SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
+        SIGN_ARGS+=(--options runtime --timestamp)
+    fi
     if [[ "$NATIVE_LIBTORRENT_COPIED" -eq 1 ]]; then
+        cleanup_extended_attributes "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME"
         codesign "${SIGN_ARGS[@]}" --deep "$APP_BUNDLE/Contents/Frameworks/$NATIVE_LIBTORRENT_FRAMEWORK_NAME"
     fi
+    cleanup_extended_attributes "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
     codesign "${SIGN_ARGS[@]}" --deep "$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+    cleanup_extended_attributes "$APP_BUNDLE"
     codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE"
 else
     echo "Skipping codesign. This app will trigger macOS unidentified developer warnings after download."

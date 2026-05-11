@@ -142,6 +142,7 @@ final class ReleasePackagingTests: XCTestCase {
         XCTAssertTrue(workflow.contains("actions/deploy-pages"))
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY"))
         XCTAssertTrue(workflow.contains("--ed-key-file"))
+        XCTAssertTrue(workflow.contains("--sign -"))
         XCTAssertFalse(workflow.contains("env.SPARKLE_PRIVATE_KEY != ''"))
     }
 }
