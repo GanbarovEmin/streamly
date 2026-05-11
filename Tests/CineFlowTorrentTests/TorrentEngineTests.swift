@@ -119,7 +119,7 @@ final class TorrentEngineTests: XCTestCase {
         XCTAssertEqual(unlimitedStatus.bandwidthLimits, .unlimited)
     }
 
-    func testEmbeddedEngineStartStreamingSelectsLargestMediaFileAndPrioritizesOnlyThatFile() async throws {
+    func testEmbeddedEngineStartStreamingStartsSessionWithoutSelectingVideoFile() async throws {
         let bridge = RecordingLibtorrentBridge(files: [
             TorrentFile(id: "sample", path: "sample.txt", name: "sample.txt", lengthBytes: 2_000, isMediaFile: false),
             TorrentFile(id: "small", path: "Movie/sample.mp4", name: "sample.mp4", lengthBytes: 25_000_000, isMediaFile: true),
@@ -137,20 +137,14 @@ final class TorrentEngineTests: XCTestCase {
         let session = try await engine.startStreaming(release)
         let status = try await engine.getStatus(sessionId: session.id)
 
-        XCTAssertEqual(session.selectedFileId, "main")
-        XCTAssertEqual(status.selectedFileId, "main")
-        XCTAssertEqual(status.streamingURL?.lastPathComponent, "main")
+        XCTAssertNil(session.selectedFileId)
+        XCTAssertNil(status.selectedFileId)
+        XCTAssertNil(status.streamingURL)
         let calls = await bridge.recordedCalls()
         XCTAssertEqual(calls, [
             "addMagnet",
             "setSequential:true",
             "start",
-            "files",
-            "select:main",
-            "priority:main:3",
-            "priority:small:1",
-            "priority:sample:0",
-            "streamingURL",
             "status"
         ])
     }

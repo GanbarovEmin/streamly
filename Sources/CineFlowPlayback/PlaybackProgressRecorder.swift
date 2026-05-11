@@ -20,13 +20,17 @@ public actor PlaybackProgressRecorder {
     public func recordIfNeeded(status: PlaybackStatus, force: Bool = false) async throws {
         guard let media = status.media else { return }
         guard force || status.state == .playing || status.state == .paused else { return }
+        let progressMediaID = media.selectionContext?.mediaID ?? media.id
+        let progressEpisodeID = media.selectionContext?.episodeID
+        let progressKey = progressEpisodeID.map { "\(progressMediaID):\($0)" } ?? progressMediaID
 
-        let lastSavedPosition = lastSavedPositionByMediaID[media.id] ?? 0
+        let lastSavedPosition = lastSavedPositionByMediaID[progressKey] ?? 0
         guard force || status.currentTime - lastSavedPosition >= saveIntervalSeconds else { return }
 
         try await store.saveProgress(
             PlaybackProgress(
-                mediaID: media.id,
+                mediaID: progressMediaID,
+                episodeID: progressEpisodeID,
                 releaseID: media.release?.id,
                 positionSeconds: status.currentTime,
                 durationSeconds: status.duration
@@ -35,14 +39,15 @@ public actor PlaybackProgressRecorder {
         if force {
             try await historyStore?.record(
                 PlaybackProgress(
-                    mediaID: media.id,
+                    mediaID: progressMediaID,
+                    episodeID: progressEpisodeID,
                     releaseID: media.release?.id,
                     positionSeconds: status.currentTime,
                     durationSeconds: status.duration
                 )
             )
         }
-        lastSavedPositionByMediaID[media.id] = status.currentTime
+        lastSavedPositionByMediaID[progressKey] = status.currentTime
     }
 }
 

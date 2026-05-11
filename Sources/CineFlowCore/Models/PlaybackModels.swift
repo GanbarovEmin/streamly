@@ -26,10 +26,39 @@ public enum PlaybackServiceError: LocalizedError, Equatable, Sendable {
 public enum PlaybackRunState: Codable, Equatable, Sendable {
     case idle
     case loading
+    case resolving
+    case buffering
+    case ready
     case playing
     case paused
+    case stalled
     case stopped
     case failed(reason: String)
+    case retrying
+    case completed
+
+    public static let productionLifecycleStates: [PlaybackRunState] = [
+        .idle,
+        .loading,
+        .resolving,
+        .buffering,
+        .ready,
+        .playing,
+        .paused,
+        .stalled,
+        .failed(reason: "unavailable"),
+        .retrying,
+        .completed
+    ]
+
+    public var isTerminal: Bool {
+        switch self {
+        case .stopped, .failed, .completed:
+            true
+        case .idle, .loading, .resolving, .buffering, .ready, .playing, .paused, .stalled, .retrying:
+            false
+        }
+    }
 }
 
 public enum PlaybackBufferingState: Codable, Equatable, Sendable {
@@ -43,6 +72,38 @@ public enum SubtitleRenderingMode: Codable, Equatable, Sendable {
     case disabled
 }
 
+public struct PlaybackSelectionContext: Codable, Equatable, Hashable, Sendable {
+    public let mediaID: String
+    public let displayTitle: String
+    public let mediaKind: MediaKind
+    public let seasonNumber: Int?
+    public let episodeNumber: Int?
+    public let episodeID: String?
+
+    public init(
+        mediaID: String,
+        displayTitle: String,
+        mediaKind: MediaKind,
+        seasonNumber: Int? = nil,
+        episodeNumber: Int? = nil,
+        episodeID: String? = nil
+    ) {
+        self.mediaID = mediaID
+        self.displayTitle = displayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Untitled"
+            : displayTitle
+        self.mediaKind = mediaKind
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.episodeID = episodeID
+    }
+
+    public var episodeLabel: String? {
+        guard let seasonNumber, let episodeNumber else { return nil }
+        return "S\(seasonNumber)E\(episodeNumber)"
+    }
+}
+
 public struct PlaybackMediaSource: Codable, Equatable, Sendable {
     public let id: String
     public let title: String
@@ -50,6 +111,7 @@ public struct PlaybackMediaSource: Codable, Equatable, Sendable {
     public let release: TorrentRelease?
     public let qualityLabel: String?
     public let sourceName: String?
+    public let selectionContext: PlaybackSelectionContext?
 
     public init(
         id: String,
@@ -57,7 +119,8 @@ public struct PlaybackMediaSource: Codable, Equatable, Sendable {
         url: URL,
         release: TorrentRelease? = nil,
         qualityLabel: String? = nil,
-        sourceName: String? = nil
+        sourceName: String? = nil,
+        selectionContext: PlaybackSelectionContext? = nil
     ) {
         self.id = id
         self.title = title
@@ -65,15 +128,17 @@ public struct PlaybackMediaSource: Codable, Equatable, Sendable {
         self.release = release
         self.qualityLabel = qualityLabel
         self.sourceName = sourceName
+        self.selectionContext = selectionContext
     }
 
-    public init(release: TorrentRelease, url: URL? = nil) {
-        self.id = release.id
-        self.title = release.title
+    public init(release: TorrentRelease, url: URL? = nil, selectionContext: PlaybackSelectionContext? = nil) {
+        self.id = selectionContext?.episodeID ?? selectionContext?.mediaID ?? release.id
+        self.title = selectionContext?.displayTitle ?? release.title
         self.url = url ?? release.torrentFileURL ?? URL(fileURLWithPath: "/tmp/\(release.id).mkv")
         self.release = release
         self.qualityLabel = release.qualityLabel
         self.sourceName = release.sourceName
+        self.selectionContext = selectionContext
     }
 }
 

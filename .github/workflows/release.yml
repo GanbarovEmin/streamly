@@ -6,11 +6,11 @@ on:
       version:
         description: "Release version without v prefix"
         required: true
-        default: "1.0.0"
+        default: "1.0.10"
       build:
         description: "CFBundleVersion"
         required: true
-        default: "100"
+        default: "1010"
       prerelease:
         description: "Mark the GitHub Release as prerelease"
         required: true

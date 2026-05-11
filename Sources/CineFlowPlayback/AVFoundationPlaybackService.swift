@@ -118,10 +118,47 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
 
     public nonisolated func statusUpdates() -> AsyncThrowingStream<PlaybackStatus, Error> {
         AsyncThrowingStream { continuation in
-            Task { @MainActor in
-                continuation.yield(await self.currentStatus)
+            let task = Task { @MainActor in
+                while !Task.isCancelled {
+                    let monitoredStatus = self.statusWithPlayerTime(state: self.monitoredRunState())
+                    continuation.yield(monitoredStatus)
+
+                    if monitoredStatus.media == nil || monitoredStatus.state.isTerminal {
+                        continuation.finish()
+                        return
+                    }
+
+                    try? await Task.sleep(nanoseconds: 750_000_000)
+                }
                 continuation.finish()
             }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    private func monitoredRunState() -> PlaybackRunState {
+        guard let item = avPlayer.currentItem else { return .idle }
+        if let error = item.error ?? avPlayer.error {
+            return .failed(reason: error.localizedDescription)
+        }
+        if let duration = Self.duration(from: item), duration > 0 {
+            let currentTime = avPlayer.currentTime().seconds.finiteOrZero
+            if currentTime >= max(0, duration - 0.35) {
+                return .completed
+            }
+        }
+
+        switch avPlayer.timeControlStatus {
+        case .paused:
+            return status.state == .playing ? .playing : .paused
+        case .waitingToPlayAtSpecifiedRate:
+            return .buffering
+        case .playing:
+            return .playing
+        @unknown default:
+            return status.state
         }
     }
 
@@ -131,12 +168,13 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         isFullscreen: Bool? = nil
     ) -> PlaybackStatus {
         let item = avPlayer.currentItem
+        let runState = state ?? status.state
         return PlaybackStatus(
             media: status.media,
-            state: state ?? status.state,
+            state: runState,
             currentTime: avPlayer.currentTime().seconds.finiteOrZero,
             duration: Self.duration(from: item) ?? status.duration,
-            bufferingState: item == nil ? .idle : .ready,
+            bufferingState: bufferingState(for: item, runState: runState),
             volume: Double(avPlayer.volume),
             isMuted: avPlayer.isMuted,
             playbackSpeed: playbackSpeed ?? status.playbackSpeed,
@@ -149,6 +187,23 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
             qualityLabel: status.qualityLabel,
             sourceName: status.sourceName
         )
+    }
+
+    private func bufferingState(for item: AVPlayerItem?, runState: PlaybackRunState) -> PlaybackBufferingState {
+        guard let item else { return .idle }
+        if runState == .buffering {
+            return .buffering(progress: bufferedFraction(for: item))
+        }
+        return .ready
+    }
+
+    private func bufferedFraction(for item: AVPlayerItem) -> Double {
+        guard let duration = Self.duration(from: item), duration > 0 else { return 0 }
+        let ranges = item.loadedTimeRanges.compactMap { $0.timeRangeValue }
+        guard let furthest = ranges.map({ $0.start.seconds + $0.duration.seconds }).max(), furthest.isFinite else {
+            return 0
+        }
+        return min(max(furthest / duration, 0), 1)
     }
 
     private static func duration(from item: AVPlayerItem?) -> Double? {
@@ -169,6 +224,8 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     private var transcodeDirectoryURL: URL?
     private var hlsServer: LocalHLSFileServer?
     private var originalSource: PlaybackMediaSource?
+    private let hlsStartupTimeoutSeconds: TimeInterval = 90
+    private let maxHLSStartupAttempts = 6
 
     public init(
         directService: AVFoundationPlaybackService? = nil,
@@ -288,16 +345,82 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         let directoryURL = try makeTranscodeDirectory()
         let playlistURL = directoryURL.appendingPathComponent("stream.m3u8")
         let segmentPatternURL = directoryURL.appendingPathComponent("segment_%05d.ts")
-        let logURL = directoryURL.appendingPathComponent("ffmpeg.log")
+        transcodeDirectoryURL = directoryURL
+        let startupDeadline = Date().addingTimeInterval(hlsStartupTimeoutSeconds)
+        var attempt = 0
+        var lastStartupError: PlaybackServiceError?
 
+        while Date() < startupDeadline, attempt < maxHLSStartupAttempts {
+            attempt += 1
+            try removeStaleHLSOutputs(in: directoryURL)
+
+            let logURL = directoryURL.appendingPathComponent("ffmpeg-attempt-\(attempt).log")
+            let logPipe = Pipe()
+            let process = makeFFmpegHLSProcess(
+                executableURL: ffmpegExecutableURL,
+                sourceURL: source.url,
+                playlistURL: playlistURL,
+                segmentPatternURL: segmentPatternURL,
+                logPipe: logPipe
+            )
+
+            try process.run()
+            transcodeProcess = process
+
+            do {
+                try await waitForPlayablePlaylist(
+                    at: playlistURL,
+                    process: process,
+                    timeoutSeconds: startupDeadline.timeIntervalSinceNow
+                )
+                streamFFmpegLog(from: logPipe, to: logURL)
+                let server = try LocalHLSFileServer(rootURL: directoryURL)
+                hlsServer = server
+                return server.url(for: "stream.m3u8")
+            } catch {
+                if process.isRunning {
+                    process.terminate()
+                    process.waitUntilExit()
+                }
+                let logText = captureFFmpegLog(from: logPipe, to: logURL)
+                lastStartupError = transcodeStartupError(
+                    from: error,
+                    logText: logText,
+                    attempt: attempt
+                )
+                transcodeProcess = nil
+
+                guard shouldRetryTranscodeStartup(after: error, logText: logText),
+                      attempt < maxHLSStartupAttempts,
+                      Date() < startupDeadline
+                else {
+                    throw lastStartupError ?? PlaybackServiceError.unsupported(operation: "ffmpeg HLS startup failed")
+                }
+
+                let delay = min(2.0, 0.5 + (Double(attempt) * 0.35))
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+
+        throw lastStartupError ?? PlaybackServiceError.unsupported(operation: "ffmpeg HLS startup timeout")
+    }
+
+    private func makeFFmpegHLSProcess(
+        executableURL: URL,
+        sourceURL: URL,
+        playlistURL: URL,
+        segmentPatternURL: URL,
+        logPipe: Pipe
+    ) -> Process {
         let process = Process()
-        process.executableURL = ffmpegExecutableURL
+        process.executableURL = executableURL
         process.arguments = [
             "-hide_banner",
             "-loglevel", "warning",
             "-nostdin",
             "-fflags", "+genpts",
-            "-i", source.url.absoluteString,
+            "-rw_timeout", "8000000",
+            "-i", sourceURL.absoluteString,
             "-map", "0:v:0",
             "-map", "0:a:0?",
             "-sn",
@@ -316,22 +439,19 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             "-hls_segment_filename", segmentPatternURL.path,
             playlistURL.path
         ]
-        let logPipe = Pipe()
         process.standardOutput = logPipe
         process.standardError = logPipe
-        try process.run()
-        transcodeProcess = process
-        transcodeDirectoryURL = directoryURL
+        return process
+    }
 
-        Task.detached(priority: .utility) {
-            let data = logPipe.fileHandleForReading.readDataToEndOfFile()
-            try? data.write(to: logURL)
+    private func removeStaleHLSOutputs(in directoryURL: URL) throws {
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        for url in contents where url.pathExtension == "m3u8" || url.pathExtension == "ts" || url.lastPathComponent.hasSuffix(".tmp") {
+            try? fileManager.removeItem(at: url)
         }
-
-        try await waitForPlayablePlaylist(at: playlistURL, process: process, timeoutSeconds: 90)
-        let server = try LocalHLSFileServer(rootURL: directoryURL)
-        hlsServer = server
-        return server.url(for: "stream.m3u8")
     }
 
     private func makeTranscodeDirectory() throws -> URL {
@@ -349,7 +469,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     }
 
     private func waitForPlayablePlaylist(at playlistURL: URL, process: Process, timeoutSeconds: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        let deadline = Date().addingTimeInterval(max(0.25, timeoutSeconds))
         while Date() < deadline {
             if fileManager.fileExists(atPath: playlistURL.path),
                let data = try? Data(contentsOf: playlistURL),
@@ -359,13 +479,69 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             }
 
             if !process.isRunning {
-                throw PlaybackServiceError.unsupported(operation: "ffmpeg exited before HLS playback became ready")
+                throw TranscodeStartupFailure.exitedEarly
             }
 
             try await Task.sleep(nanoseconds: 250_000_000)
         }
 
-        throw PlaybackServiceError.unsupported(operation: "ffmpeg HLS startup timeout")
+        throw TranscodeStartupFailure.timedOut
+    }
+
+    private func shouldRetryTranscodeStartup(after error: Error, logText: String) -> Bool {
+        guard matchesTranscodeFailure(error, .exitedEarly) else { return false }
+        let lowercasedLog = logText.lowercased()
+        return lowercasedLog.contains("503")
+            || lowercasedLog.contains("5xx")
+            || lowercasedLog.contains("service unavailable")
+            || lowercasedLog.contains("stream ends prematurely")
+            || lowercasedLog.contains("partial file")
+            || lowercasedLog.contains("cannot determine format")
+            || lowercasedLog.contains("input/output error")
+            || lowercasedLog.contains("operation timed out")
+            || lowercasedLog.contains("connection timed out")
+    }
+
+    private func transcodeStartupError(from error: Error, logText: String, attempt: Int) -> PlaybackServiceError {
+        let detail = summarizedFFmpegLog(logText)
+        let baseMessage: String
+        if matchesTranscodeFailure(error, .timedOut) {
+            baseMessage = "ffmpeg HLS startup timeout"
+        } else {
+            baseMessage = "ffmpeg exited before HLS playback became ready"
+        }
+
+        if detail.isEmpty {
+            return PlaybackServiceError.unsupported(operation: "\(baseMessage) after attempt \(attempt)")
+        }
+        return PlaybackServiceError.unsupported(operation: "\(baseMessage) after attempt \(attempt): \(detail)")
+    }
+
+    private func matchesTranscodeFailure(_ error: Error, _ expected: TranscodeStartupFailure) -> Bool {
+        guard let failure = error as? TranscodeStartupFailure else { return false }
+        return failure == expected
+    }
+
+    private func captureFFmpegLog(from pipe: Pipe, to logURL: URL) -> String {
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        try? data.write(to: logURL)
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func streamFFmpegLog(from pipe: Pipe, to logURL: URL) {
+        Task.detached(priority: .utility) {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            try? data.write(to: logURL)
+        }
+    }
+
+    private func summarizedFFmpegLog(_ logText: String) -> String {
+        logText
+            .split(separator: "\n")
+            .suffix(3)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " | ")
     }
 
     private func stopTranscodeIfNeeded() async throws {
@@ -585,6 +761,11 @@ private final class LocalHLSFileServer: @unchecked Sendable {
         response.append(body)
         return response
     }
+}
+
+private enum TranscodeStartupFailure: Error, Equatable {
+    case exitedEarly
+    case timedOut
 }
 
 public enum FFmpegRuntimeLocator {

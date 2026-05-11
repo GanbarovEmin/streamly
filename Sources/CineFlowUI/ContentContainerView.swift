@@ -154,17 +154,34 @@ public struct ContentContainerView: View {
 
             HStack(spacing: CFSpacing.md) {
                 PrimaryButton(t(.heroOpenDetail), systemImage: "info.circle.fill") {
-                    navigationCoordinator.navigate(to: .mediaDetail(id: "tmdb:movie:603"))
+                    navigationCoordinator.navigate(to: .mediaDetail(id: heroMediaID))
                 }
 
                 SecondaryButton(t(.heroOpenPlayer), systemImage: "play.fill") {
-                    navigationCoordinator.navigate(to: .player(mediaID: "tmdb:movie:603"))
+                    navigationCoordinator.navigate(
+                        to: .player(
+                            mediaID: heroMediaID,
+                            selectionContext: heroPlaybackContext
+                        )
+                    )
                 }
             }
         }
         .padding(CFSpacing.xl)
         .frame(maxWidth: .infinity, minHeight: 318, alignment: .bottomLeading)
         .background(CFHeroSurface())
+    }
+
+    private var heroMediaID: String {
+        homeViewModel.selectedFeaturedItem?.id ?? "tmdb:movie:693134"
+    }
+
+    private var heroPlaybackContext: PlaybackSelectionContext {
+        PlaybackSelectionContext(
+            mediaID: heroMediaID,
+            displayTitle: homeViewModel.selectedFeaturedItem?.title ?? viewModel.headline,
+            mediaKind: heroMediaID.contains(":tv:") ? .series : .movie
+        )
     }
 
     private var columns: [GridItem] {
@@ -183,12 +200,13 @@ public struct ContentContainerView: View {
             ) {
                 navigationCoordinator.navigate(to: .player(mediaID: id))
             }
-        case .player(let mediaID, let sourceID, let release, let fallbackReleases, let nextEpisodePrompt):
+        case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt):
             PlayerRouteView(
                 mediaID: mediaID,
                 sourceID: sourceID,
                 release: release,
                 fallbackReleases: fallbackReleases,
+                selectionContext: selectionContext,
                 nextEpisodePrompt: nextEpisodePrompt,
                 environment: environment,
                 playbackService: viewModel.playbackService,
@@ -350,6 +368,7 @@ private struct PlayerRouteView: View {
     let sourceID: String?
     let release: TorrentRelease?
     let fallbackReleases: [TorrentRelease]
+    let selectionContext: PlaybackSelectionContext?
     let nextEpisodePrompt: PlayerNextEpisodePrompt?
     let environment: AppEnvironment
     let playbackService: any PlaybackServiceProtocol
@@ -359,13 +378,13 @@ private struct PlayerRouteView: View {
 
     @State private var state: RouteState = .loading
     @State private var rankingPreferences = RankingPreferences()
+    @StateObject private var sessionCoordinator = PlaybackSessionCoordinator()
 
     var body: some View {
         Group {
             switch state {
             case .loading:
-                LoadingSkeleton(height: 420, cornerRadius: CFRadius.hero)
-                    .padding(CFSpacing.xl)
+                playbackRouteLoadingView
             case .missingSource:
                 EmptyState(
                     title: t(.playerMissingSourceTitle),
@@ -385,10 +404,10 @@ private struct PlayerRouteView: View {
                     action: onExit
                 )
                 .padding(CFSpacing.xl)
-            case .torrentFailed(_, let suggestion):
+            case .torrentFailed(let message, let suggestion):
                 ErrorState(
                     title: t(.playerTorrentErrorTitle),
-                    message: t(.playerTorrentErrorMessage),
+                    message: message.isEmpty ? t(.playerTorrentErrorMessage) : message,
                     recoverySuggestion: t(.playerTorrentErrorRecovery),
                     actionTitle: suggestion?.nextBestRelease == nil ? t(.playerMissingSourceAction) : t(.playerFallbackTryNext),
                     action: {
@@ -422,9 +441,50 @@ private struct PlayerRouteView: View {
                 )
             }
         }
-        .task(id: "\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(nextEpisodePrompt?.title ?? "no-next")") {
+        .task(id: "\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(selectionContext?.episodeID ?? selectionContext?.mediaID ?? "no-context"):\(nextEpisodePrompt?.title ?? "no-next")") {
             await load()
         }
+        .onDisappear {
+            Task {
+                await sessionCoordinator.cleanup(
+                    torrentEngine: environment.torrentEngine,
+                    playbackService: playbackService,
+                    diagnosticsService: environment.diagnosticsService,
+                    mediaID: mediaID,
+                    reason: "route.disappear"
+                )
+            }
+        }
+    }
+
+    private var playbackRouteLoadingView: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    CFColors.backgroundPrimary,
+                    CFColors.backgroundSecondary.opacity(0.94),
+                    CFColors.backgroundPrimary
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .clipShape(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
+
+            VStack(spacing: CFSpacing.md) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(CFColors.accentPrimary)
+                Text(t(.playerBufferingTitle))
+                    .font(CFTypography.title.weight(.semibold))
+                    .foregroundStyle(CFColors.textPrimary)
+                Text(L10n.format(.playerBufferingMessageFormat, language: language, 0))
+                    .font(CFTypography.body)
+                    .foregroundStyle(CFColors.textSecondary)
+            }
+            .padding(CFSpacing.xl)
+        }
+        .frame(maxWidth: .infinity, minHeight: 520)
+        .padding(CFSpacing.xl)
     }
 
     private func load() async {
@@ -432,6 +492,14 @@ private struct PlayerRouteView: View {
             await loadTorrentRelease(release)
             return
         }
+
+        let requestID = await sessionCoordinator.beginNewSession(
+            torrentEngine: environment.torrentEngine,
+            playbackService: playbackService,
+            diagnosticsService: environment.diagnosticsService,
+            mediaID: mediaID,
+            reason: "local.source.load"
+        )
 
         guard let repository = environment.userMediaSourceRepository else {
             await environment.diagnosticsService.log(
@@ -453,12 +521,24 @@ private struct PlayerRouteView: View {
             }
 
             guard let source else {
+                guard sessionCoordinator.isCurrent(requestID) else { return }
                 state = .missingSource
                 return
             }
 
+            guard sessionCoordinator.isCurrent(requestID) else { return }
             if let playbackSource = source.playbackMediaSource {
-                state = .ready(playbackSource)
+                state = .ready(
+                    PlaybackMediaSource(
+                        id: selectionContext?.episodeID ?? playbackSource.id,
+                        title: selectionContext?.displayTitle ?? playbackSource.title,
+                        url: playbackSource.url,
+                        release: playbackSource.release,
+                        qualityLabel: playbackSource.qualityLabel,
+                        sourceName: playbackSource.sourceName,
+                        selectionContext: selectionContext
+                    )
+                )
             } else {
                 state = .unsupportedSource(source.displayName)
             }
@@ -470,43 +550,53 @@ private struct PlayerRouteView: View {
     }
 
     private func loadTorrentRelease(_ release: TorrentRelease) async {
-        do {
-            let session = try await environment.torrentEngine.startStreaming(release)
-            let appSettings = await environment.settingsRepository.appSettings
-            let subtitleLanguages = await environment.settingsRepository.subtitleLanguagePriority
-            rankingPreferences = appSettings.playback.rankingPreferences(
-                preferredSubtitleLanguages: subtitleLanguages,
-                supportsHDR: true
+        let requestID = await sessionCoordinator.beginNewSession(
+            torrentEngine: environment.torrentEngine,
+            playbackService: playbackService,
+            diagnosticsService: environment.diagnosticsService,
+            mediaID: mediaID,
+            reason: "source.switch"
+        )
+        state = .loading
+
+        let appSettings = await environment.settingsRepository.appSettings
+        let subtitleLanguages = await environment.settingsRepository.subtitleLanguagePriority
+        let preferences = appSettings.playback.rankingPreferences(
+            preferredSubtitleLanguages: subtitleLanguages,
+            supportsHDR: true
+        )
+        rankingPreferences = preferences
+
+        let pipeline = PlaybackPipeline(
+            torrentEngine: environment.torrentEngine,
+            debugLogger: PlaybackDebugLogger(),
+            diagnosticsService: environment.diagnosticsService
+        )
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: mediaID,
+                selectionContext: selectionContext,
+                primaryRelease: release,
+                fallbackReleases: fallbackReleases,
+                bandwidthLimits: appSettings.storage.torrentBandwidthLimits,
+                maxAutomaticFallbacks: 2,
+                rankingPreferences: preferences
             )
-            try await environment.torrentEngine.setBandwidthLimits(sessionId: session.id, appSettings.storage.torrentBandwidthLimits)
-            let files = try await environment.torrentEngine.getFileList(sessionId: session.id)
-            if session.selectedFileId == nil {
-                guard let selection = TorrentMediaFileSelector.selection(for: release, files: files) else {
-                    state = .torrentFailed(
-                        CineFlowError.defaultUserMessage(for: .torrent),
-                        fallbackSuggestion(for: release, reason: .missingMediaFile)
-                    )
-                    await logFallbackFailure(release: release, reason: .missingMediaFile)
-                    return
-                }
+        )
 
-                if selection.manualOptions.count > 1 {
-                    state = .chooseMediaFile(session, release, selection.manualOptions)
-                    return
-                }
+        guard !Task.isCancelled, sessionCoordinator.isCurrent(requestID) else { return }
 
-                try await environment.torrentEngine.selectMediaFile(sessionId: session.id, fileId: selection.selectedFile.id)
-            }
-            try await finishTorrentPlayback(session: session, release: release)
-        } catch let error as PlaybackServiceError where error == .invalidMediaURL {
-            let cineFlowError = CineFlowError.from(error, fallbackCategory: .playback)
-            state = .torrentFailed(cineFlowError.userMessage, fallbackSuggestion(for: release, reason: .unsupportedFile))
-            await logFallbackFailure(release: release, reason: .unsupportedFile, error: error)
-        } catch {
-            let cineFlowError = CineFlowError.from(error, fallbackCategory: .torrent)
-            state = .torrentFailed(cineFlowError.userMessage, fallbackSuggestion(for: release, reason: .failedToStart))
+        switch result {
+        case .ready(let source, let session, _):
+            sessionCoordinator.activate(session)
+            state = .ready(source)
+        case .needsMediaFileSelection(let session, let release, let options, _):
+            sessionCoordinator.activate(session)
+            state = .chooseMediaFile(session, release, options)
+        case .failed(let error, let suggestion, _):
+            state = .torrentFailed(error.userMessage, suggestion ?? fallbackSuggestion(for: release, reason: .failedToStart))
             await environment.diagnosticsService.log(
-                cineFlowError,
+                error,
                 operation: "player.route.torrent",
                 metadata: ["mediaID": mediaID, "releaseID": release.id, "sourceID": release.sourceId]
             )
@@ -518,14 +608,21 @@ private struct PlayerRouteView: View {
         guard streamingURL.isCineFlowPlayableMediaURL else {
             throw PlaybackServiceError.invalidMediaURL
         }
+        switch await DefaultPlaybackStreamAvailabilityChecker().check(streamingURL, timeoutSeconds: 8) {
+        case .available:
+            break
+        case .unavailable(let reason):
+            throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
+        }
         state = .ready(
             PlaybackMediaSource(
-                id: mediaID,
-                title: release.title,
+                id: selectionContext?.episodeID ?? mediaID,
+                title: selectionContext?.displayTitle ?? release.title,
                 url: streamingURL,
                 release: release,
                 qualityLabel: release.qualityLabel,
-                sourceName: release.sourceName
+                sourceName: release.sourceName,
+                selectionContext: selectionContext
             )
         )
     }
@@ -624,6 +721,72 @@ private struct PlayerRouteView: View {
 
     private func t(_ key: L10nKey) -> String {
         L10n.string(key, language: language)
+    }
+}
+
+@MainActor
+private final class PlaybackSessionCoordinator: ObservableObject {
+    private(set) var currentToken = 0
+    private var activeTorrentSessionID: String?
+
+    func beginNewSession(
+        torrentEngine: any TorrentEngineProtocol,
+        playbackService: any PlaybackServiceProtocol,
+        diagnosticsService: any DiagnosticsServiceProtocol,
+        mediaID: String,
+        reason: String
+    ) async -> Int {
+        currentToken += 1
+        let token = currentToken
+        await cleanup(
+            torrentEngine: torrentEngine,
+            playbackService: playbackService,
+            diagnosticsService: diagnosticsService,
+            mediaID: mediaID,
+            reason: reason
+        )
+        return token
+    }
+
+    func isCurrent(_ token: Int) -> Bool {
+        token == currentToken
+    }
+
+    func activate(_ session: TorrentSession) {
+        activeTorrentSessionID = session.id
+    }
+
+    func cleanup(
+        torrentEngine: any TorrentEngineProtocol,
+        playbackService: any PlaybackServiceProtocol,
+        diagnosticsService: any DiagnosticsServiceProtocol,
+        mediaID: String,
+        reason: String
+    ) async {
+        let sessionID = activeTorrentSessionID
+        activeTorrentSessionID = nil
+        try? await playbackService.stop()
+        guard let sessionID else { return }
+        do {
+            try await torrentEngine.remove(sessionId: sessionID, deleteFiles: false)
+            await diagnosticsService.log(
+                level: .debug,
+                subsystem: .playback,
+                message: "Playback session cleaned.",
+                metadata: [
+                    "operation": "player.session.cleanup",
+                    "mediaID": mediaID,
+                    "sessionID": sessionID,
+                    "reason": reason
+                ]
+            )
+        } catch {
+            await diagnosticsService.log(
+                CineFlowError.from(error, fallbackCategory: .torrent),
+                operation: "player.session.cleanup",
+                metadata: ["mediaID": mediaID, "sessionID": sessionID, "reason": reason]
+            )
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-public enum MediaKind: String, Codable, Equatable, Sendable {
+public enum MediaKind: String, Codable, Equatable, Hashable, Sendable {
     case movie
     case series
 }

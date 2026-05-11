@@ -273,7 +273,12 @@ public struct SearchView: View {
                                     release: release.torrentRelease,
                                     fallbackReleases: viewModel.results.torrentReleases
                                         .filter { $0.mediaID == release.mediaID }
-                                        .map(\.torrentRelease)
+                                        .map(\.torrentRelease),
+                                    selectionContext: PlaybackSelectionContext(
+                                        mediaID: release.mediaID,
+                                        displayTitle: release.mediaTitle,
+                                        mediaKind: release.mediaKind == .series ? .series : .movie
+                                    )
                                 ))
                             },
                             onAdd: {

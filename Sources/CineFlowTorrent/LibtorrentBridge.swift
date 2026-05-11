@@ -154,26 +154,6 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         }
         try await bridge.setSequentialDownload(handle: handle, enabled: true)
         try await bridge.start(handle: handle)
-        let files = try await bridge.files(handle: handle)
-        let selectedFile = try selectBestMediaFile(from: files, sessionId: session.id)
-        try await bridge.selectFile(handle: handle, fileId: selectedFile.id)
-        let priorityOrder = files.sorted { lhs, rhs in
-            if lhs.id == selectedFile.id { return true }
-            if rhs.id == selectedFile.id { return false }
-            if lhs.isMediaFile != rhs.isMediaFile { return lhs.isMediaFile && !rhs.isMediaFile }
-            return lhs.lengthBytes > rhs.lengthBytes
-        }
-        for file in priorityOrder {
-            let priority: TorrentFilePriority = if file.id == selectedFile.id {
-                .high
-            } else if file.isMediaFile {
-                .low
-            } else {
-                .disabled
-            }
-            try await bridge.setDownloadPriority(handle: handle, fileId: file.id, priority: priority)
-        }
-        let streamingURL = try await bridge.streamingURL(handle: handle)
 
         let streamSession = TorrentSession(
             id: session.id,
@@ -182,8 +162,6 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
             magnetURI: session.magnetURI,
             torrentFileURL: session.torrentFileURL,
             storageURL: session.storageURL,
-            selectedFileId: selectedFile.id,
-            streamingURL: streamingURL,
             isSequentialDownloadEnabled: true
         )
         sessionsByID[session.id] = EmbeddedTorrentSessionRecord(session: streamSession, handle: handle)
@@ -323,16 +301,6 @@ public actor EmbeddedLibtorrentTorrentEngine: TorrentEngineProtocol {
         let url = temporaryStorageURL.appendingPathComponent(sessionId, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
-    }
-
-    private func selectBestMediaFile(from files: [TorrentFile], sessionId: String) throws -> TorrentFile {
-        guard let selected = files
-            .filter(\.isMediaFile)
-            .max(by: { $0.lengthBytes < $1.lengthBytes })
-        else {
-            throw TorrentEngineError.fileNotFound(sessionId: sessionId, fileId: "media")
-        }
-        return selected
     }
 
     private func directorySize(_ url: URL) -> Int64 {

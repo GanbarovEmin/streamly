@@ -592,6 +592,7 @@ public struct SeriesDetailView: View {
                 mediaID: series.id,
                 release: release,
                 fallbackReleases: viewModel.releases.map(\.release),
+                selectionContext: playbackContext(for: series, episode: episode),
                 nextEpisodePrompt: nextEpisodePrompt(after: episode)
             ))
             return
@@ -607,6 +608,7 @@ public struct SeriesDetailView: View {
             mediaID: viewModel.series?.id ?? episode.id,
             release: release,
             fallbackReleases: viewModel.releases.map(\.release),
+            selectionContext: viewModel.series.map { playbackContext(for: $0, episode: episode) },
             nextEpisodePrompt: nextEpisodePrompt(after: episode)
         ))
     }
@@ -614,10 +616,33 @@ public struct SeriesDetailView: View {
     private func playSeriesID(_ mediaID: String) {
         if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
             viewModel.selectUserSource(source)
-            navigationCoordinator.navigate(to: .player(mediaID: mediaID, sourceID: source.id))
+            navigationCoordinator.navigate(to: .player(
+                mediaID: mediaID,
+                sourceID: source.id,
+                selectionContext: selectedSeriesPlaybackContext(mediaID: mediaID)
+            ))
             return
         }
         openLocalMediaPanel(mediaID: mediaID)
+    }
+
+    private func playbackContext(for series: SeriesDetail, episode: SeriesEpisode) -> PlaybackSelectionContext {
+        PlaybackSelectionContext(
+            mediaID: series.id,
+            displayTitle: series.title,
+            mediaKind: .series,
+            seasonNumber: episode.seasonNumber,
+            episodeNumber: episode.episodeNumber,
+            episodeID: episode.id
+        )
+    }
+
+    private func selectedSeriesPlaybackContext(mediaID: String) -> PlaybackSelectionContext? {
+        guard let series = viewModel.series else { return nil }
+        guard let episode = viewModel.selectedEpisode else {
+            return PlaybackSelectionContext(mediaID: mediaID, displayTitle: series.title, mediaKind: .series)
+        }
+        return playbackContext(for: series, episode: episode)
     }
 
     private func nextEpisodePrompt(after episode: SeriesEpisode) -> PlayerNextEpisodePrompt? {
@@ -640,7 +665,11 @@ public struct SeriesDetailView: View {
             guard response == .OK, let url = panel.url else { return }
             Task { @MainActor in
                 await viewModel.addLocalSource(url: url)
-                navigationCoordinator.navigate(to: .player(mediaID: mediaID, sourceID: viewModel.selectedUserSourceID))
+                navigationCoordinator.navigate(to: .player(
+                    mediaID: mediaID,
+                    sourceID: viewModel.selectedUserSourceID,
+                    selectionContext: selectedSeriesPlaybackContext(mediaID: mediaID)
+                ))
             }
         }
     }

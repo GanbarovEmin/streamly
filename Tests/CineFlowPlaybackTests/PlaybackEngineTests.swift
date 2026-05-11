@@ -5,6 +5,279 @@ import XCTest
 @testable import CineFlowPlayback
 
 final class PlaybackEngineTests: XCTestCase {
+    func testPlaybackRunStateCoversProductionLifecycle() {
+        XCTAssertEqual(
+            PlaybackRunState.productionLifecycleStates,
+            [
+                .idle,
+                .loading,
+                .resolving,
+                .buffering,
+                .ready,
+                .playing,
+                .paused,
+                .stalled,
+                .failed(reason: "unavailable"),
+                .retrying,
+                .completed
+            ]
+        )
+    }
+
+    func testPlaybackPipelineFallsBackWhenFirstReleaseCannotResolve() async throws {
+        let selected = TorrentRelease(
+            id: "broken",
+            title: "Broken release",
+            magnetURI: "magnet:?xt=urn:btih:broken",
+            quality: .fullHD,
+            seeders: 0
+        )
+        let fallback = TorrentRelease(
+            id: "healthy",
+            title: "Healthy release",
+            magnetURI: "magnet:?xt=urn:btih:healthy",
+            quality: .fullHD,
+            seeders: 120
+        )
+        let engine = FallbackRecordingTorrentEngine(
+            failures: ["broken": TorrentEngineError.streamingURLUnavailable(sessionId: "broken")]
+        )
+        let checker = RecordingAvailabilityChecker()
+        let pipeline = PlaybackPipeline(
+            torrentEngine: engine,
+            availabilityChecker: checker,
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:603",
+                primaryRelease: selected,
+                fallbackReleases: [selected, fallback],
+                bandwidthLimits: .unlimited,
+                maxAutomaticFallbacks: 1
+            )
+        )
+
+        guard case .ready(let source, let session, let attempts) = result else {
+            return XCTFail("Expected ready fallback result, got \(result)")
+        }
+
+        XCTAssertEqual(source.release?.id, fallback.id)
+        XCTAssertEqual(session.releaseId, fallback.id)
+        XCTAssertEqual(attempts.map(\.release.id), ["broken", "healthy"])
+        XCTAssertEqual(attempts.map(\.state), [.failed(reason: "streamingURLUnavailable(sessionId: \"broken\")"), .ready])
+        let startedIDs = await engine.startedReleaseIDs()
+        XCTAssertEqual(startedIDs, ["broken", "healthy"])
+        let removedSessionIDs = await engine.removedSessionIDs()
+        XCTAssertEqual(removedSessionIDs, ["session-broken"])
+        let checkedURLs = await checker.checkedURLs()
+        XCTAssertEqual(checkedURLs.count, 1)
+        XCTAssertEqual(checkedURLs.first?.lastPathComponent, "healthy.mkv")
+    }
+
+    func testPlaybackPipelinePreservesSelectionContextTitleForEpisodePlayback() async throws {
+        let release = TorrentRelease(
+            id: "got-s01e01",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "Game.of.Thrones.S01E01.1080p.mkv",
+            magnetURI: "magnet:?xt=urn:btih:got",
+            quality: .fullHD,
+            seeders: 100,
+            preferredFileIndex: 7
+        )
+        let context = PlaybackSelectionContext(
+            mediaID: "tt0944947",
+            displayTitle: "Game of Thrones",
+            mediaKind: .series,
+            seasonNumber: 1,
+            episodeNumber: 1,
+            episodeID: "tt0944947:1:1"
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: FallbackRecordingTorrentEngine(),
+            availabilityChecker: RecordingAvailabilityChecker(),
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tt0944947",
+                selectionContext: context,
+                primaryRelease: release,
+                fallbackReleases: [],
+                bandwidthLimits: .unlimited
+            )
+        )
+
+        guard case .ready(let source, _, _) = result else {
+            return XCTFail("Expected ready episode playback source, got \(result)")
+        }
+
+        XCTAssertEqual(source.title, "Game of Thrones")
+        XCTAssertEqual(source.release?.title, "Game.of.Thrones.S01E01.1080p.mkv")
+        XCTAssertEqual(source.selectionContext?.episodeID, "tt0944947:1:1")
+        XCTAssertEqual(source.selectionContext?.seasonNumber, 1)
+        XCTAssertEqual(source.selectionContext?.episodeNumber, 1)
+    }
+
+    func testPlaybackPipelineReturnsFailedWhenEveryFallbackFails() async throws {
+        let first = TorrentRelease(
+            id: "first",
+            title: "First",
+            magnetURI: "magnet:?xt=urn:btih:first",
+            quality: .fullHD,
+            seeders: 1
+        )
+        let second = TorrentRelease(
+            id: "second",
+            title: "Second",
+            magnetURI: "magnet:?xt=urn:btih:second",
+            quality: .hd,
+            seeders: 1
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: FallbackRecordingTorrentEngine(
+                failures: [
+                    "first": TorrentEngineError.streamingURLUnavailable(sessionId: "first"),
+                    "second": TorrentEngineError.streamingURLUnavailable(sessionId: "second")
+                ]
+            ),
+            availabilityChecker: RecordingAvailabilityChecker(),
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:603",
+                primaryRelease: first,
+                fallbackReleases: [first, second],
+                bandwidthLimits: .unlimited,
+                maxAutomaticFallbacks: 1
+            )
+        )
+
+        guard case .failed(let error, let suggestion, let attempts) = result else {
+            return XCTFail("Expected failed result, got \(result)")
+        }
+
+        XCTAssertEqual(error.category, .torrent)
+        XCTAssertNil(suggestion?.nextBestRelease)
+        XCTAssertEqual(attempts.map(\.release.id), ["first", "second"])
+        XCTAssertEqual(attempts.last?.state, .failed(reason: "streamingURLUnavailable(sessionId: \"second\")"))
+    }
+
+    func testPlaybackPipelineFallsBackWhenResolvedStreamIsUnavailable() async throws {
+        let selected = TorrentRelease(
+            id: "unavailable",
+            title: "Unavailable stream",
+            magnetURI: "magnet:?xt=urn:btih:unavailable",
+            quality: .fullHD,
+            seeders: 12
+        )
+        let fallback = TorrentRelease(
+            id: "available",
+            title: "Available stream",
+            magnetURI: "magnet:?xt=urn:btih:available",
+            quality: .hd,
+            seeders: 90
+        )
+        let checker = RecordingAvailabilityChecker(
+            responses: ["unavailable.mkv": .unavailable(reason: "HTTP 503")]
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: FallbackRecordingTorrentEngine(),
+            availabilityChecker: checker,
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:603",
+                primaryRelease: selected,
+                fallbackReleases: [selected, fallback],
+                bandwidthLimits: .unlimited,
+                maxAutomaticFallbacks: 1
+            )
+        )
+
+        guard case .ready(let source, _, let attempts) = result else {
+            return XCTFail("Expected ready fallback result, got \(result)")
+        }
+
+        XCTAssertEqual(source.release?.id, fallback.id)
+        XCTAssertEqual(attempts.map(\.release.id), ["unavailable", "available"])
+        XCTAssertEqual(attempts.first?.error?.category, .playback)
+        let checkedURLs = await checker.checkedURLs()
+        XCTAssertEqual(checkedURLs.map(\.lastPathComponent), ["unavailable.mkv", "available.mkv"])
+    }
+
+    func testPlaybackPipelineTimesOutSlowStartAndFallsBack() async throws {
+        let slow = TorrentRelease(
+            id: "slow",
+            title: "Slow release",
+            magnetURI: "magnet:?xt=urn:btih:slow",
+            quality: .fullHD,
+            seeders: 30
+        )
+        let fallback = TorrentRelease(
+            id: "fast",
+            title: "Fast release",
+            magnetURI: "magnet:?xt=urn:btih:fast",
+            quality: .hd,
+            seeders: 100
+        )
+        let engine = FallbackRecordingTorrentEngine(startDelays: ["slow": 5_000_000_000])
+        let pipeline = PlaybackPipeline(
+            torrentEngine: engine,
+            availabilityChecker: RecordingAvailabilityChecker(),
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:603",
+                primaryRelease: slow,
+                fallbackReleases: [slow, fallback],
+                bandwidthLimits: .unlimited,
+                maxAutomaticFallbacks: 1,
+                torrentStartTimeoutSeconds: 1
+            )
+        )
+
+        guard case .ready(let source, _, let attempts) = result else {
+            return XCTFail("Expected timeout fallback result, got \(result)")
+        }
+
+        XCTAssertEqual(source.release?.id, fallback.id)
+        XCTAssertEqual(attempts.map(\.release.id), ["slow", "fast"])
+        XCTAssertTrue(attempts.first?.error?.technicalDescription.contains("timed out") == true)
+        let startedIDs = await engine.startedReleaseIDs()
+        XCTAssertEqual(startedIDs, ["slow", "fast"])
+    }
+
+    func testPlaybackDebugLoggerOnlyWritesWhenEnabled() async {
+        let diagnostics = PlaybackPipelineRecordingDiagnostics()
+        await PlaybackDebugLogger.disabled.log(
+            diagnostics: diagnostics,
+            event: "source.selected",
+            metadata: ["releaseID": "off"]
+        )
+        await PlaybackDebugLogger(enabled: true).log(
+            diagnostics: diagnostics,
+            event: "source.selected",
+            metadata: ["releaseID": "on"]
+        )
+
+        let events = await diagnostics.events()
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.level, .debug)
+        XCTAssertEqual(events.first?.subsystem, .playback)
+        XCTAssertEqual(events.first?.metadata["event"], "source.selected")
+        XCTAssertEqual(events.first?.metadata["releaseID"], "on")
+    }
+
     func testMockPlaybackServicePlaysLocalMediaAndExposesControls() async throws {
         let service: any PlaybackServiceProtocol = MockPlaybackService()
         let source = PlaybackMediaSource(
@@ -116,6 +389,34 @@ final class PlaybackEngineTests: XCTestCase {
         let records = await store.records
         XCTAssertEqual(records.map(\.positionSeconds), [5, 8])
         XCTAssertEqual(records.map(\.durationSeconds), [120, 120])
+    }
+
+    func testProgressRecorderUsesSelectionContextForSeriesEpisode() async throws {
+        let store = InMemoryPlaybackProgressStore()
+        let recorder = PlaybackProgressRecorder(store: store, saveIntervalSeconds: 5)
+        let context = PlaybackSelectionContext(
+            mediaID: "tt0944947",
+            displayTitle: "Game of Thrones",
+            mediaKind: .series,
+            seasonNumber: 1,
+            episodeNumber: 1,
+            episodeID: "tt0944947:1:1"
+        )
+        let source = PlaybackMediaSource(
+            id: context.episodeID!,
+            title: context.displayTitle,
+            url: URL(fileURLWithPath: "/tmp/got-s1e1.mkv"),
+            selectionContext: context
+        )
+
+        try await recorder.recordIfNeeded(
+            status: PlaybackStatus(media: source, state: .playing, currentTime: 12, duration: 60),
+            force: true
+        )
+
+        let records = await store.records
+        XCTAssertEqual(records.first?.mediaID, "tt0944947")
+        XCTAssertEqual(records.first?.episodeID, "tt0944947:1:1")
     }
 
     func testMPVPlaybackServiceUsesSwiftBoundaryAndConfiguredOptions() async throws {
@@ -346,5 +647,152 @@ private final class PlaybackTestHTTPFileServer: @unchecked Sendable {
         response.append(Data("Connection: close\r\n\r\n".utf8))
         response.append(body)
         return response
+    }
+}
+
+private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
+    private let failures: [String: Error]
+    private let startDelays: [String: UInt64]
+    private var startedIDs: [String] = []
+    private var removedIDs: [String] = []
+    private var sessions: [String: TorrentSession] = [:]
+    private var releaseIDsBySessionID: [String: String] = [:]
+
+    init(failures: [String: Error] = [:], startDelays: [String: UInt64] = [:]) {
+        self.failures = failures
+        self.startDelays = startDelays
+    }
+
+    func searchReleases(for item: MediaItem) async throws -> [TorrentRelease] {
+        []
+    }
+
+    func startStreaming(_ release: TorrentRelease) async throws -> TorrentSession {
+        startedIDs.append(release.id)
+        let session = TorrentSession(
+            id: "session-\(release.id)",
+            releaseId: release.id,
+            sourceId: release.sourceId,
+            magnetURI: release.magnetURI,
+            torrentFileURL: release.torrentFileURL,
+            storageURL: URL(fileURLWithPath: "/tmp/session-\(release.id)", isDirectory: true),
+            selectedFileId: "\(release.id).mkv",
+            streamingURL: URL(fileURLWithPath: "/tmp/\(release.id).mkv"),
+            isSequentialDownloadEnabled: true
+        )
+        sessions[session.id] = session
+        releaseIDsBySessionID[session.id] = release.id
+        if let delay = startDelays[release.id] {
+            try await Task.sleep(nanoseconds: delay)
+        }
+        return session
+    }
+
+    func remove(sessionId: String, deleteFiles: Bool) async throws {
+        if sessions.removeValue(forKey: sessionId) == nil {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        removedIDs.append(sessionId)
+    }
+
+    func getFileList(sessionId: String) async throws -> [TorrentFile] {
+        guard let session = sessions[sessionId], let fileID = session.selectedFileId else {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        return [
+            TorrentFile(
+                id: fileID,
+                path: fileID,
+                name: fileID,
+                lengthBytes: 4_000_000_000,
+                isMediaFile: true,
+                priority: .high
+            )
+        ]
+    }
+
+    func selectMediaFile(sessionId: String, fileId: String) async throws {
+        guard var session = sessions[sessionId] else {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        session.selectedFileId = fileId
+        session.streamingURL = URL(fileURLWithPath: "/tmp/\(fileId)")
+        sessions[sessionId] = session
+    }
+
+    func setBandwidthLimits(sessionId: String, _ limits: TorrentBandwidthLimits) async throws {
+        _ = sessionId
+        _ = limits
+    }
+
+    func getStreamingURL(sessionId: String) async throws -> URL {
+        if let releaseID = releaseIDsBySessionID[sessionId], let failure = failures[releaseID] {
+            throw failure
+        }
+        guard let url = sessions[sessionId]?.streamingURL else {
+            throw TorrentEngineError.streamingURLUnavailable(sessionId: sessionId)
+        }
+        return url
+    }
+
+    func getStatus(sessionId: String) async throws -> TorrentStatus {
+        guard let session = sessions[sessionId] else {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        return TorrentStatus(
+            sessionId: session.id,
+            state: .streaming,
+            progress: TorrentProgress(bufferedBytes: 1_000_000),
+            health: TorrentHealth(seeders: 120, connectedPeers: 4, availability: 1),
+            selectedFileId: session.selectedFileId,
+            isSequentialDownloadEnabled: true,
+            streamingURL: session.streamingURL
+        )
+    }
+
+    func startedReleaseIDs() -> [String] {
+        startedIDs
+    }
+
+    func removedSessionIDs() -> [String] {
+        removedIDs
+    }
+}
+
+private actor RecordingAvailabilityChecker: PlaybackStreamAvailabilityChecking {
+    private var urls: [URL] = []
+    private let responses: [String: PlaybackStreamAvailability]
+
+    init(responses: [String: PlaybackStreamAvailability] = [:]) {
+        self.responses = responses
+    }
+
+    func check(_ url: URL, timeoutSeconds: TimeInterval) async -> PlaybackStreamAvailability {
+        urls.append(url)
+        return responses[url.lastPathComponent] ?? .available
+    }
+
+    func checkedURLs() -> [URL] {
+        urls
+    }
+}
+
+private actor PlaybackPipelineRecordingDiagnostics: DiagnosticsServiceProtocol {
+    private var recordedEvents: [DiagnosticsEvent] = []
+
+    func log(level: DiagnosticsLogLevel, subsystem: DiagnosticsSubsystem, message: String, metadata: [String: String]) async {
+        recordedEvents.append(DiagnosticsEvent(level: level, subsystem: subsystem, message: message, metadata: metadata))
+    }
+
+    func exportDiagnostics() async -> String {
+        "diagnostics.zip"
+    }
+
+    func recentEvents(limit: Int) async -> [DiagnosticsEvent] {
+        Array(recordedEvents.suffix(limit))
+    }
+
+    func events() -> [DiagnosticsEvent] {
+        recordedEvents
     }
 }

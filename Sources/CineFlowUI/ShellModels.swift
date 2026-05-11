@@ -18,6 +18,7 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
         sourceID: String? = nil,
         release: TorrentRelease? = nil,
         fallbackReleases: [TorrentRelease] = [],
+        selectionContext: PlaybackSelectionContext? = nil,
         nextEpisodePrompt: PlayerNextEpisodePrompt? = nil
     )
     case settingsSection(id: String)
@@ -44,8 +45,8 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             "settings"
         case .mediaDetail(let id):
             "mediaDetail:\(id)"
-        case .player(let mediaID, let sourceID, let release, let fallbackReleases, let nextEpisodePrompt):
-            "player:\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(nextEpisodePrompt?.title ?? "no-next")"
+        case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt):
+            "player:\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(selectionContext?.episodeID ?? selectionContext?.mediaID ?? "no-context"):\(nextEpisodePrompt?.title ?? "no-next")"
         case .settingsSection(let id):
             "settingsSection:\(id)"
         }

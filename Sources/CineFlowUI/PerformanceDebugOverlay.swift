@@ -77,14 +77,26 @@ public struct PerformanceDebugOverlay: View {
             return "idle"
         case .loading:
             return "loading"
+        case .resolving:
+            return "resolving"
+        case .buffering:
+            return "buffering"
+        case .ready:
+            return "ready"
         case .playing:
             return "playing \(Int(status.currentTime))s"
         case .paused:
             return "paused \(Int(status.currentTime))s"
+        case .stalled:
+            return "stalled"
         case .stopped:
             return "stopped"
         case .failed:
             return "failed"
+        case .retrying:
+            return "retrying"
+        case .completed:
+            return "completed"
         }
     }
 }

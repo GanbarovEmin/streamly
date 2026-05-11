@@ -372,7 +372,8 @@ public struct MovieDetailView: View {
             navigationCoordinator.navigate(to: .player(
                 mediaID: movie.id,
                 release: release,
-                fallbackReleases: viewModel.releases.map(\.release)
+                fallbackReleases: viewModel.releases.map(\.release),
+                selectionContext: playbackContext(for: movie)
             ))
             return
         }
@@ -385,17 +386,30 @@ public struct MovieDetailView: View {
         navigationCoordinator.navigate(to: .player(
             mediaID: movieID,
             release: release,
-            fallbackReleases: viewModel.releases.map(\.release)
+            fallbackReleases: viewModel.releases.map(\.release),
+            selectionContext: viewModel.movie.map(playbackContext(for:))
         ))
     }
 
     private func playLocalMovie(_ movie: MovieDetail) {
         if let source = viewModel.userSources.first(where: \.isPlayableLocalFile) {
             viewModel.selectUserSource(source)
-            navigationCoordinator.navigate(to: .player(mediaID: movie.id, sourceID: source.id))
+            navigationCoordinator.navigate(to: .player(
+                mediaID: movie.id,
+                sourceID: source.id,
+                selectionContext: playbackContext(for: movie)
+            ))
             return
         }
         openLocalMediaPanel(mediaID: movie.id)
+    }
+
+    private func playbackContext(for movie: MovieDetail) -> PlaybackSelectionContext {
+        PlaybackSelectionContext(
+            mediaID: movie.id,
+            displayTitle: movie.title,
+            mediaKind: .movie
+        )
     }
 
     private func openLocalMediaPanel(mediaID: String) {
@@ -410,7 +424,11 @@ public struct MovieDetailView: View {
             guard response == .OK, let url = panel.url else { return }
             Task { @MainActor in
                 await viewModel.addLocalSource(url: url)
-                navigationCoordinator.navigate(to: .player(mediaID: mediaID, sourceID: viewModel.selectedUserSourceID))
+                navigationCoordinator.navigate(to: .player(
+                    mediaID: mediaID,
+                    sourceID: viewModel.selectedUserSourceID,
+                    selectionContext: viewModel.movie.map(playbackContext(for:))
+                ))
             }
         }
     }

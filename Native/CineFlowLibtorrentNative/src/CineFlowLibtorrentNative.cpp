@@ -139,6 +139,7 @@ bool launch_helper(const std::string &storage_path, Engine *engine, std::string 
         error = "libtorrent_helper_not_found";
         return false;
     }
+    const std::string parent_pid = std::to_string(static_cast<long>(::getpid()));
 
     int pipe_fds[2];
     if (::pipe(pipe_fds) != 0) {
@@ -160,10 +161,10 @@ bool launch_helper(const std::string &storage_path, Engine *engine, std::string 
         ::close(pipe_fds[1]);
 
         if (executable.size() >= 3 && executable.rfind(".py") == executable.size() - 3) {
-            const char *argv[] = {"/usr/bin/python3", executable.c_str(), "--storage", storage_path.c_str(), nullptr};
+            const char *argv[] = {"/usr/bin/python3", executable.c_str(), "--storage", storage_path.c_str(), "--parent-pid", parent_pid.c_str(), nullptr};
             ::execve("/usr/bin/python3", const_cast<char *const *>(argv), environ);
         } else {
-            const char *argv[] = {executable.c_str(), "--storage", storage_path.c_str(), nullptr};
+            const char *argv[] = {executable.c_str(), "--storage", storage_path.c_str(), "--parent-pid", parent_pid.c_str(), nullptr};
             ::execve(executable.c_str(), const_cast<char *const *>(argv), environ);
         }
         _exit(127);
@@ -218,7 +219,7 @@ bool recv_all(int fd, std::string &value) {
     }
 }
 
-bool http_post(Engine *engine, const std::string &path, const std::string &body, std::string &response, std::string &error) {
+bool http_post(Engine *engine, const std::string &path, const std::string &body, std::string &response, std::string &error, int timeout_seconds = 90) {
     if (!engine || engine->control_port <= 0) {
         error = "engine_unavailable";
         return false;
@@ -230,7 +231,7 @@ bool http_post(Engine *engine, const std::string &path, const std::string &body,
         return false;
     }
     timeval timeout{};
-    timeout.tv_sec = 90;
+    timeout.tv_sec = timeout_seconds;
     timeout.tv_usec = 0;
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
@@ -333,6 +334,9 @@ void cf_libtorrent_engine_destroy(void *raw_engine) {
         return;
     }
     if (engine->helper_pid > 0) {
+        std::string shutdown_response;
+        std::string shutdown_error;
+        (void)http_post(engine, "/shutdown", "{}", shutdown_response, shutdown_error, 3);
         ::kill(engine->helper_pid, SIGTERM);
         for (int attempt = 0; attempt < 20; attempt += 1) {
             pid_t result = ::waitpid(engine->helper_pid, nullptr, WNOHANG);

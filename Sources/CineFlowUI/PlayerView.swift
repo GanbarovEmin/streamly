@@ -407,6 +407,7 @@ public struct PlayerView: View {
 
     private var sourceInfo: String {
         [
+            viewModel.status.media?.selectionContext?.episodeLabel,
             viewModel.status.qualityLabel,
             viewModel.status.sourceName,
             bufferingText

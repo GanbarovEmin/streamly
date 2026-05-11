@@ -9,11 +9,14 @@ import sys
 import threading
 import time
 import uuid
+import warnings
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import libtorrent as lt
 
@@ -29,6 +32,34 @@ PRIORITY_MAP = {
     3: 7,
 }
 STREAM_CHUNK_BYTES = 1024 * 1024
+HELPER_PID_FILE_PREFIX = ".streamly-helper-"
+HELPER_PID_FILE_SUFFIX = ".pid"
+
+
+def process_is_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def cleanup_orphan_pid_files(storage_path: Path) -> None:
+    for pid_file in storage_path.glob(f"{HELPER_PID_FILE_PREFIX}*{HELPER_PID_FILE_SUFFIX}"):
+        try:
+            payload = json.loads(pid_file.read_text(encoding="utf-8"))
+            pid = int(payload.get("pid") or 0)
+            parent_pid = int(payload.get("parentPid") or 0)
+        except Exception:
+            pid_file.unlink(missing_ok=True)
+            continue
+
+        if not process_is_alive(pid) or (parent_pid > 0 and not process_is_alive(parent_pid)):
+            pid_file.unlink(missing_ok=True)
 
 
 @dataclass
@@ -44,9 +75,10 @@ class TorrentEntry:
 
 
 class TorrentRuntime:
-    def __init__(self, storage_path: Path):
+    def __init__(self, storage_path: Path, parent_pid: int | None = None):
         self.storage_path = storage_path
         self.storage_path.mkdir(parents=True, exist_ok=True)
+        cleanup_orphan_pid_files(self.storage_path)
         settings = {
             "listen_interfaces": "0.0.0.0:0",
             "enable_dht": True,
@@ -60,6 +92,53 @@ class TorrentRuntime:
         self.lock = threading.RLock()
         self.stream_server: ThreadingHTTPServer | None = None
         self.stream_thread: threading.Thread | None = None
+        self.parent_pid = parent_pid if parent_pid and parent_pid > 0 else None
+        self.shutdown_requested = threading.Event()
+        self.pid_file = self.storage_path / f"{HELPER_PID_FILE_PREFIX}{os.getpid()}{HELPER_PID_FILE_SUFFIX}"
+        self.write_pid_file()
+        self.start_parent_watchdog()
+
+    def write_pid_file(self) -> None:
+        payload = {
+            "pid": os.getpid(),
+            "parentPid": self.parent_pid,
+            "createdAt": time.time(),
+        }
+        self.pid_file.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+
+    def start_parent_watchdog(self) -> None:
+        if self.parent_pid is None:
+            return
+
+        def watch() -> None:
+            while not self.shutdown_requested.wait(2.0):
+                if not process_is_alive(self.parent_pid):
+                    self.shutdown()
+                    os._exit(0)
+
+        threading.Thread(target=watch, daemon=True).start()
+
+    def shutdown(self) -> None:
+        self.shutdown_requested.set()
+        with self.lock:
+            entries = list(self.entries.items())
+            self.entries.clear()
+        for _, entry in entries:
+            try:
+                self.session.remove_torrent(entry.handle, 0)
+            except Exception:
+                pass
+        if self.stream_server is not None:
+            try:
+                self.stream_server.shutdown()
+                self.stream_server.server_close()
+            except Exception:
+                pass
+            self.stream_server = None
+        try:
+            self.pid_file.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     def add_magnet(self, uri: str, storage_path: str) -> str:
         if not uri.lower().startswith("magnet:?"):
@@ -335,8 +414,13 @@ class TorrentRuntime:
             start, end = self.parse_range(request.headers.get("Range"), size)
             self.wait_for_file_range(entry, file_index, start, end)
             self.send_file_range(request, path, start, end, size)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except Exception as exc:
-            self.send_error(request, HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+            try:
+                self.send_error(request, HTTPStatus.SERVICE_UNAVAILABLE, str(exc))
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
     def parse_range(self, range_header: str | None, size: int) -> tuple[int, int]:
         if not range_header or not range_header.startswith("bytes="):
@@ -426,7 +510,11 @@ def make_control_handler(runtime: TorrentRuntime):
             try:
                 payload = read_json(self)
                 path = urlparse(self.path).path
-                if path == "/add_magnet":
+                if path == "/shutdown":
+                    runtime.shutdown()
+                    send_text(self, "ok")
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                elif path == "/add_magnet":
                     send_text(self, runtime.add_magnet(payload["uri"], payload["storagePath"]))
                 elif path == "/add_torrent_file":
                     send_text(self, runtime.add_torrent_file(payload["torrentPath"], payload["storagePath"]))
@@ -481,15 +569,18 @@ def make_control_handler(runtime: TorrentRuntime):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--storage", required=True)
+    parser.add_argument("--parent-pid", type=int, default=None)
     args = parser.parse_args()
 
-    runtime = TorrentRuntime(Path(args.storage))
+    runtime = TorrentRuntime(Path(args.storage), parent_pid=args.parent_pid)
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_control_handler(runtime))
     print(json.dumps({"port": server.server_address[1]}), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         return 0
+    finally:
+        runtime.shutdown()
     return 0
 
 

@@ -75,8 +75,10 @@ public final class PlayerViewModel: ObservableObject {
     private let fallbackPreferences: RankingPreferences
     private let fallbackHandler: ((TorrentRelease) async -> Void)?
     private let configuredNextEpisodePrompt: PlayerNextEpisodePrompt?
+    private let debugLogger: PlaybackDebugLogger
     private var statusTask: Task<Void, Never>?
     private var controlsHideTask: Task<Void, Never>?
+    private var automaticallyTriedFallbackReleaseIDs = Set<String>()
 
     public init(
         service: any PlaybackServiceProtocol,
@@ -88,7 +90,8 @@ public final class PlayerViewModel: ObservableObject {
         fallbackReleases: [TorrentRelease] = [],
         fallbackPreferences: RankingPreferences = RankingPreferences(),
         fallbackHandler: ((TorrentRelease) async -> Void)? = nil,
-        nextEpisodePrompt: PlayerNextEpisodePrompt? = nil
+        nextEpisodePrompt: PlayerNextEpisodePrompt? = nil,
+        debugLogger: PlaybackDebugLogger = PlaybackDebugLogger()
     ) {
         self.service = service
         self.mediaSource = mediaSource
@@ -100,6 +103,7 @@ public final class PlayerViewModel: ObservableObject {
         self.fallbackPreferences = fallbackPreferences
         self.fallbackHandler = fallbackHandler
         self.configuredNextEpisodePrompt = nextEpisodePrompt
+        self.debugLogger = debugLogger
         self.status = PlaybackStatus(media: mediaSource, state: .idle)
         self.fallbackSuggestion = mediaSource.release.flatMap {
             ReleaseFallbackPlanner.seedWarning(for: $0, in: fallbackReleases, preferences: fallbackPreferences)
@@ -164,7 +168,10 @@ public final class PlayerViewModel: ObservableObject {
     public func start() async {
         status = PlaybackStatus(media: mediaSource, state: .loading, bufferingState: .buffering(progress: 0))
         await perform {
-            self.resumeProgress = try await self.progressRepository?.progress(mediaID: self.mediaSource.id, episodeID: nil)
+            self.resumeProgress = try await self.progressRepository?.progress(
+                mediaID: self.mediaSource.selectionContext?.mediaID ?? self.mediaSource.id,
+                episodeID: self.mediaSource.selectionContext?.episodeID
+            )
             try await self.service.play(self.mediaSource)
             if let resumeProgress = self.resumeProgress, resumeProgress.positionSeconds > 5, !resumeProgress.completed {
                 self.resumePrompt = PlayerResumePrompt(
@@ -193,13 +200,13 @@ public final class PlayerViewModel: ObservableObject {
             switch self.status.state {
             case .playing:
                 try await self.service.pause()
-            case .paused, .idle, .stopped:
+            case .paused, .idle, .ready, .stopped, .completed:
                 if self.status.media == nil || self.status.state == .idle {
                     try await self.service.play(self.mediaSource)
                 } else {
                     try await self.service.resume()
                 }
-            case .loading, .failed:
+            case .loading, .resolving, .buffering, .stalled, .retrying, .failed:
                 break
             }
             await self.refreshStatus()
@@ -450,6 +457,15 @@ public final class PlayerViewModel: ObservableObject {
                         self.updateFallbackSuggestionIfNeeded(for: status)
                         self.updateNextEpisodePromptIfNeeded(for: status)
                     }
+                    await self.debugLogger.log(
+                        diagnostics: self.diagnosticsService,
+                        event: "player.status",
+                        metadata: [
+                            "mediaID": self.mediaSource.id,
+                            "state": status.state.debugName,
+                            "position": "\(Int(status.currentTime))"
+                        ]
+                    )
                     try? await self.progressRecorder?.recordIfNeeded(status: status)
                 }
             } catch {
@@ -470,7 +486,28 @@ public final class PlayerViewModel: ObservableObject {
             try await operation()
             errorMessage = nil
         } catch {
-            errorMessage = CineFlowError.from(error, fallbackCategory: .playback).userMessage
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .playback)
+            errorMessage = cineFlowError.userMessage
+            if status.state.shouldFailFastInUI {
+                status = PlaybackStatus(
+                    media: status.media ?? mediaSource,
+                    state: .failed(reason: cineFlowError.technicalDescription),
+                    currentTime: status.currentTime,
+                    duration: status.duration,
+                    bufferingState: .idle,
+                    volume: status.volume,
+                    isMuted: status.isMuted,
+                    playbackSpeed: status.playbackSpeed,
+                    audioTracks: status.audioTracks,
+                    subtitleTracks: status.subtitleTracks,
+                    selectedAudioTrackId: status.selectedAudioTrackId,
+                    selectedSubtitleTrackId: status.selectedSubtitleTrackId,
+                    isFullscreen: status.isFullscreen,
+                    isPictureInPictureActive: status.isPictureInPictureActive,
+                    qualityLabel: status.qualityLabel,
+                    sourceName: status.sourceName
+                )
+            }
             await logError(error, subsystem: subsystem, operation: name)
         }
     }
@@ -490,6 +527,8 @@ public final class PlayerViewModel: ObservableObject {
 
         let reason: ReleaseFallbackReason?
         switch status.state {
+        case .stalled:
+            reason = .stalled
         case .failed(let message) where message.localizedCaseInsensitiveContains("stall"):
             reason = .stalled
         case .failed:
@@ -508,6 +547,30 @@ public final class PlayerViewModel: ObservableObject {
         else { return }
 
         fallbackSuggestion = suggestion
+        if fallbackHandler != nil,
+           let nextRelease = suggestion.nextBestRelease?.release,
+           !automaticallyTriedFallbackReleaseIDs.contains(nextRelease.id) {
+            automaticallyTriedFallbackReleaseIDs.insert(nextRelease.id)
+            self.status = PlaybackStatus(
+                media: status.media,
+                state: .retrying,
+                currentTime: status.currentTime,
+                duration: status.duration,
+                bufferingState: .buffering(progress: 0),
+                volume: status.volume,
+                isMuted: status.isMuted,
+                playbackSpeed: status.playbackSpeed,
+                audioTracks: status.audioTracks,
+                subtitleTracks: status.subtitleTracks,
+                selectedAudioTrackId: status.selectedAudioTrackId,
+                selectedSubtitleTrackId: status.selectedSubtitleTrackId,
+                isFullscreen: status.isFullscreen,
+                isPictureInPictureActive: status.isPictureInPictureActive,
+                qualityLabel: status.qualityLabel,
+                sourceName: status.sourceName
+            )
+            Task { await self.tryNextBestRelease() }
+        }
         Task {
             await diagnosticsService?.log(
                 level: .warning,
@@ -525,7 +588,7 @@ public final class PlayerViewModel: ObservableObject {
 
     private func updateNextEpisodePromptIfNeeded(for status: PlaybackStatus) {
         guard nextEpisodePrompt == nil, let configuredNextEpisodePrompt else { return }
-        guard status.progressFraction >= 0.92 || status.state == .stopped else { return }
+        guard status.progressFraction >= 0.92 || status.state == .stopped || status.state == .completed else { return }
         nextEpisodePrompt = configuredNextEpisodePrompt
     }
 
@@ -547,5 +610,45 @@ public final class PlayerViewModel: ObservableObject {
             .map { String($0).lowercased() }
             .reversed()
             .first { $0.count == 2 || $0.count == 3 }
+    }
+}
+
+private extension PlaybackRunState {
+    var shouldFailFastInUI: Bool {
+        switch self {
+        case .loading, .resolving, .buffering, .retrying:
+            true
+        case .idle, .ready, .playing, .paused, .stalled, .stopped, .failed, .completed:
+            false
+        }
+    }
+
+    var debugName: String {
+        switch self {
+        case .idle:
+            "idle"
+        case .loading:
+            "loading"
+        case .resolving:
+            "resolving"
+        case .buffering:
+            "buffering"
+        case .ready:
+            "ready"
+        case .playing:
+            "playing"
+        case .paused:
+            "paused"
+        case .stalled:
+            "stalled"
+        case .stopped:
+            "stopped"
+        case .failed:
+            "failed"
+        case .retrying:
+            "retrying"
+        case .completed:
+            "completed"
+        }
     }
 }
