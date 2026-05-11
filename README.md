@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="landing/assets/icons/streamly-logo-primary.png" width="96" alt="Streamly logo">
+  <img src="landing/assets/icons/streamly-logo-primary.png" width="165" alt="Streamly logo">
 </p>
 
 
