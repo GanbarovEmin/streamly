@@ -419,7 +419,7 @@ public struct TorrentioSourceProvider: TorrentSourceProviderProtocol {
     public let displayName = "Torrentio"
     public let requiresAuthentication = false
     public let isEnabled = true
-    public let defaultIsEnabled = false
+    public let defaultIsEnabled = true
 
     private let settingsStore: any TorrentioSettingsStoreProtocol
     private let session: URLSession

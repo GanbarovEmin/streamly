@@ -1,5 +1,6 @@
 import CineFlowCore
 import CineFlowLocalization
+import CineFlowSources
 import Foundation
 
 @MainActor
@@ -19,9 +20,11 @@ public final class CineFlowRootViewModel: ObservableObject {
     @Published public private(set) var isClearingImageCache = false
 
     private let environment: AppEnvironment
+    private let sourceManager: SourceManager?
 
-    public init(environment: AppEnvironment) {
+    public init(environment: AppEnvironment, sourceManager: SourceManager? = nil) {
         self.environment = environment
+        self.sourceManager = sourceManager
     }
 
     public var playbackService: any PlaybackServiceProtocol {
@@ -44,15 +47,25 @@ public final class CineFlowRootViewModel: ObservableObject {
                 return
             }
 
-            let releases = try await environment.torrentEngine.searchReleases(for: item)
+            let autoSource: PlaybackAutoSourceResolution?
+            if let sourceManager {
+                autoSource = await PlaybackAutoSourceResolver(
+                    metadataService: environment.metadataService,
+                    sourceManager: sourceManager,
+                    diagnosticsService: environment.diagnosticsService
+                ).resolveBestRelease(mediaID: item.id, selectionContext: nil)
+            } else {
+                autoSource = nil
+            }
+            let legacyReleases = autoSource == nil ? (try await environment.torrentEngine.searchReleases(for: item)) : []
             let languages = await environment.settingsRepository.subtitleLanguagePriority
             let subtitleSettings = await environment.settingsRepository.subtitleSettings
 
             headline = item.title
             releaseYear = item.releaseYear
             mediaKind = item.kind
-            bestReleaseTitle = releases.first?.title
-            bestReleaseSeeders = releases.first?.seeders
+            bestReleaseTitle = autoSource?.release.title ?? legacyReleases.first?.title
+            bestReleaseSeeders = autoSource?.release.seeders ?? legacyReleases.first?.seeders
             subtitleLanguagePriority = languages
             self.subtitleSettings = subtitleSettings
             didLoadMetadata = true

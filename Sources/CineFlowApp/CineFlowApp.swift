@@ -112,6 +112,7 @@ struct CineFlowApplication: App {
         let userMediaSourceRepository = liveDatabaseManager
             .map(DatabaseUserMediaSourceRepository.init(databaseManager:))
         let playbackService: any PlaybackServiceProtocol = TranscodingAVPlaybackService()
+        let timelinePreviewService = TimelinePreviewService()
 
         let torrentEngine = EmbeddedLibtorrentTorrentEngine(bridge: NativeLibtorrentBridge())
         CineFlowAppDelegate.terminationHandler = {
@@ -128,6 +129,7 @@ struct CineFlowApplication: App {
             diagnosticsService: diagnosticsService,
             updateService: updateService,
             imageCacheService: imageCacheService,
+            timelinePreviewService: timelinePreviewService,
             smartCacheManager: smartCacheManager,
             playbackProgressRepository: playbackProgressRepository,
             watchHistoryRepository: watchHistoryRepository,

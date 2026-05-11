@@ -72,6 +72,20 @@ public enum SubtitleRenderingMode: Codable, Equatable, Sendable {
     case disabled
 }
 
+public struct PlaybackChapter: Identifiable, Codable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let startTime: Double
+    public let endTime: Double?
+
+    public init(id: String, title: String, startTime: Double, endTime: Double? = nil) {
+        self.id = id
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Chapter" : title
+        self.startTime = max(0, startTime)
+        self.endTime = endTime.map { max(startTime, $0) }
+    }
+}
+
 public struct PlaybackSelectionContext: Codable, Equatable, Hashable, Sendable {
     public let mediaID: String
     public let displayTitle: String
@@ -166,6 +180,11 @@ public struct PlaybackStatus: Codable, Equatable, Sendable {
     public let isPictureInPictureActive: Bool
     public let qualityLabel: String?
     public let sourceName: String?
+    public let chapters: [PlaybackChapter]
+    public let audioBoost: Double
+    public let subtitleDelaySeconds: Double
+    public let subtitleFontSize: Double
+    public let subtitleStyle: SubtitleVisualStyle
 
     public init(
         media: PlaybackMediaSource? = nil,
@@ -183,7 +202,12 @@ public struct PlaybackStatus: Codable, Equatable, Sendable {
         isFullscreen: Bool = false,
         isPictureInPictureActive: Bool = false,
         qualityLabel: String? = nil,
-        sourceName: String? = nil
+        sourceName: String? = nil,
+        chapters: [PlaybackChapter] = [],
+        audioBoost: Double = 1,
+        subtitleDelaySeconds: Double = 0,
+        subtitleFontSize: Double = 42,
+        subtitleStyle: SubtitleVisualStyle = .system
     ) {
         self.media = media
         self.state = state
@@ -201,6 +225,11 @@ public struct PlaybackStatus: Codable, Equatable, Sendable {
         self.isPictureInPictureActive = isPictureInPictureActive
         self.qualityLabel = qualityLabel ?? media?.qualityLabel
         self.sourceName = sourceName ?? media?.sourceName
+        self.chapters = chapters.sorted { $0.startTime < $1.startTime }
+        self.audioBoost = min(max(audioBoost, 1), 2.5)
+        self.subtitleDelaySeconds = min(max(subtitleDelaySeconds, -10), 10)
+        self.subtitleFontSize = min(max(subtitleFontSize, 24), 72)
+        self.subtitleStyle = subtitleStyle
     }
 
     public var progressFraction: Double {
@@ -217,15 +246,25 @@ public struct MPVPlaybackOptions: Codable, Equatable, Sendable {
     public let subtitleRendering: SubtitleRenderingMode
     public let preferredAudioLanguage: String?
     public let preferredSubtitleLanguage: String?
+    public let subtitleFontSize: Double
+    public let subtitleDelaySeconds: Double
+    public let subtitleStyle: SubtitleVisualStyle
+    public let subtitlePlacement: SubtitlePlacement
+    public let audioBoost: Double
 
     public init(
-        hardwareDecoding: String = "videotoolbox-copy",
+        hardwareDecoding: String = "videotoolbox",
         videoOutput: String = "libmpv",
         scalingProfile: String = "ewa_lanczossharp",
-        hdrMode: String = "auto tone-map when passthrough is unavailable",
+        hdrMode: String = "auto",
         subtitleRendering: SubtitleRenderingMode = .enabled,
         preferredAudioLanguage: String? = nil,
-        preferredSubtitleLanguage: String? = nil
+        preferredSubtitleLanguage: String? = nil,
+        subtitleFontSize: Double = 42,
+        subtitleDelaySeconds: Double = 0,
+        subtitleStyle: SubtitleVisualStyle = .system,
+        subtitlePlacement: SubtitlePlacement = .standard,
+        audioBoost: Double = 1
     ) {
         self.hardwareDecoding = hardwareDecoding
         self.videoOutput = videoOutput
@@ -234,6 +273,11 @@ public struct MPVPlaybackOptions: Codable, Equatable, Sendable {
         self.subtitleRendering = subtitleRendering
         self.preferredAudioLanguage = preferredAudioLanguage
         self.preferredSubtitleLanguage = preferredSubtitleLanguage
+        self.subtitleFontSize = min(max(subtitleFontSize, 24), 72)
+        self.subtitleDelaySeconds = min(max(subtitleDelaySeconds, -10), 10)
+        self.subtitleStyle = subtitleStyle
+        self.subtitlePlacement = subtitlePlacement
+        self.audioBoost = min(max(audioBoost, 1), 2.5)
     }
 }
 

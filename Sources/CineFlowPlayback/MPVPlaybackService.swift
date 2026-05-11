@@ -14,8 +14,12 @@ public protocol MPVBridgeProtocol: Sendable {
     func setVolume(_ volume: Double) async throws
     func setMuted(_ isMuted: Bool) async throws
     func setPlaybackSpeed(_ speed: Double) async throws
+    func setAudioBoost(_ boost: Double) async throws
     func selectAudioTrack(id: String?) async throws
     func selectSubtitleTrack(id: String?) async throws
+    func setSubtitleDelay(_ seconds: Double) async throws
+    func setSubtitleFontSize(_ fontSize: Double) async throws
+    func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws
     func status() async throws -> PlaybackStatus
 }
 
@@ -79,11 +83,27 @@ public struct UnavailableMPVBridge: MPVBridgeProtocol {
         throw PlaybackServiceError.mpvUnavailable
     }
 
+    public func setAudioBoost(_ boost: Double) async throws {
+        throw PlaybackServiceError.mpvUnavailable
+    }
+
     public func selectAudioTrack(id: String?) async throws {
         throw PlaybackServiceError.mpvUnavailable
     }
 
     public func selectSubtitleTrack(id: String?) async throws {
+        throw PlaybackServiceError.mpvUnavailable
+    }
+
+    public func setSubtitleDelay(_ seconds: Double) async throws {
+        throw PlaybackServiceError.mpvUnavailable
+    }
+
+    public func setSubtitleFontSize(_ fontSize: Double) async throws {
+        throw PlaybackServiceError.mpvUnavailable
+    }
+
+    public func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {
         throw PlaybackServiceError.mpvUnavailable
     }
 
@@ -129,8 +149,13 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
         playbackStatus = PlaybackStatus(
             state: .playing,
             bufferingState: .ready,
-            volume: 1,
-            playbackSpeed: 1
+            volume: playbackStatus.volume,
+            isMuted: playbackStatus.isMuted,
+            playbackSpeed: playbackStatus.playbackSpeed,
+            audioBoost: configuredOptions.audioBoost,
+            subtitleDelaySeconds: configuredOptions.subtitleDelaySeconds,
+            subtitleFontSize: configuredOptions.subtitleFontSize,
+            subtitleStyle: configuredOptions.subtitleStyle
         )
     }
 
@@ -163,22 +188,11 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
     }
 
     public func setVolume(_ volume: Double) async throws {
-        playbackStatus = PlaybackStatus(
-            state: playbackStatus.state,
-            bufferingState: playbackStatus.bufferingState,
-            volume: min(max(volume, 0), 1),
-            playbackSpeed: playbackStatus.playbackSpeed
-        )
+        playbackStatus = statusPreservingPlayerState(volume: min(max(volume, 0), 1))
     }
 
     public func setMuted(_ isMuted: Bool) async throws {
-        playbackStatus = PlaybackStatus(
-            state: playbackStatus.state,
-            bufferingState: playbackStatus.bufferingState,
-            volume: playbackStatus.volume,
-            isMuted: isMuted,
-            playbackSpeed: playbackStatus.playbackSpeed
-        )
+        playbackStatus = statusPreservingPlayerState(isMuted: isMuted)
     }
 
     public func setPlaybackSpeed(_ speed: Double) async throws {
@@ -187,16 +201,36 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
             bufferingState: playbackStatus.bufferingState,
             volume: playbackStatus.volume,
             isMuted: playbackStatus.isMuted,
-            playbackSpeed: min(max(speed, 0.25), 4)
+            playbackSpeed: min(max(speed, 0.25), 4),
+            audioBoost: playbackStatus.audioBoost,
+            subtitleDelaySeconds: playbackStatus.subtitleDelaySeconds,
+            subtitleFontSize: playbackStatus.subtitleFontSize,
+            subtitleStyle: playbackStatus.subtitleStyle
         )
     }
 
+    public func setAudioBoost(_ boost: Double) async throws {
+        playbackStatus = statusPreservingPlayerState(audioBoost: min(max(boost, 1), 2.5))
+    }
+
     public func selectAudioTrack(id: String?) async throws {
-        throw PlaybackServiceError.unsupported(operation: "mpv external audio track selection")
+        playbackStatus = statusPreservingPlayerState(selectedAudioTrackId: id)
     }
 
     public func selectSubtitleTrack(id: String?) async throws {
-        throw PlaybackServiceError.unsupported(operation: "mpv external subtitle track selection")
+        playbackStatus = statusPreservingPlayerState(selectedSubtitleTrackId: id)
+    }
+
+    public func setSubtitleDelay(_ seconds: Double) async throws {
+        playbackStatus = statusPreservingPlayerState(subtitleDelaySeconds: min(max(seconds, -10), 10))
+    }
+
+    public func setSubtitleFontSize(_ fontSize: Double) async throws {
+        playbackStatus = statusPreservingPlayerState(subtitleFontSize: min(max(fontSize, 24), 72))
+    }
+
+    public func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {
+        playbackStatus = statusPreservingPlayerState(subtitleStyle: style)
     }
 
     public func status() async throws -> PlaybackStatus {
@@ -208,6 +242,7 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
 
     private func launchArguments(for executableURL: URL, mediaURL: URL) -> [String] {
         let media = mediaURL.absoluteString
+        let videoOutput = configuredOptions.videoOutput == "libmpv" ? "gpu-next" : configuredOptions.videoOutput
         if executableURL.lastPathComponent == "iina-cli" {
             return [
                 "--keep-running",
@@ -215,7 +250,25 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
                 media,
                 "--",
                 "--hwdec=\(configuredOptions.hardwareDecoding)",
-                "--sid=auto"
+                "--vo=\(videoOutput)",
+                "--gpu-api=metal",
+                "--profile=gpu-hq",
+                "--scale=\(configuredOptions.scalingProfile)",
+                "--tone-mapping=bt.2446a",
+                "--hdr-compute-peak=yes",
+                "--alang=\(configuredOptions.preferredAudioLanguage ?? "ru,en")",
+                "--slang=\(configuredOptions.preferredSubtitleLanguage ?? "ru,en")",
+                "--sid=auto",
+                "--sub-auto=fuzzy",
+                "--sub-font-size=\(Int(configuredOptions.subtitleFontSize))",
+                "--sub-delay=\(configuredOptions.subtitleDelaySeconds)",
+                "--sub-pos=\(configuredOptions.subtitlePlacement.mpvSubPosition)",
+                "--sub-border-size=\(subtitleBorderSize)",
+                "--sub-shadow-offset=\(subtitleShadowOffset)",
+                "--sub-shadow-color=0.0/0.0/0.0/0.75",
+                "--sub-back-color=\(subtitleBackgroundColor)",
+                "--volume-max=250",
+                "--volume=\(Int(configuredOptions.audioBoost * 100))"
             ]
         }
 
@@ -223,8 +276,64 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
             media,
             "--force-window=yes",
             "--hwdec=\(configuredOptions.hardwareDecoding)",
-            "--sid=auto"
+            "--vo=\(videoOutput)",
+            "--gpu-api=metal",
+            "--profile=gpu-hq",
+            "--scale=\(configuredOptions.scalingProfile)",
+            "--tone-mapping=bt.2446a",
+            "--hdr-compute-peak=yes",
+            "--alang=\(configuredOptions.preferredAudioLanguage ?? "ru,en")",
+            "--slang=\(configuredOptions.preferredSubtitleLanguage ?? "ru,en")",
+            "--sid=auto",
+            "--aid=auto",
+            "--sub-auto=fuzzy",
+            "--sub-font-size=\(Int(configuredOptions.subtitleFontSize))",
+            "--sub-delay=\(configuredOptions.subtitleDelaySeconds)",
+            "--sub-pos=\(configuredOptions.subtitlePlacement.mpvSubPosition)",
+            "--sub-border-size=\(subtitleBorderSize)",
+            "--sub-shadow-offset=\(subtitleShadowOffset)",
+            "--sub-shadow-color=0.0/0.0/0.0/0.75",
+            "--sub-back-color=\(subtitleBackgroundColor)",
+            "--volume-max=250",
+            "--volume=\(Int(configuredOptions.audioBoost * 100))"
         ]
+    }
+
+    private var subtitleBorderSize: Int {
+        switch configuredOptions.subtitleStyle {
+        case .system:
+            3
+        case .highContrast:
+            5
+        case .cinematic:
+            4
+        case .compact:
+            2
+        }
+    }
+
+    private var subtitleShadowOffset: Int {
+        switch configuredOptions.subtitleStyle {
+        case .system:
+            1
+        case .highContrast:
+            2
+        case .cinematic:
+            1
+        case .compact:
+            0
+        }
+    }
+
+    private var subtitleBackgroundColor: String {
+        switch configuredOptions.subtitleStyle {
+        case .system, .compact:
+            "0.0/0.0/0.0/0.0"
+        case .highContrast:
+            "0.0/0.0/0.0/0.45"
+        case .cinematic:
+            "0.0/0.0/0.0/0.30"
+        }
     }
 
     private func status(with state: PlaybackRunState) -> PlaybackStatus {
@@ -233,7 +342,43 @@ public actor SystemMPVBridge: MPVBridgeProtocol {
             bufferingState: playbackStatus.bufferingState,
             volume: playbackStatus.volume,
             isMuted: playbackStatus.isMuted,
-            playbackSpeed: playbackStatus.playbackSpeed
+            playbackSpeed: playbackStatus.playbackSpeed,
+            audioBoost: playbackStatus.audioBoost,
+            subtitleDelaySeconds: playbackStatus.subtitleDelaySeconds,
+            subtitleFontSize: playbackStatus.subtitleFontSize,
+            subtitleStyle: playbackStatus.subtitleStyle
+        )
+    }
+
+    private func statusPreservingPlayerState(
+        volume: Double? = nil,
+        isMuted: Bool? = nil,
+        selectedAudioTrackId: String?? = nil,
+        selectedSubtitleTrackId: String?? = nil,
+        audioBoost: Double? = nil,
+        subtitleDelaySeconds: Double? = nil,
+        subtitleFontSize: Double? = nil,
+        subtitleStyle: SubtitleVisualStyle? = nil
+    ) -> PlaybackStatus {
+        PlaybackStatus(
+            state: playbackStatus.state,
+            bufferingState: playbackStatus.bufferingState,
+            volume: volume ?? playbackStatus.volume,
+            isMuted: isMuted ?? playbackStatus.isMuted,
+            playbackSpeed: playbackStatus.playbackSpeed,
+            audioTracks: playbackStatus.audioTracks,
+            subtitleTracks: playbackStatus.subtitleTracks,
+            selectedAudioTrackId: selectedAudioTrackId ?? playbackStatus.selectedAudioTrackId,
+            selectedSubtitleTrackId: selectedSubtitleTrackId ?? playbackStatus.selectedSubtitleTrackId,
+            isFullscreen: playbackStatus.isFullscreen,
+            isPictureInPictureActive: playbackStatus.isPictureInPictureActive,
+            qualityLabel: playbackStatus.qualityLabel,
+            sourceName: playbackStatus.sourceName,
+            chapters: playbackStatus.chapters,
+            audioBoost: audioBoost ?? playbackStatus.audioBoost,
+            subtitleDelaySeconds: subtitleDelaySeconds ?? playbackStatus.subtitleDelaySeconds,
+            subtitleFontSize: subtitleFontSize ?? playbackStatus.subtitleFontSize,
+            subtitleStyle: subtitleStyle ?? playbackStatus.subtitleStyle
         )
     }
 }
@@ -272,7 +417,30 @@ public actor MPVPlaybackService: PlaybackServiceProtocol {
         }
         try await bridge.configure(options: options)
         try await bridge.play(url: source.url)
-        status = PlaybackStatus(media: source, state: .playing)
+        let bridgeStatus = try await bridge.status()
+        status = PlaybackStatus(
+            media: source,
+            state: bridgeStatus.state,
+            currentTime: bridgeStatus.currentTime,
+            duration: bridgeStatus.duration,
+            bufferingState: bridgeStatus.bufferingState,
+            volume: bridgeStatus.volume,
+            isMuted: bridgeStatus.isMuted,
+            playbackSpeed: bridgeStatus.playbackSpeed,
+            audioTracks: bridgeStatus.audioTracks,
+            subtitleTracks: bridgeStatus.subtitleTracks,
+            selectedAudioTrackId: bridgeStatus.selectedAudioTrackId,
+            selectedSubtitleTrackId: bridgeStatus.selectedSubtitleTrackId,
+            isFullscreen: bridgeStatus.isFullscreen,
+            isPictureInPictureActive: bridgeStatus.isPictureInPictureActive,
+            qualityLabel: source.qualityLabel,
+            sourceName: source.sourceName,
+            chapters: bridgeStatus.chapters,
+            audioBoost: bridgeStatus.audioBoost,
+            subtitleDelaySeconds: bridgeStatus.subtitleDelaySeconds,
+            subtitleFontSize: bridgeStatus.subtitleFontSize,
+            subtitleStyle: bridgeStatus.subtitleStyle
+        )
         legacyState = source.release.map { .playing($0) } ?? .preparing
     }
 
@@ -317,6 +485,11 @@ public actor MPVPlaybackService: PlaybackServiceProtocol {
         status = try await bridge.status()
     }
 
+    public func setAudioBoost(_ boost: Double) async throws {
+        try await bridge.setAudioBoost(boost)
+        status = try await bridge.status()
+    }
+
     public func selectAudioTrack(id: String?) async throws {
         try await bridge.selectAudioTrack(id: id)
         status = try await bridge.status()
@@ -324,6 +497,21 @@ public actor MPVPlaybackService: PlaybackServiceProtocol {
 
     public func selectSubtitleTrack(id: String?) async throws {
         try await bridge.selectSubtitleTrack(id: id)
+        status = try await bridge.status()
+    }
+
+    public func setSubtitleDelay(_ seconds: Double) async throws {
+        try await bridge.setSubtitleDelay(seconds)
+        status = try await bridge.status()
+    }
+
+    public func setSubtitleFontSize(_ fontSize: Double) async throws {
+        try await bridge.setSubtitleFontSize(fontSize)
+        status = try await bridge.status()
+    }
+
+    public func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {
+        try await bridge.setSubtitleStyle(style)
         status = try await bridge.status()
     }
 
@@ -344,7 +532,12 @@ public actor MPVPlaybackService: PlaybackServiceProtocol {
             isFullscreen: isFullscreen,
             isPictureInPictureActive: status.isPictureInPictureActive,
             qualityLabel: status.qualityLabel,
-            sourceName: status.sourceName
+            sourceName: status.sourceName,
+            chapters: status.chapters,
+            audioBoost: status.audioBoost,
+            subtitleDelaySeconds: status.subtitleDelaySeconds,
+            subtitleFontSize: status.subtitleFontSize,
+            subtitleStyle: status.subtitleStyle
         )
     }
 

@@ -61,6 +61,7 @@ final class SettingsViewModelTests: XCTestCase {
         await viewModel.updateLanguage(.english)
         await viewModel.updateReduceMotion(true)
         await viewModel.updatePreferredAudioLanguages(["en", "ru"])
+        await viewModel.updatePreferredAudioOrder(.custom)
         await viewModel.updatePreferredQuality(.p1080)
         await viewModel.updateHDRPreference(.avoidHDR)
         await viewModel.updateCodecPreference(.avoidUnsupportedAV1)
@@ -68,8 +69,17 @@ final class SettingsViewModelTests: XCTestCase {
         await viewModel.updatePreferHighSeedersOverHighestQuality(true)
         await viewModel.updateSeekStep(30)
         await viewModel.updateStartFromLastPosition(false)
+        await viewModel.updateDimBackgroundAroundVideo(true)
+        await viewModel.updateTimelinePreviewsEnabled(false)
+        await viewModel.updateAutoplayNextEpisode(false)
+        await viewModel.updateRememberedVolume(0.7)
+        await viewModel.updateDefaultPlaybackSpeed(1.25)
+        await viewModel.updateAudioBoost(1.5)
         await viewModel.updateSubtitleLanguages(["en", "ru"])
+        await viewModel.updateSubtitleAutoMode(.onlyForeignAudio)
         await viewModel.updateSubtitleDelay(1.5)
+        await viewModel.updateSubtitleVisualStyle(.cinematic)
+        await viewModel.updateSubtitlePlacement(.higher)
 
         let persisted = await settingsRepository.appSettings
         let persistedSubtitles = await settingsRepository.subtitleSettings
@@ -78,6 +88,7 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(persisted.appearance.reduceMotion, true)
         XCTAssertEqual(UserDefaults.standard.bool(forKey: "streamly.reduceMotion"), true)
         XCTAssertEqual(persisted.playback.preferredAudioLanguages, ["en", "ru"])
+        XCTAssertEqual(persisted.playback.preferredAudioOrder, .custom)
         XCTAssertEqual(persisted.playback.preferredQuality, .p1080)
         XCTAssertEqual(persisted.playback.hdrPreference, .avoidHDR)
         XCTAssertEqual(persisted.playback.codecPreference, .avoidUnsupportedAV1)
@@ -85,8 +96,17 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(persisted.playback.preferHighSeedersOverHighestQuality, true)
         XCTAssertEqual(persisted.playback.seekStepSeconds, 30)
         XCTAssertEqual(persisted.playback.startFromLastPosition, false)
+        XCTAssertEqual(persisted.playback.dimBackgroundAroundVideo, true)
+        XCTAssertEqual(persisted.playback.enableTimelinePreviews, false)
+        XCTAssertEqual(persisted.playback.autoplayNextEpisode, false)
+        XCTAssertEqual(persisted.playback.rememberedVolume, 0.7, accuracy: 0.001)
+        XCTAssertEqual(persisted.playback.playbackSpeed, 1.25, accuracy: 0.001)
+        XCTAssertEqual(persisted.playback.audioBoost, 1.5, accuracy: 0.001)
         XCTAssertEqual(persistedSubtitles.languagePreference.languageCodes, ["en", "ru"])
+        XCTAssertEqual(persistedSubtitles.autoMode, .onlyForeignAudio)
         XCTAssertEqual(persistedSubtitles.subtitleDelaySeconds, 1.5)
+        XCTAssertEqual(persistedSubtitles.visualStyle, .cinematic)
+        XCTAssertEqual(persistedSubtitles.placement, .higher)
     }
 
     func testTMDBCredentialsCanBeSavedAndClearedFromSettings() async {
@@ -238,7 +258,8 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.cacheSummary.torrentBytes, 2_000)
         XCTAssertEqual(viewModel.cacheSummary.subtitleBytes, 3_000)
         XCTAssertEqual(viewModel.cacheSummary.metadataBytes, 4_000)
-        XCTAssertEqual(viewModel.cacheSummary.totalBytes, 10_000)
+        XCTAssertEqual(viewModel.cacheSummary.timelinePreviewBytes, 5_000)
+        XCTAssertEqual(viewModel.cacheSummary.totalBytes, 15_000)
         XCTAssertEqual(viewModel.cacheSummary.titleItems.map(\.title), ["Cached Movie"])
 
         await viewModel.updateCacheRetentionDays(14)
@@ -260,12 +281,14 @@ final class SettingsViewModelTests: XCTestCase {
         await viewModel.clearTitleCache(itemID: "torrents:/tmp/Cached.Movie")
         await viewModel.runCacheAutoClean()
         await viewModel.clearMetadataCache()
+        await viewModel.clearTimelinePreviewCache()
 
         let calls = await smartCacheManager.calls()
         XCTAssertTrue(calls.contains("keep:torrents:/tmp/Cached.Movie:true"))
         XCTAssertTrue(calls.contains("clearTitle:torrents:/tmp/Cached.Movie"))
         XCTAssertTrue(calls.contains("autoClean:14"))
         XCTAssertTrue(calls.contains("clear:metadata"))
+        XCTAssertTrue(calls.contains("clear:timelinePreviews"))
     }
 
     func testUpdateSectionReflectsSparkleStateAndPersistsAutomaticChecks() async {
@@ -366,7 +389,8 @@ private actor TestSmartCacheManager: SmartCacheManagerProtocol {
                 SmartCacheBucketSummary(category: .images, sizeBytes: 1_000, itemCount: 1),
                 SmartCacheBucketSummary(category: .torrents, sizeBytes: 2_000, itemCount: 1, path: scope.torrentCacheURL.path),
                 SmartCacheBucketSummary(category: .subtitles, sizeBytes: 3_000, itemCount: 1, path: scope.subtitleCacheURL.path),
-                SmartCacheBucketSummary(category: .metadata, sizeBytes: 4_000, itemCount: 1)
+                SmartCacheBucketSummary(category: .metadata, sizeBytes: 4_000, itemCount: 1),
+                SmartCacheBucketSummary(category: .timelinePreviews, sizeBytes: 5_000, itemCount: 1, path: scope.timelinePreviewCacheURL.path)
             ],
             titleItems: [
                 SmartTitleCacheItem(

@@ -161,6 +161,7 @@
 "home.state.error.title" = "Home screen unavailable";
 "home.state.error.message" = "Could not prepare the home screen.";
 "home.section.continueWatching" = "Continue Watching";
+"home.section.watchNext" = "Watch Next";
 "home.section.popularMovies" = "Popular - Movies";
 "home.section.popularSeries" = "Popular - Series";
 "home.section.recentlyAdded" = "Recently Added to Library";
@@ -199,8 +200,10 @@
 "player.resume.continue" = "Continue";
 "player.resume.startOver" = "Start Over";
 "player.nextEpisode.title" = "Next episode";
-"player.nextEpisode.action" = "Open Next";
-"player.nextEpisode.dismiss" = "Not Now";
+"player.nextEpisode.action" = "Watch Now";
+"player.nextEpisode.chooseRelease" = "Choose Release";
+"player.nextEpisode.dismiss" = "Cancel";
+"player.nextEpisode.countdown.format" = "Auto prompt in %d s";
 "player.buffering.title" = "Buffering";
 "player.buffering.message.format" = "Preparing stream · %d%%";
 "player.advancedDetails" = "Advanced details";

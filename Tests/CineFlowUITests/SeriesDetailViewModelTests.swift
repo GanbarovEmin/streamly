@@ -41,6 +41,9 @@ final class SeriesDetailViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.lastWatchedEpisode?.id, "got-s1-e2")
         XCTAssertEqual(viewModel.overallProgress, 0.375, accuracy: 0.001)
+        XCTAssertEqual(viewModel.watchNextEpisode?.episode.id, "got-s1-e2")
+        XCTAssertEqual(viewModel.continueWatchingTitle, "Continue S01E02")
+        XCTAssertEqual(viewModel.seasonProgressSummaries.first?.completedEpisodes, 1)
 
         viewModel.continueWatching()
 
@@ -52,6 +55,50 @@ final class SeriesDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.progressValue(for: "got-s2-e2"), 0.5, accuracy: 0.001)
         XCTAssertEqual(viewModel.lastWatchedEpisode?.id, "got-s2-e2")
         XCTAssertEqual(viewModel.lastPlayedEpisodeID, "got-s2-e2")
+    }
+
+    @MainActor
+    func testContinueWatchingAdvancesToNextEpisodeAfterCompletionThreshold() async {
+        let viewModel = SeriesDetailViewModel(seriesID: "tmdb:tv:1399", provider: MockSeriesDetailProvider())
+        await viewModel.load()
+
+        viewModel.updateProgress(episodeID: "got-s1-e2", positionSeconds: 3_400, durationSeconds: 3_600)
+        XCTAssertEqual(viewModel.watchNextEpisode?.episode.id, "got-s2-e1")
+        XCTAssertEqual(viewModel.continueWatchingTitle, "Continue S02E01")
+
+        viewModel.continueWatching()
+
+        XCTAssertEqual(viewModel.lastPlayedEpisodeID, "got-s2-e1")
+    }
+
+    @MainActor
+    func testNextEpisodePromptCarriesWatchNowActionForMatchedRelease() async throws {
+        let viewModel = SeriesDetailViewModel(seriesID: "tmdb:tv:1399", provider: MockSeriesDetailProvider())
+        await viewModel.load()
+
+        let current = try XCTUnwrap(viewModel.allReleasedEpisodes.first { $0.id == "got-s1-e2" })
+        let prompt = try XCTUnwrap(viewModel.nextEpisodePrompt(after: current))
+
+        XCTAssertEqual(prompt.title, "S02E01 The North Remembers")
+        XCTAssertEqual(prompt.subtitle, "Next Episode · 53m")
+        XCTAssertEqual(prompt.actionTitle, "Watch Now")
+        XCTAssertEqual(prompt.nextEpisodeAction?.selectionContext?.episodeID, "got-s2-e1")
+        XCTAssertEqual(prompt.nextEpisodeAction?.release?.id, "got-series-2160p")
+        XCTAssertFalse(prompt.requiresManualReleaseSelection)
+    }
+
+    @MainActor
+    func testNextEpisodePromptFallsBackToManualReleaseSelectionWhenNoScopedReleaseMatches() async throws {
+        let viewModel = SeriesDetailViewModel(seriesID: "series:manual", provider: ManualReleaseSelectionSeriesProvider())
+        await viewModel.load()
+
+        let current = try XCTUnwrap(viewModel.allReleasedEpisodes.first { $0.id == "manual-s1-e1" })
+        let prompt = try XCTUnwrap(viewModel.nextEpisodePrompt(after: current))
+
+        XCTAssertEqual(prompt.title, "S01E02 Second")
+        XCTAssertEqual(prompt.actionTitle, "Choose Release")
+        XCTAssertNil(prompt.nextEpisodeAction?.release)
+        XCTAssertTrue(prompt.requiresManualReleaseSelection)
     }
 
     @MainActor
@@ -327,5 +374,62 @@ private actor FutureEpisodeProvider: SeriesDetailProviderProtocol {
 
     func recordedEpisodeIDs() -> [String] {
         episodeIDs
+    }
+}
+
+private struct ManualReleaseSelectionSeriesProvider: SeriesDetailProviderProtocol {
+    func seriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        let firstEpisode = SeriesEpisode(
+            id: "manual-s1-e1",
+            seasonID: "manual-s1",
+            seasonNumber: 1,
+            episodeNumber: 1,
+            title: "First",
+            runtime: "45m",
+            overview: "First episode."
+        )
+        let secondEpisode = SeriesEpisode(
+            id: "manual-s1-e2",
+            seasonID: "manual-s1",
+            seasonNumber: 1,
+            episodeNumber: 2,
+            title: "Second",
+            runtime: "46m",
+            overview: "Second episode."
+        )
+        return SeriesDetailResponse(
+            series: SeriesDetail(
+                id: id,
+                title: "Manual Show",
+                yearRange: "2024-",
+                seasonsCount: 1,
+                rating: "7.4",
+                genres: ["Drama"],
+                overview: "Needs manual release selection.",
+                backdropAccentIndex: 4
+            ),
+            seasons: [
+                SeriesSeason(id: "manual-s1", seasonNumber: 1, title: "Season 1", episodes: [firstEpisode, secondEpisode])
+            ],
+            releases: [
+                (
+                    TorrentRelease(
+                        id: "manual-s1-e1-release",
+                        sourceId: "manual",
+                        sourceName: "Manual",
+                        title: "Manual Show S01E01",
+                        magnetURI: "magnet:?xt=urn:btih:manuals1e1",
+                        quality: .fullHD,
+                        seeders: 80
+                    ),
+                    .episode("manual-s1-e1")
+                )
+            ],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progressByEpisodeID: [:],
+            lastWatchedEpisodeID: nil
+        )
     }
 }

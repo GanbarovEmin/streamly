@@ -227,6 +227,7 @@ public actor PlaybackPipeline {
                     release: release,
                     metadata: [
                         "durationMs": "\(elapsedMilliseconds(since: startDate))",
+                        "streamURL": debugURL(resolved.source.url),
                         "urlScheme": resolved.source.url.scheme ?? "file"
                     ]
                 )
@@ -289,11 +290,25 @@ public actor PlaybackPipeline {
         let files = try await withTimeout(seconds: request.metadataTimeoutSeconds, operationName: "torrent.metadata.fileList") {
             try await engine.getFileList(sessionId: session.id)
         }
+        let status = try? await withTimeout(seconds: min(2, request.metadataTimeoutSeconds), operationName: "torrent.status") {
+            try await engine.getStatus(sessionId: session.id)
+        }
+        var metadataPayload = ["sessionID": session.id, "fileCount": "\(files.count)"]
+        if let status {
+            metadataPayload["torrentState"] = String(describing: status.state)
+            metadataPayload["peersCount"] = "\(status.health.connectedPeers)"
+            metadataPayload["seedersCount"] = "\(status.health.seeders)"
+            metadataPayload["leechersCount"] = "\(status.health.leechers)"
+            metadataPayload["bufferedBytes"] = "\(status.progress.bufferedBytes)"
+            metadataPayload["downloadSpeedBytesPerSecond"] = "\(status.progress.downloadSpeedBytesPerSecond)"
+        } else {
+            metadataPayload["peersCount"] = "unknown"
+        }
         await log(
             "torrent.metadata.ready",
             request: request,
             release: release,
-            metadata: ["sessionID": session.id, "fileCount": "\(files.count)"]
+            metadata: metadataPayload
         )
         let selection = try await ensureMediaFileSelected(
             session: session,
@@ -308,22 +323,46 @@ public actor PlaybackPipeline {
         guard streamingURL.isCineFlowPlayableMediaURL else {
             throw PlaybackServiceError.invalidMediaURL
         }
-
         await log(
-            "stream.availability.start",
+            "stream.url.ready",
             request: request,
             release: release,
-            metadata: ["urlScheme": streamingURL.scheme ?? "file"]
+            metadata: [
+                "sessionID": session.id,
+                "streamURL": debugURL(streamingURL),
+                "urlScheme": streamingURL.scheme ?? "file"
+            ]
         )
-        let availability = await availabilityChecker.check(
-            streamingURL,
-            timeoutSeconds: request.availabilityTimeoutSeconds
-        )
-        switch availability {
-        case .available:
-            break
-        case .unavailable(let reason):
-            throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
+
+        if streamingURL.isStreamlyLocalTorrentStreamURL {
+            await log(
+                "stream.availability.skipped",
+                request: request,
+                release: release,
+                metadata: [
+                    "sessionID": session.id,
+                    "reason": "local_torrent_stream",
+                    "streamURL": debugURL(streamingURL),
+                    "urlScheme": streamingURL.scheme ?? "file"
+                ]
+            )
+        } else {
+            await log(
+                "stream.availability.start",
+                request: request,
+                release: release,
+                metadata: ["urlScheme": streamingURL.scheme ?? "file"]
+            )
+            let availability = await availabilityChecker.check(
+                streamingURL,
+                timeoutSeconds: request.availabilityTimeoutSeconds
+            )
+            switch availability {
+            case .available:
+                break
+            case .unavailable(let reason):
+                throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
+            }
         }
 
         let source = PlaybackMediaSource(
@@ -509,6 +548,20 @@ public actor PlaybackPipeline {
         Int(Date().timeIntervalSince(date) * 1_000)
     }
 
+    private func debugURL(_ url: URL) -> String {
+        if url.isFileURL {
+            let fileName = url.lastPathComponent.isEmpty ? "media" : url.lastPathComponent
+            return "file://<local-file>/\(fileName)"
+        }
+
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString
+        }
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? url.absoluteString
+    }
+
     private func withTimeout<Value: Sendable>(
         seconds: TimeInterval,
         operationName: String,
@@ -556,4 +609,16 @@ private extension CineFlowError {
         recoverySuggestion: CineFlowError.defaultRecoverySuggestion(for: .playback),
         logLevel: .error
     )
+}
+
+private extension URL {
+    var isStreamlyLocalTorrentStreamURL: Bool {
+        guard let scheme = scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              host == "127.0.0.1" || host == "localhost"
+        else {
+            return false
+        }
+        return path.hasPrefix("/stream/")
+    }
 }

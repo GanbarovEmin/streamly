@@ -393,6 +393,27 @@ public final class SeriesDetailViewModel: ObservableObject {
         return allEpisodes.first { $0.id == lastWatchedEpisodeID }
     }
 
+    public var watchNextEpisode: WatchNextEpisode? {
+        guard let series else { return nil }
+        return WatchNextResolver.resolve(
+            series: series,
+            seasons: seasons,
+            progressByEpisodeID: progressByEpisodeID,
+            lastWatchedEpisodeID: lastWatchedEpisodeID
+        )
+    }
+
+    public var continueWatchingTitle: String {
+        watchNextEpisode?.ctaTitle ?? "Continue"
+    }
+
+    public var seasonProgressSummaries: [WatchNextSeasonProgress] {
+        WatchNextResolver.seasonProgressSummaries(
+            seasons: seasons,
+            progressByEpisodeID: progressByEpisodeID
+        )
+    }
+
     public var overallProgress: Double {
         guard !allEpisodes.isEmpty else { return 0 }
 
@@ -407,6 +428,17 @@ public final class SeriesDetailViewModel: ObservableObject {
         seasons.flatMap(\.episodes)
     }
 
+    public var allReleasedEpisodes: [SeriesEpisode] {
+        allEpisodes
+            .filter(\.isReleased)
+            .sorted {
+                if $0.seasonNumber != $1.seasonNumber {
+                    return $0.seasonNumber < $1.seasonNumber
+                }
+                return $0.episodeNumber < $1.episodeNumber
+            }
+    }
+
     public var bestPlayableRelease: ScopedSeriesRelease? {
         if let manualOverrideReleaseID,
            let manual = releases.first(where: { $0.release.id == manualOverrideReleaseID }) {
@@ -416,18 +448,36 @@ public final class SeriesDetailViewModel: ObservableObject {
     }
 
     public func nextReleasedEpisode(after episode: SeriesEpisode) -> SeriesEpisode? {
-        let episodes = allEpisodes
-            .filter(\.isReleased)
-            .sorted {
-                if $0.seasonNumber != $1.seasonNumber {
-                    return $0.seasonNumber < $1.seasonNumber
-                }
-                return $0.episodeNumber < $1.episodeNumber
-            }
-        guard let index = episodes.firstIndex(where: { $0.id == episode.id }) else { return nil }
-        let nextIndex = episodes.index(after: index)
-        guard nextIndex < episodes.endIndex else { return nil }
-        return episodes[nextIndex]
+        guard let index = allReleasedEpisodes.firstIndex(where: { $0.id == episode.id }) else { return nil }
+        let nextIndex = allReleasedEpisodes.index(after: index)
+        guard nextIndex < allReleasedEpisodes.endIndex else { return nil }
+        return allReleasedEpisodes[nextIndex]
+    }
+
+    public func nextEpisodePrompt(after episode: SeriesEpisode) -> PlayerNextEpisodePrompt? {
+        guard let series, let next = nextReleasedEpisode(after: episode) else { return nil }
+        let scopedRelease = playableRelease(for: next)
+        let requiresManualSelection = scopedRelease == nil
+        return PlayerNextEpisodePrompt(
+            title: "\(Self.episodeLabel(for: next)) \(next.title)",
+            subtitle: "Next Episode · \(next.runtime)",
+            actionTitle: requiresManualSelection ? "Choose Release" : "Watch Now",
+            cancelTitle: "Cancel",
+            nextEpisodeAction: PlayerNextEpisodeAction(
+                mediaID: series.id,
+                release: scopedRelease?.release,
+                fallbackReleases: releases.map(\.release),
+                selectionContext: PlaybackSelectionContext(
+                    mediaID: series.id,
+                    displayTitle: series.title,
+                    mediaKind: .series,
+                    seasonNumber: next.seasonNumber,
+                    episodeNumber: next.episodeNumber,
+                    episodeID: next.id
+                ),
+                requiresManualReleaseSelection: requiresManualSelection
+            )
+        )
     }
 
     public func load() async {
@@ -559,14 +609,15 @@ public final class SeriesDetailViewModel: ObservableObject {
     }
 
     public func continueWatching() {
-        guard let lastWatchedEpisodeID else { return }
-        playEpisode(id: lastWatchedEpisodeID)
+        guard let episodeID = watchNextEpisode?.episode.id ?? lastWatchedEpisodeID else { return }
+        playEpisode(id: episodeID)
     }
 
     public func updateProgress(episodeID: String, positionSeconds: Double, durationSeconds: Double) {
         guard allEpisodes.contains(where: { $0.id == episodeID }) else { return }
         progressByEpisodeID[episodeID] = PlaybackProgress(
-            mediaID: episodeID,
+            mediaID: seriesID,
+            episodeID: episodeID,
             positionSeconds: positionSeconds,
             durationSeconds: durationSeconds
         )
@@ -701,6 +752,23 @@ public final class SeriesDetailViewModel: ObservableObject {
             userSources = []
             selectedUserSourceID = nil
         }
+    }
+
+    private func playableRelease(for episode: SeriesEpisode) -> ScopedSeriesRelease? {
+        releases.first { scoped in
+            switch scoped.scope {
+            case .series:
+                true
+            case .season(let seasonID):
+                seasonID == episode.seasonID
+            case .episode(let episodeID):
+                episodeID == episode.id
+            }
+        }
+    }
+
+    private static func episodeLabel(for episode: SeriesEpisode) -> String {
+        String(format: "S%02dE%02d", episode.seasonNumber, episode.episodeNumber)
     }
 }
 

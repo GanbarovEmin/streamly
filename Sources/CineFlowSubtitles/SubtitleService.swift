@@ -89,6 +89,95 @@ public struct SubtitleCache {
         try data.write(to: url, options: .atomic)
         return url
     }
+
+    public func list() throws -> [CachedSubtitleItem] {
+        let urls = (try? fileManager.contentsOfDirectory(
+            at: storageURL,
+            includingPropertiesForKeys: [.creationDateKey, .fileSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )) ?? []
+
+        return try urls
+            .filter { ["srt", "ass"].contains($0.pathExtension.lowercased()) }
+            .compactMap { url in
+                let values = try url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey, .isRegularFileKey])
+                guard values.isRegularFile != false else { return nil }
+                return CachedSubtitleItem(
+                    id: url.standardizedFileURL.path,
+                    fileName: url.lastPathComponent,
+                    languageCode: Self.languageCode(from: url) ?? "und",
+                    fileExtension: url.pathExtension,
+                    sizeBytes: Int64(values.fileSize ?? 0),
+                    createdAt: values.creationDate,
+                    url: url
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.fileName.localizedCaseInsensitiveCompare(rhs.fileName) == .orderedAscending
+            }
+    }
+
+    public func delete(id: String) throws {
+        let target = URL(fileURLWithPath: id).standardizedFileURL
+        let root = storageURL.standardizedFileURL.path
+        guard target.path.hasPrefix(root) else {
+            throw SubtitleServiceError.invalidSubtitleFile(target)
+        }
+        guard ["srt", "ass"].contains(target.pathExtension.lowercased()) else {
+            throw SubtitleServiceError.invalidSubtitleFile(target)
+        }
+        if fileManager.fileExists(atPath: target.path) {
+            try fileManager.removeItem(at: target)
+        }
+    }
+
+    private static func languageCode(from url: URL) -> String? {
+        url.deletingPathExtension().lastPathComponent
+            .split(separator: ".")
+            .map { String($0).lowercased() }
+            .reversed()
+            .first { $0.count == 2 || $0.count == 3 }
+    }
+}
+
+public enum SubtitleFileHasher {
+    public static func openSubtitlesHash(for url: URL, fileManager: FileManager = .default) throws -> String? {
+        guard url.isFileURL else { return nil }
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+        guard values.isRegularFile != false,
+              let fileSize = values.fileSize,
+              fileSize >= 131_072
+        else {
+            return nil
+        }
+
+        let chunkSize = 65_536
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hash = UInt64(fileSize)
+        let firstChunk = handle.readData(ofLength: chunkSize)
+        hash = hash &+ chunkHash(firstChunk)
+        try handle.seek(toOffset: UInt64(fileSize - chunkSize))
+        let lastChunk = handle.readData(ofLength: chunkSize)
+        hash = hash &+ chunkHash(lastChunk)
+        return String(format: "%016llx", hash)
+    }
+
+    private static func chunkHash(_ data: Data) -> UInt64 {
+        let bytes = Array(data)
+        var hash: UInt64 = 0
+        var index = 0
+        while index + 8 <= bytes.count {
+            var value: UInt64 = 0
+            for offset in 0..<8 {
+                value |= UInt64(bytes[index + offset]) << UInt64(offset * 8)
+            }
+            hash = hash &+ value
+            index += 8
+        }
+        return hash
+    }
 }
 
 public struct SubtitleMatcher: Sendable {
@@ -168,12 +257,15 @@ public struct SubtitleService: SubtitleServiceProtocol {
         }
 
         return (embeddedTracks + local + onlineTracks).sorted { lhs, rhs in
-            let languagePriority = settings.languagePreference.priority(for: lhs.languageCode)
-                - settings.languagePreference.priority(for: rhs.languageCode)
-            if languagePriority != 0 {
-                return languagePriority < 0
+            if lhs.isForced != rhs.isForced {
+                return lhs.isForced
             }
-            return sourcePriority(lhs.source) < sourcePriority(rhs.source)
+            let sourceDifference = sourcePriority(lhs.source) - sourcePriority(rhs.source)
+            if sourceDifference != 0 {
+                return sourceDifference < 0
+            }
+            return settings.languagePreference.priority(for: lhs.languageCode)
+                < settings.languagePreference.priority(for: rhs.languageCode)
         }
     }
 
@@ -182,13 +274,24 @@ public struct SubtitleService: SubtitleServiceProtocol {
     }
 
     public func localSubtitles(for query: SubtitleSearchQuery, directory: URL?) async throws -> [SubtitleTrack] {
-        let searchDirectory = directory ?? query.localVideoURL?.deletingLastPathComponent()
-        guard let searchDirectory else { return [] }
+        let searchDirectories = [
+            directory,
+            query.localVideoURL?.deletingLastPathComponent(),
+            cache.storageURL
+        ]
+            .compactMap { $0 }
+            .reduce(into: [URL]()) { directories, url in
+                if !directories.contains(where: { $0.standardizedFileURL == url.standardizedFileURL }) {
+                    directories.append(url)
+                }
+            }
 
-        let urls = (try? FileManager.default.contentsOfDirectory(
-            at: searchDirectory,
-            includingPropertiesForKeys: nil
-        )) ?? []
+        let urls = searchDirectories.flatMap { directory in
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            )) ?? []
+        }
 
         return urls
             .filter { ["srt", "ass"].contains($0.pathExtension.lowercased()) }
@@ -198,10 +301,11 @@ public struct SubtitleService: SubtitleServiceProtocol {
 
     public func searchOnlineSubtitles(query: SubtitleSearchQuery, languages: [String]) async throws -> [SubtitleSearchResult] {
         guard settings.autoSearchSubtitles else { return [] }
-        return try await openSubtitlesClient.search(query: query, languages: languages)
+        let effectiveQuery = queryWithFileHashIfAvailable(query)
+        return try await openSubtitlesClient.search(query: effectiveQuery, languages: languages)
             .map { result in
                 var copy = result
-                let rankedScore = matcher.score(result, for: query)
+                let rankedScore = matcher.score(result, for: effectiveQuery)
                 copy = SubtitleSearchResult(
                     id: result.id,
                     title: result.title,
@@ -224,9 +328,10 @@ public struct SubtitleService: SubtitleServiceProtocol {
             throw SubtitleServiceError.missingDownloadURL(result.id)
         }
         let data = try await openSubtitlesClient.download(result: result)
+        let subtitleExtension = subtitleFileExtension(from: result.downloadURL) ?? "srt"
         return try await cacheSubtitle(
             data: data,
-            fileName: "\(result.id).\(result.languageCode).srt",
+            fileName: "\(safeFileName(result.title)).\(result.languageCode).\(subtitleExtension)",
             languageCode: result.languageCode,
             source: result.source
         )
@@ -250,6 +355,14 @@ public struct SubtitleService: SubtitleServiceProtocol {
 
     public func selectSubtitle(_ track: SubtitleTrack?, playbackService: any PlaybackServiceProtocol) async throws {
         try await playbackService.selectSubtitleTrack(id: track?.id)
+    }
+
+    public func cachedSubtitles() async throws -> [CachedSubtitleItem] {
+        try cache.list()
+    }
+
+    public func deleteCachedSubtitle(id: String) async throws {
+        try cache.delete(id: id)
     }
 
     private func matchesLocalSubtitle(_ url: URL, query: SubtitleSearchQuery) -> Bool {
@@ -284,6 +397,35 @@ public struct SubtitleService: SubtitleServiceProtocol {
         case .openSubtitles:
             2
         }
+    }
+
+    private func safeFileName(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? UUID().uuidString : trimmed
+        return name.replacingOccurrences(of: "[^A-Za-z0-9._ -]+", with: "-", options: .regularExpression)
+    }
+
+    private func subtitleFileExtension(from url: URL?) -> String? {
+        guard let ext = url?.pathExtension.lowercased(), ["srt", "ass"].contains(ext) else { return nil }
+        return ext
+    }
+
+    private func queryWithFileHashIfAvailable(_ query: SubtitleSearchQuery) -> SubtitleSearchQuery {
+        guard query.fileHash == nil,
+              let localVideoURL = query.localVideoURL,
+              let hash = try? SubtitleFileHasher.openSubtitlesHash(for: localVideoURL)
+        else {
+            return query
+        }
+
+        return SubtitleSearchQuery(
+            title: query.title,
+            year: query.year,
+            season: query.season,
+            episode: query.episode,
+            fileHash: hash,
+            localVideoURL: query.localVideoURL
+        )
     }
 }
 

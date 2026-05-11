@@ -78,6 +78,7 @@ public struct SettingsCacheSummary: Equatable, Sendable {
     public var imageBytes: Int64?
     public var torrentBytes: Int64
     public var subtitleBytes: Int64
+    public var timelinePreviewBytes: Int64
     public var metadataBytes: Int64
     public var buckets: [SmartCacheBucketSummary]
     public var titleItems: [SmartTitleCacheItem]
@@ -87,6 +88,7 @@ public struct SettingsCacheSummary: Equatable, Sendable {
         imageBytes: Int64? = nil,
         torrentBytes: Int64 = 0,
         subtitleBytes: Int64 = 0,
+        timelinePreviewBytes: Int64 = 0,
         metadataBytes: Int64 = 0,
         buckets: [SmartCacheBucketSummary] = [],
         titleItems: [SmartTitleCacheItem] = [],
@@ -95,6 +97,7 @@ public struct SettingsCacheSummary: Equatable, Sendable {
         self.imageBytes = imageBytes
         self.torrentBytes = torrentBytes
         self.subtitleBytes = subtitleBytes
+        self.timelinePreviewBytes = timelinePreviewBytes
         self.metadataBytes = metadataBytes
         self.buckets = buckets
         self.titleItems = titleItems
@@ -102,7 +105,7 @@ public struct SettingsCacheSummary: Equatable, Sendable {
     }
 
     public var totalBytes: Int64 {
-        (imageBytes ?? 0) + torrentBytes + subtitleBytes + metadataBytes
+        (imageBytes ?? 0) + torrentBytes + subtitleBytes + timelinePreviewBytes + metadataBytes
     }
 
     public var isAlmostFull: Bool {
@@ -168,6 +171,7 @@ public final class SettingsViewModel: ObservableObject {
     }
     @Published public private(set) var sourceRows: [SettingsSourceRow] = []
     @Published public private(set) var cacheSummary = SettingsCacheSummary()
+    @Published public private(set) var cachedSubtitleItems: [CachedSubtitleItem] = []
     @Published public private(set) var updateStatus: UpdateStatus = .idle
     @Published public private(set) var tmdbCredentialSummary = TMDBCredentialSummary()
     @Published public private(set) var torrentioSettings = TorrentioSettings.defaults
@@ -218,6 +222,7 @@ public final class SettingsViewModel: ObservableObject {
         await refreshTorrentioSettings()
         await refreshSources()
         await refreshCacheSummary()
+        await refreshCachedSubtitles()
     }
 
     public func updateLanguage(_ language: AppLanguageSetting) async {
@@ -243,6 +248,11 @@ public final class SettingsViewModel: ObservableObject {
 
     public func updatePreferredAudioLanguages(_ languages: [String]) async {
         settings.playback.preferredAudioLanguages = normalizedLanguages(languages)
+        await persistSettings()
+    }
+
+    public func updatePreferredAudioOrder(_ order: PreferredAudioOrder) async {
+        settings.playback.preferredAudioOrder = order
         await persistSettings()
     }
 
@@ -290,6 +300,36 @@ public final class SettingsViewModel: ObservableObject {
         await persistSettings()
     }
 
+    public func updateDimBackgroundAroundVideo(_ enabled: Bool) async {
+        settings.playback.dimBackgroundAroundVideo = enabled
+        await persistSettings()
+    }
+
+    public func updateTimelinePreviewsEnabled(_ enabled: Bool) async {
+        settings.playback.enableTimelinePreviews = enabled
+        await persistSettings()
+    }
+
+    public func updateAutoplayNextEpisode(_ enabled: Bool) async {
+        settings.playback.autoplayNextEpisode = enabled
+        await persistSettings()
+    }
+
+    public func updateRememberedVolume(_ volume: Double) async {
+        settings.playback.rememberedVolume = min(max(volume, 0), 1)
+        await persistSettings()
+    }
+
+    public func updateDefaultPlaybackSpeed(_ speed: Double) async {
+        settings.playback.playbackSpeed = min(max(speed, 0.25), 4)
+        await persistSettings()
+    }
+
+    public func updateAudioBoost(_ boost: Double) async {
+        settings.playback.audioBoost = min(max(boost, 1), 2.5)
+        await persistSettings()
+    }
+
     public func updateSeekStep(_ seconds: Int) async {
         settings.playback.seekStepSeconds = min(max(seconds, 5), 60)
         await persistSettings()
@@ -310,6 +350,11 @@ public final class SettingsViewModel: ObservableObject {
         await environment.settingsRepository.setSubtitleSettings(subtitleSettings)
     }
 
+    public func updateSubtitleAutoMode(_ mode: SubtitleAutoMode) async {
+        subtitleSettings.autoMode = mode
+        await environment.settingsRepository.setSubtitleSettings(subtitleSettings)
+    }
+
     public func updateSubtitleFontSize(_ fontSize: Double) async {
         subtitleSettings.fontSize = min(max(fontSize, 24), 72)
         await environment.settingsRepository.setSubtitleSettings(subtitleSettings)
@@ -317,6 +362,16 @@ public final class SettingsViewModel: ObservableObject {
 
     public func updateSubtitleDelay(_ seconds: Double) async {
         subtitleSettings.subtitleDelaySeconds = min(max(seconds, -10), 10)
+        await environment.settingsRepository.setSubtitleSettings(subtitleSettings)
+    }
+
+    public func updateSubtitleVisualStyle(_ style: SubtitleVisualStyle) async {
+        subtitleSettings.visualStyle = style
+        await environment.settingsRepository.setSubtitleSettings(subtitleSettings)
+    }
+
+    public func updateSubtitlePlacement(_ placement: SubtitlePlacement) async {
+        subtitleSettings.placement = placement
         await environment.settingsRepository.setSubtitleSettings(subtitleSettings)
     }
 
@@ -557,11 +612,18 @@ public final class SettingsViewModel: ObservableObject {
         let imageBytes = try? await environment.imageCacheService?.cacheSizeBytes()
         let torrentBytes = directorySize(cacheScope.torrentCacheURL)
         let subtitleBytes = directorySize(cacheScope.subtitleCacheURL)
+        let timelinePreviewBytes = directorySize(cacheScope.timelinePreviewCacheURL)
         cacheSummary = SettingsCacheSummary(
             imageBytes: imageBytes ?? nil,
             torrentBytes: torrentBytes,
             subtitleBytes: subtitleBytes,
-            buckets: fallbackCacheBuckets(imageBytes: imageBytes, torrentBytes: torrentBytes, subtitleBytes: subtitleBytes),
+            timelinePreviewBytes: timelinePreviewBytes,
+            buckets: fallbackCacheBuckets(
+                imageBytes: imageBytes,
+                torrentBytes: torrentBytes,
+                subtitleBytes: subtitleBytes,
+                timelinePreviewBytes: timelinePreviewBytes
+            ),
             maxSizeBytes: settings.storage.maxCacheSizeBytes
         )
     }
@@ -608,6 +670,43 @@ public final class SettingsViewModel: ObservableObject {
         }
         operationMessage = "Subtitles cache cleared."
         await refreshCacheSummary()
+        await refreshCachedSubtitles()
+    }
+
+    public func clearTimelinePreviewCache() async {
+        if let smartCacheManager = environment.smartCacheManager {
+            do {
+                _ = try await smartCacheManager.clear(category: .timelinePreviews, scope: cacheScope, protection: await cacheProtection())
+            } catch {
+                await handleSettingsError(error, operation: "clearTimelinePreviewCache", category: .cache)
+                return
+            }
+        } else {
+            clearDirectory(cacheScope.timelinePreviewCacheURL)
+            try? await environment.timelinePreviewService?.clearPreviewCache()
+        }
+        operationMessage = "Timeline preview cache cleared."
+        await refreshCacheSummary()
+    }
+
+    public func refreshCachedSubtitles() async {
+        do {
+            cachedSubtitleItems = try await environment.subtitleService.cachedSubtitles()
+        } catch {
+            cachedSubtitleItems = []
+            await handleSettingsError(error, operation: "subtitles.cached.list", category: .subtitles)
+        }
+    }
+
+    public func deleteCachedSubtitle(id: String) async {
+        do {
+            try await environment.subtitleService.deleteCachedSubtitle(id: id)
+            operationMessage = "Cached subtitle deleted."
+            await refreshCachedSubtitles()
+            await refreshCacheSummary()
+        } catch {
+            await handleSettingsError(error, operation: "subtitles.cached.delete", category: .subtitles, metadata: ["subtitleID": id])
+        }
     }
 
     public func clearMetadataCache() async {
@@ -639,6 +738,7 @@ public final class SettingsViewModel: ObservableObject {
             await clearImageCache()
             clearDirectory(cacheScope.torrentCacheURL)
             clearDirectory(cacheScope.subtitleCacheURL)
+            clearDirectory(cacheScope.timelinePreviewCacheURL)
         }
         operationMessage = "All cache cleared."
         await refreshCacheSummary()
@@ -725,6 +825,7 @@ public final class SettingsViewModel: ObservableObject {
         await environment.settingsRepository.clearAllLocalData()
         settings = AppSettings()
         subtitleSettings = SubtitleSettings()
+        cachedSubtitleItems = []
         operationMessage = "Local settings, history, library data and caches cleared."
     }
 
@@ -852,7 +953,8 @@ public final class SettingsViewModel: ObservableObject {
     private var cacheScope: SmartCacheScope {
         SmartCacheScope(
             torrentCacheURL: URL(fileURLWithPath: settings.storage.torrentCacheFolderPath, isDirectory: true),
-            subtitleCacheURL: cacheBaseURL.appendingPathComponent("Subtitles", isDirectory: true)
+            subtitleCacheURL: cacheBaseURL.appendingPathComponent("Subtitles", isDirectory: true),
+            timelinePreviewCacheURL: cacheBaseURL.appendingPathComponent("TimelinePreviews", isDirectory: true)
         )
     }
 
@@ -876,12 +978,14 @@ public final class SettingsViewModel: ObservableObject {
     private func fallbackCacheBuckets(
         imageBytes: Int64?,
         torrentBytes: Int64,
-        subtitleBytes: Int64
+        subtitleBytes: Int64,
+        timelinePreviewBytes: Int64
     ) -> [SmartCacheBucketSummary] {
         [
             SmartCacheBucketSummary(category: .images, sizeBytes: imageBytes ?? 0),
             SmartCacheBucketSummary(category: .torrents, sizeBytes: torrentBytes, path: cacheScope.torrentCacheURL.path),
             SmartCacheBucketSummary(category: .subtitles, sizeBytes: subtitleBytes, path: cacheScope.subtitleCacheURL.path),
+            SmartCacheBucketSummary(category: .timelinePreviews, sizeBytes: timelinePreviewBytes, path: cacheScope.timelinePreviewCacheURL.path),
             SmartCacheBucketSummary(category: .metadata, sizeBytes: 0)
         ]
     }
@@ -947,6 +1051,7 @@ private extension SettingsCacheSummary {
             imageBytes: summary.buckets.first(where: { $0.category == .images })?.sizeBytes,
             torrentBytes: summary.buckets.first(where: { $0.category == .torrents })?.sizeBytes ?? 0,
             subtitleBytes: summary.buckets.first(where: { $0.category == .subtitles })?.sizeBytes ?? 0,
+            timelinePreviewBytes: summary.buckets.first(where: { $0.category == .timelinePreviews })?.sizeBytes ?? 0,
             metadataBytes: summary.buckets.first(where: { $0.category == .metadata })?.sizeBytes ?? 0,
             buckets: summary.buckets,
             titleItems: summary.titleItems,

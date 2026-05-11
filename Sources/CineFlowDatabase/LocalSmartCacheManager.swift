@@ -27,6 +27,7 @@ public final class LocalSmartCacheManager: SmartCacheManagerProtocol, @unchecked
         let metadataRecords = try await cacheRepository.metadataCacheRecords()
         let torrentItems = fileItems(category: .torrents, root: scope.torrentCacheURL, protection: protection)
         let subtitleItems = fileItems(category: .subtitles, root: scope.subtitleCacheURL, protection: protection)
+        let timelinePreviewItems = fileItems(category: .timelinePreviews, root: scope.timelinePreviewCacheURL, protection: protection)
         let keptIDs = keptItemIDs()
 
         let imageBytes = imageRecords.reduce(Int64(0)) { $0 + $1.fileSize }
@@ -54,7 +55,7 @@ public final class LocalSmartCacheManager: SmartCacheManagerProtocol, @unchecked
                 )
             }
 
-        let fileBackedItems = (torrentItems + subtitleItems).map { item in
+        let fileBackedItems = (torrentItems + subtitleItems + timelinePreviewItems).map { item in
             SmartTitleCacheItem(
                 id: item.id,
                 title: item.title,
@@ -81,6 +82,12 @@ public final class LocalSmartCacheManager: SmartCacheManagerProtocol, @unchecked
                 sizeBytes: subtitleItems.reduce(Int64(0)) { $0 + $1.sizeBytes },
                 itemCount: subtitleItems.count,
                 path: scope.subtitleCacheURL.path
+            ),
+            SmartCacheBucketSummary(
+                category: .timelinePreviews,
+                sizeBytes: timelinePreviewItems.reduce(Int64(0)) { $0 + $1.sizeBytes },
+                itemCount: timelinePreviewItems.count,
+                path: scope.timelinePreviewCacheURL.path
             ),
             SmartCacheBucketSummary(category: .metadata, sizeBytes: metadataBytes, itemCount: metadataRecords.count)
         ]
@@ -114,6 +121,8 @@ public final class LocalSmartCacheManager: SmartCacheManagerProtocol, @unchecked
             return removeFileItems(root: scope.torrentCacheURL, category: .torrents, protection: protection, force: false)
         case .subtitles:
             return removeFileItems(root: scope.subtitleCacheURL, category: .subtitles, protection: protection, force: false)
+        case .timelinePreviews:
+            return removeFileItems(root: scope.timelinePreviewCacheURL, category: .timelinePreviews, protection: protection, force: false)
         }
     }
 
@@ -136,6 +145,9 @@ public final class LocalSmartCacheManager: SmartCacheManagerProtocol, @unchecked
         }
         if let path = value(from: itemID, category: .subtitles) {
             return removeFileItem(URL(fileURLWithPath: path), category: .subtitles, protection: protection, force: true)
+        }
+        if let path = value(from: itemID, category: .timelinePreviews) {
+            return removeFileItem(URL(fileURLWithPath: path), category: .timelinePreviews, protection: protection, force: true)
         }
         return SmartCacheCleanupResult(removedItemCount: 0, freedBytes: 0)
     }
@@ -171,6 +183,15 @@ public final class LocalSmartCacheManager: SmartCacheManagerProtocol, @unchecked
         total += removeFileItems(
             root: scope.subtitleCacheURL,
             category: .subtitles,
+            protection: protection,
+            olderThan: policy.cutoffDate,
+            keepUnfinished: false,
+            removeCompleted: true,
+            force: false
+        )
+        total += removeFileItems(
+            root: scope.timelinePreviewCacheURL,
+            category: .timelinePreviews,
             protection: protection,
             olderThan: policy.cutoffDate,
             keepUnfinished: false,

@@ -18,9 +18,10 @@ final class HomeViewModelTests: XCTestCase {
         )
         XCTAssertEqual(
             viewModel.sections.map(\.kind),
-            [.continueWatching, .popularMovies, .popularSeries, .recentlyAdded, .recommended, .topQuality]
+            [.watchNext, .continueWatching, .popularMovies, .popularSeries, .recentlyAdded, .recommended, .topQuality]
         )
         XCTAssertEqual(viewModel.sections.map(\.title), [
+            "Watch Next",
             "Continue Watching",
             "Popular - Movies",
             "Popular - Series",
@@ -28,9 +29,10 @@ final class HomeViewModelTests: XCTestCase {
             "Recommended",
             "Top Quality"
         ])
-        XCTAssertEqual(viewModel.sections.first?.cardStyle, .landscape)
-        XCTAssertTrue(viewModel.sections.first?.items.allSatisfy { $0.progress != nil } == true)
-        XCTAssertTrue(viewModel.sections.dropFirst().allSatisfy { $0.cardStyle == .poster })
+        XCTAssertEqual(viewModel.sections[0].cardStyle, .landscape)
+        XCTAssertEqual(viewModel.sections[1].cardStyle, .landscape)
+        XCTAssertTrue(viewModel.sections[1].items.allSatisfy { $0.progress != nil })
+        XCTAssertTrue(viewModel.sections.dropFirst(2).allSatisfy { $0.cardStyle == .poster })
     }
 
     @MainActor
@@ -106,6 +108,47 @@ final class HomeViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testWatchNextSectionUsesEpisodeLevelSeriesProgressAndHidesCompletedSeries() async throws {
+        let series = MediaItem(
+            id: "tmdb:tv:1399",
+            title: "Game of Thrones",
+            kind: .series,
+            overview: "Noble families fight for control.",
+            releaseYear: 2011,
+            posterPath: nil
+        )
+        let provider = InMemoryWatchNextProvider(items: [
+            WatchNextEpisode(
+                seriesID: series.id,
+                seriesTitle: series.title,
+                episode: SeriesEpisode(id: "got-s2-e1", seasonID: "got-s2", seasonNumber: 2, episodeNumber: 1, title: "The North Remembers", runtime: "53m", overview: ""),
+                reason: .nextEpisode,
+                progress: 0,
+                seasonProgress: WatchNextSeasonProgress(seasonID: "got-s2", seasonNumber: 2, completedEpisodes: 0, totalEpisodes: 2)
+            )
+        ])
+        let progressRepository = InMemoryHomeProgressRepository(records: [
+            PlaybackProgress(mediaID: series.id, episodeID: "got-s1-e2", positionSeconds: 3_500, durationSeconds: 3_600)
+        ])
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            progressRepository: progressRepository,
+            libraryRepository: CoreMockLibraryRepository(storedItems: [series]),
+            watchNextProvider: provider
+        )
+
+        await viewModel.load()
+
+        let watchNext = try XCTUnwrap(viewModel.sections.first { $0.kind == .watchNext })
+        XCTAssertEqual(watchNext.items.first?.id, "got-s2-e1")
+        XCTAssertEqual(watchNext.items.first?.title, "Game of Thrones")
+        XCTAssertEqual(watchNext.items.first?.metadata, "Continue S02E01 · The North Remembers")
+
+        let continueWatching = try XCTUnwrap(viewModel.sections.first { $0.kind == .continueWatching })
+        XCTAssertTrue(continueWatching.items.isEmpty)
+    }
+
+    @MainActor
     func testLargeHomeDatasetKeepsSectionsAndPrefetchBounded() async {
         let items = (0..<1_000).map { index in
             HomeSeedItem(
@@ -132,9 +175,17 @@ final class HomeViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state, .loaded)
         XCTAssertEqual(viewModel.featuredItems.count, 4)
-        XCTAssertEqual(viewModel.sections.count, 6)
+        XCTAssertEqual(viewModel.sections.count, 7)
         XCTAssertTrue(viewModel.sections.allSatisfy { $0.items.count <= 8 })
         XCTAssertLessThanOrEqual(viewModel.prefetchArtworkURLs.count, 24)
+    }
+}
+
+private struct InMemoryWatchNextProvider: WatchNextProviderProtocol {
+    let items: [WatchNextEpisode]
+
+    func watchNextItems(progressRecords: [PlaybackProgress]) async -> [WatchNextEpisode] {
+        items
     }
 }
 

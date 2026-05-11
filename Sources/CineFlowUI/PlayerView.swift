@@ -9,18 +9,28 @@ import UniformTypeIdentifiers
 
 public struct PlayerView: View {
     @StateObject private var viewModel: PlayerViewModel
+    @State private var timelineScrubTime: Double?
+    @State private var isScrubbingTimeline = false
+    @State private var timelineHoverX: CGFloat?
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
     @Environment(\.cfReduceMotion) private var reduceMotion
     private let onExit: () -> Void
+    private let onNextEpisode: (PlayerNextEpisodeAction) -> Void
 
-    public init(viewModel: PlayerViewModel, onExit: @escaping () -> Void) {
+    public init(
+        viewModel: PlayerViewModel,
+        onExit: @escaping () -> Void,
+        onNextEpisode: @escaping (PlayerNextEpisodeAction) -> Void = { _ in }
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
         self.onExit = onExit
+        self.onNextEpisode = onNextEpisode
     }
 
     public var body: some View {
         ZStack(alignment: .bottom) {
             playerRenderSurface
+                .overlay(Color.black.opacity(viewModel.dimBackgroundAroundVideo ? 0.22 : 0).allowsHitTesting(false))
                 .overlay(renderOverlay)
                 .overlay(keyboardInput)
                 .ignoresSafeArea()
@@ -150,6 +160,7 @@ public struct PlayerView: View {
 
     private func bufferingCard(progress: Double) -> some View {
         let presentation = viewModel.bufferingPresentation
+        let displayedProgress = presentation.progress ?? progress
         return VStack(alignment: .leading, spacing: CFSpacing.sm) {
             HStack(spacing: CFSpacing.sm) {
                 ProgressView()
@@ -158,18 +169,31 @@ public struct PlayerView: View {
                     .font(CFTypography.bodyEmphasis)
                     .foregroundStyle(CFColors.textPrimary)
                 Spacer()
-                Text("\(Int(progress * 100))%")
+                Text("\(Int(displayedProgress * 100))%")
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textSecondary)
                     .monospacedDigit()
             }
 
-            ProgressBar(value: progress)
+            ProgressBar(value: displayedProgress)
                 .frame(height: 5)
 
-            Text(L10n.format(.playerBufferingMessageFormat, language: languageSettingsStore.selectedLanguage, Int(progress * 100)))
+            Text(presentation.message.isEmpty
+                 ? L10n.format(.playerBufferingMessageFormat, language: languageSettingsStore.selectedLanguage, Int(displayedProgress * 100))
+                 : presentation.message)
                 .font(CFTypography.caption)
                 .foregroundStyle(CFColors.textSecondary)
+
+            if !presentation.primaryDetails.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(presentation.primaryDetails, id: \.self) { detail in
+                        Text(detail)
+                            .font(CFTypography.caption)
+                            .foregroundStyle(CFColors.textSecondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
 
             Toggle(t(.playerAdvancedDetails), isOn: Binding(
                 get: { viewModel.advancedDebugVisible },
@@ -211,12 +235,22 @@ public struct PlayerView: View {
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
             }
+            if let seconds = viewModel.nextEpisodeCountdownSeconds {
+                Text(L10n.format(.playerNextEpisodeCountdownFormat, language: languageSettingsStore.selectedLanguage, seconds))
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .monospacedDigit()
+            }
             HStack(spacing: CFSpacing.sm) {
-                PrimaryButton(t(.playerNextEpisodeAction), systemImage: "forward.end.fill") {
-                    onExit()
+                PrimaryButton(nextEpisodePrimaryTitle(for: prompt), systemImage: prompt.requiresManualReleaseSelection ? "list.bullet.rectangle" : "forward.end.fill") {
+                    if let action = prompt.nextEpisodeAction {
+                        onNextEpisode(action)
+                    } else {
+                        onExit()
+                    }
                 }
                 SecondaryButton(t(.playerNextEpisodeDismiss), systemImage: "xmark") {
-                    viewModel.dismissNextEpisodePrompt()
+                    viewModel.cancelNextEpisodeCountdown()
                 }
             }
         }
@@ -228,6 +262,10 @@ public struct PlayerView: View {
                 .stroke(CFColors.focusRing.opacity(0.34), lineWidth: CFSeparators.width)
         )
         .cfShadow(.elevated)
+    }
+
+    private func nextEpisodePrimaryTitle(for prompt: PlayerNextEpisodePrompt) -> String {
+        prompt.requiresManualReleaseSelection ? t(.playerNextEpisodeChooseRelease) : t(.playerNextEpisodeAction)
     }
 
     private func fallbackCard(_ suggestion: ReleaseFallbackSuggestion) -> some View {
@@ -260,18 +298,7 @@ public struct PlayerView: View {
 
     private var controls: some View {
         VStack(spacing: CFSpacing.md) {
-            Slider(
-                value: Binding(
-                    get: { viewModel.status.currentTime },
-                    set: { value in
-                        Task { await viewModel.seek(to: value) }
-                    }
-                ),
-                in: 0...timelineUpperBound
-            )
-            .accessibilityLabel(t(.playerControlTimeline))
-            .accessibilityValue("\(viewModel.elapsedLabel) / \(viewModel.durationLabel)")
-            .help("\(viewModel.elapsedLabel) / \(viewModel.durationLabel)")
+            timelineControl
 
             HStack(spacing: CFSpacing.md) {
                 Text(viewModel.elapsedLabel)
@@ -313,10 +340,16 @@ public struct PlayerView: View {
                 .help(t(.playerControlVolume))
 
                 Menu(t(.playerControlAudio)) {
-                    ForEach(viewModel.audioTracks) { track in
-                        Button(track.displayName) {
+                    Text(viewModel.audioSelectionSummary)
+                    audioBoostControls
+                    if !viewModel.audioMenuTracks.isEmpty {
+                        Divider()
+                    }
+                    ForEach(viewModel.audioMenuTracks) { track in
+                        Button("\(track.isSelected ? "✓ " : "")\(track.languageLabel) · \(track.title) · \(track.qualityLabel)") {
                             Task { await viewModel.selectAudioTrack(id: track.id) }
                         }
+                        .keyboardShortcut(track.languageLabel.lowercased().hasPrefix("r") ? "1" : "2", modifiers: [.command, .option])
                     }
                 }
                 .keyboardShortcut("a", modifiers: [])
@@ -327,23 +360,53 @@ public struct PlayerView: View {
                     Button(t(.playerControlSubtitlesOff)) {
                         Task { await viewModel.disableSubtitles() }
                     }
-                    Button(t(.playerControlFindOnline)) {
-                        Task { await viewModel.findOnlineSubtitles() }
-                    }
-                    Button(t(.playerControlLoadLocalFile)) {
-                        openLocalSubtitle()
-                    }
-                    ForEach(viewModel.subtitleTracks) { track in
-                        Button(track.displayName) {
-                            Task { await viewModel.selectSubtitleTrack(id: track.id) }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
+
+                    Divider()
+                    subtitleComfortControls
+
+                    Section("Embedded") {
+                        if viewModel.embeddedSubtitleTracks.isEmpty {
+                            Text("No embedded subtitles")
+                        } else {
+                            ForEach(viewModel.embeddedSubtitleTracks) { track in
+                                Button(subtitleMenuTitle(track)) {
+                                    Task { await viewModel.selectSubtitleTrack(id: track.id) }
+                                }
+                            }
                         }
                     }
-                    if !viewModel.onlineSubtitleResults.isEmpty {
-                        Divider()
+
+                    Section("Local") {
+                        Button(t(.playerControlLoadLocalFile)) {
+                            openLocalSubtitle()
+                        }
+                        Button("Reload local/cache") {
+                            Task { await viewModel.reloadLocalSubtitles() }
+                        }
+                        ForEach(viewModel.localSubtitleTracks) { track in
+                            Button(subtitleMenuTitle(track)) {
+                                Task { await viewModel.selectSubtitleTrack(id: track.id) }
+                            }
+                        }
+                    }
+
+                    Section("Online") {
+                        ForEach(viewModel.onlineSubtitleTracks) { track in
+                            Button(subtitleMenuTitle(track)) {
+                                Task { await viewModel.selectSubtitleTrack(id: track.id) }
+                            }
+                        }
                         ForEach(viewModel.onlineSubtitleResults) { result in
                             Button("Download \(result.languageCode.uppercased()) - \(result.title)") {
                                 Task { await viewModel.downloadSubtitle(result) }
                             }
+                        }
+                    }
+
+                    Section("Search more") {
+                        Button(t(.playerControlFindOnline)) {
+                            Task { await viewModel.findOnlineSubtitles() }
                         }
                     }
                 }
@@ -352,14 +415,36 @@ public struct PlayerView: View {
                 .accessibilityLabel(t(.playerControlSubtitles))
 
                 Menu(t(.playerControlSpeed)) {
-                    ForEach([0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
+                    ForEach(viewModel.speedChoices, id: \.self) { speed in
                         Button("\(speed, specifier: "%.2g")x") {
                             Task { await viewModel.setPlaybackSpeed(speed) }
                         }
                     }
+                    Divider()
+                    Button("Slower") {
+                        Task { await viewModel.decreasePlaybackSpeed() }
+                    }
+                    .keyboardShortcut(",", modifiers: [])
+                    Button("Faster") {
+                        Task { await viewModel.increasePlaybackSpeed() }
+                    }
+                    .keyboardShortcut(".", modifiers: [])
                 }
                 .help(t(.playerControlSpeed))
                 .accessibilityLabel(t(.playerControlSpeed))
+
+                if !viewModel.chapters.isEmpty {
+                    Menu("Chapters") {
+                        ForEach(viewModel.chapters) { chapter in
+                            Button("\(chapter.title) · \(timeLabel(chapter.startTime))") {
+                                Task { await viewModel.seekToChapter(chapter) }
+                            }
+                        }
+                    }
+                    .keyboardShortcut("c", modifiers: [])
+                    .help("Chapters")
+                    .accessibilityLabel("Chapters")
+                }
 
                 Spacer()
 
@@ -376,6 +461,11 @@ public struct PlayerView: View {
                     Task { await viewModel.toggleFullscreen() }
                 }
                 .keyboardShortcut("f", modifiers: [])
+
+                IconButton(systemImage: viewModel.dimBackgroundAroundVideo ? "circle.lefthalf.filled" : "circle", accessibilityLabel: "Dim background") {
+                    Task { await viewModel.toggleDimBackground() }
+                }
+                .keyboardShortcut("d", modifiers: [.command])
 
                 IconButton(systemImage: "xmark", accessibilityLabel: t(.playerControlExit)) {
                     Task { await viewModel.stop() }
@@ -397,12 +487,193 @@ public struct PlayerView: View {
         .padding(.bottom, CFSpacing.lg)
     }
 
+    private var timelineControl: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            GeometryReader { proxy in
+                ZStack(alignment: .topLeading) {
+                    Slider(
+                        value: Binding(
+                            get: { timelineScrubTime ?? viewModel.status.currentTime },
+                            set: { value in
+                                timelineScrubTime = value
+                                viewModel.requestTimelinePreview(at: value)
+                            }
+                        ),
+                        in: 0...timelineUpperBound,
+                        onEditingChanged: { editing in
+                            isScrubbingTimeline = editing
+                            if !editing, let timelineScrubTime {
+                                let target = timelineScrubTime
+                                self.timelineScrubTime = nil
+                                Task { await viewModel.seek(to: target) }
+                            }
+                        }
+                    )
+                    .accessibilityLabel(t(.playerControlTimeline))
+                    .accessibilityValue("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
+                    .help("\(timelineDisplayLabel) / \(viewModel.durationLabel)")
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            let width = max(1, proxy.size.width)
+                            let clampedX = min(max(0, location.x), width)
+                            timelineHoverX = clampedX
+                            let time = Double(clampedX / width) * timelineUpperBound
+                            viewModel.requestTimelinePreview(at: time)
+                        case .ended:
+                            if !isScrubbingTimeline {
+                                timelineHoverX = nil
+                                viewModel.hideTimelinePreview()
+                            }
+                        }
+                    }
+
+                    if let timelineHoverX, !viewModel.timelinePreview.isHidden {
+                        timelinePreviewBubble
+                            .offset(x: previewBubbleX(timelineHoverX, width: proxy.size.width), y: -94)
+                            .transition(.opacity)
+                    }
+                }
+            }
+            .frame(height: 30)
+
+            if !viewModel.chapters.isEmpty {
+                HStack(spacing: 0) {
+                    ForEach(viewModel.chapters) { chapter in
+                        Button {
+                            Task { await viewModel.seekToChapter(chapter) }
+                        } label: {
+                            Rectangle()
+                                .fill(CFColors.textSecondary.opacity(0.6))
+                                .frame(width: 2, height: 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        .help("\(chapter.title) · \(timeLabel(chapter.startTime))")
+                        .accessibilityLabel("Chapter \(chapter.title)")
+                    }
+                }
+                .frame(height: 8)
+            }
+        }
+    }
+
+    private var timelinePreviewBubble: some View {
+        VStack(spacing: 6) {
+            Group {
+                if let data = viewModel.timelinePreview.imageData, let image = NSImage(data: data) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        Rectangle().fill(Color.black.opacity(0.45))
+                        if viewModel.timelinePreview.isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "film")
+                                .foregroundStyle(CFColors.textSecondary)
+                        }
+                    }
+                }
+            }
+            .frame(width: 160, height: 90)
+            .clipShape(RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous))
+
+            Text(viewModel.timelinePreview.isUnavailable ? viewModel.timelinePreview.message : viewModel.timelinePreview.timeLabel)
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textPrimary)
+                .lineLimit(1)
+                .monospacedDigit()
+        }
+        .padding(6)
+        .frame(width: 172)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                .stroke(CFColors.separator.opacity(0.5), lineWidth: CFSeparators.width)
+        )
+        .allowsHitTesting(false)
+    }
+
+    private func previewBubbleX(_ x: CGFloat, width: CGFloat) -> CGFloat {
+        let bubbleWidth: CGFloat = 172
+        return min(max(0, x - bubbleWidth / 2), max(0, width - bubbleWidth))
+    }
+
+    private var audioBoostControls: some View {
+        Group {
+            Button("Boost -") {
+                Task { await viewModel.decreaseAudioBoost() }
+            }
+            .keyboardShortcut("-", modifiers: [])
+            Button("Boost \(viewModel.status.audioBoost, specifier: "%.2g")x") {
+                Task { await viewModel.setAudioBoost(viewModel.status.audioBoost == 1 ? 1.5 : 1) }
+            }
+            Button("Boost +") {
+                Task { await viewModel.increaseAudioBoost() }
+            }
+            .keyboardShortcut("=", modifiers: [])
+        }
+    }
+
+    private var subtitleComfortControls: some View {
+        Group {
+            Menu("Style") {
+                ForEach(SubtitleVisualStyle.allCases) { style in
+                    Button(style.title) {
+                        Task { await viewModel.setSubtitleStyle(style) }
+                    }
+                }
+            }
+            Menu("Size") {
+                ForEach([32.0, 42.0, 52.0, 64.0], id: \.self) { size in
+                    Button("\(Int(size))") {
+                        Task { await viewModel.setSubtitleFontSize(size) }
+                    }
+                }
+            }
+            Button("Delay -0.5s") {
+                Task { await viewModel.adjustSubtitleDelay(by: -0.5) }
+            }
+            .keyboardShortcut("[", modifiers: [])
+            Button("Reset delay") {
+                Task { await viewModel.resetSubtitleDelay() }
+            }
+            Button("Delay +0.5s") {
+                Task { await viewModel.adjustSubtitleDelay(by: 0.5) }
+            }
+            .keyboardShortcut("]", modifiers: [])
+        }
+    }
+
     private var timelineUpperBound: Double {
         max(viewModel.status.duration ?? 0, viewModel.status.currentTime + 1, 1)
     }
 
+    private var timelineDisplayLabel: String {
+        timeLabel(timelineScrubTime ?? viewModel.status.currentTime)
+    }
+
     private var playPauseIcon: String {
         viewModel.status.state == .playing ? "pause.fill" : "play.fill"
+    }
+
+    private func timeLabel(_ value: Double) -> String {
+        let totalSeconds = max(0, Int(value.rounded()))
+        let hours = totalSeconds / 3_600
+        let minutes = (totalSeconds % 3_600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    private func subtitleMenuTitle(_ track: SubtitleTrack) -> String {
+        let forced = track.isForced ? " · Forced" : ""
+        return "\(track.languageCode.uppercased()) · \(track.displayName)\(forced)"
     }
 
     private var sourceInfo: String {
@@ -544,6 +815,18 @@ private struct PlayerKeyboardInputView: NSViewRepresentable {
                     return .subtitles
                 case "a":
                     return .audio
+                case ",":
+                    return .speedDown
+                case ".":
+                    return .speedUp
+                case "[":
+                    return .subtitleDelayDown
+                case "]":
+                    return .subtitleDelayUp
+                case "-":
+                    return .audioBoostDown
+                case "=":
+                    return .audioBoostUp
                 default:
                     return nil
                 }

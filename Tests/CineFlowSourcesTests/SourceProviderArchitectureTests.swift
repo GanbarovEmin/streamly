@@ -272,7 +272,7 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce") == true)
     }
 
-    func testTorrentioProviderIsVisibleButInactiveByDefault() async throws {
+    func testTorrentioProviderIsVisibleAndActiveByDefault() async throws {
         let settingsStore = InMemoryTorrentioSettingsStore()
         let catalog = SourceProviderCatalog.providers(
             featureFlags: SourceProviderFeatureFlags(
@@ -291,8 +291,8 @@ final class SourceProviderArchitectureTests: XCTestCase {
         let initiallyActive = try await manager.activeProviders().map(\.sourceId)
 
         XCTAssertEqual(catalog.providerIds, ["torrentio"])
-        XCTAssertFalse(settings.isEnabled)
-        XCTAssertTrue(initiallyActive.isEmpty)
+        XCTAssertTrue(settings.isEnabled)
+        XCTAssertEqual(initiallyActive, ["torrentio"])
 
         try await manager.setSourceEnabled(true, sourceId: "torrentio")
 

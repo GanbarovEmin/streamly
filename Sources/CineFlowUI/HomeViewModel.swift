@@ -10,6 +10,7 @@ public enum HomeViewState: Equatable, Sendable {
 }
 
 public enum HomeSectionKind: Equatable, Sendable {
+    case watchNext
     case continueWatching
     case popularMovies
     case popularSeries
@@ -282,49 +283,64 @@ public final class HomeViewModel: ObservableObject {
     private let seedProvider: () async throws -> [HomeSeedItem]
     private let progressRepository: (any PlaybackProgressRepositoryProtocol)?
     private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let watchNextProvider: (any WatchNextProviderProtocol)?
 
     public init(
         seedItems: [HomeSeedItem] = HomeSeedLibrary.developmentItems,
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        watchNextProvider: (any WatchNextProviderProtocol)? = nil
     ) {
         self.seedProvider = { seedItems }
         self.progressRepository = progressRepository
         self.libraryRepository = libraryRepository
+        self.watchNextProvider = watchNextProvider
     }
 
     public init(
         seedProvider: @escaping () async throws -> [HomeSeedItem],
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        watchNextProvider: (any WatchNextProviderProtocol)? = nil
     ) {
         self.seedProvider = seedProvider
         self.progressRepository = progressRepository
         self.libraryRepository = libraryRepository
+        self.watchNextProvider = watchNextProvider
     }
 
     public convenience init(
         seedProvider: @escaping () throws -> [HomeSeedItem],
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        watchNextProvider: (any WatchNextProviderProtocol)? = nil
     ) {
         let asyncSeedProvider: () async throws -> [HomeSeedItem] = {
             try seedProvider()
         }
-        self.init(seedProvider: asyncSeedProvider, progressRepository: progressRepository, libraryRepository: libraryRepository)
+        self.init(
+            seedProvider: asyncSeedProvider,
+            progressRepository: progressRepository,
+            libraryRepository: libraryRepository,
+            watchNextProvider: watchNextProvider
+        )
     }
 
     public convenience init(
         metadataService: any MetadataServiceProtocol,
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
-        libraryRepository: (any LibraryRepositoryProtocol)? = nil
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        watchNextProvider: (any WatchNextProviderProtocol)? = nil
     ) {
         self.init(
             seedProvider: {
                 try await TMDBHomeContentProvider(metadataService: metadataService).loadHomeItems()
             },
             progressRepository: progressRepository,
-            libraryRepository: libraryRepository
+            libraryRepository: libraryRepository,
+            watchNextProvider: watchNextProvider ?? SeriesDetailWatchNextProvider(
+                provider: TMDBSeriesDetailProvider(metadataService: metadataService)
+            )
         )
     }
 
@@ -357,20 +373,25 @@ public final class HomeViewModel: ObservableObject {
             }
 
             let progressRecords: [PlaybackProgress]
+            let allProgressRecords: [PlaybackProgress]
             let libraryItems: [MediaItem]
             if let progressRepository {
                 progressRecords = try await progressRepository.continueWatching(includeCompleted: false)
+                allProgressRecords = try await progressRepository.continueWatching(includeCompleted: true)
                 libraryItems = (try? await libraryRepository?.items()) ?? []
             } else {
                 progressRecords = []
+                allProgressRecords = []
                 libraryItems = []
             }
+            let watchNextItems = await watchNextProvider?.watchNextItems(progressRecords: allProgressRecords) ?? []
 
             let usesProgressRepository = progressRepository != nil
             let content = await Task.detached(priority: .userInitiated) {
                 HomeContentBuilder.build(
                     items: items,
                     progressRecords: progressRecords,
+                    watchNextItems: watchNextItems,
                     libraryItems: libraryItems,
                     usesProgressRepository: usesProgressRepository
                 )
@@ -402,6 +423,7 @@ private enum HomeContentBuilder {
     static func build(
         items: [HomeSeedItem],
         progressRecords: [PlaybackProgress],
+        watchNextItems: [WatchNextEpisode],
         libraryItems: [MediaItem],
         usesProgressRepository: Bool
     ) -> HomePreparedContent {
@@ -425,7 +447,20 @@ private enum HomeContentBuilder {
             continueItems = cards(from: items.filter { $0.progress != nil }, limit: 6)
         }
 
+        let watchNextCards: [CFMediaCardModel]
+        if usesProgressRepository {
+            watchNextCards = watchNextItems.map(card(from:))
+        } else {
+            watchNextCards = cards(from: items.filter { $0.kind == .series && $0.progress != nil }, limit: 6)
+        }
+
         let sections = [
+            HomeSection(
+                kind: .watchNext,
+                title: "Watch Next",
+                cardStyle: .landscape,
+                items: Array(watchNextCards.prefix(6))
+            ),
             HomeSection(
                 kind: .continueWatching,
                 title: "Continue Watching",
@@ -496,6 +531,18 @@ private enum HomeContentBuilder {
             progress: progress.progressPercent / 100,
             accentIndex: abs((progress.episodeID ?? progress.mediaID).hashValue),
             artworkURL: mediaItem?.bestBackdropURL ?? mediaItem?.bestPosterURL
+        )
+    }
+
+    private static func card(from item: WatchNextEpisode) -> CFMediaCardModel {
+        CFMediaCardModel(
+            id: item.episode.id,
+            title: item.seriesTitle,
+            metadata: "\(item.ctaTitle) · \(item.episode.title)",
+            badge: "\(Int(item.seasonProgress.progressFraction * 100))% season",
+            progress: item.progress,
+            accentIndex: abs(item.episode.id.hashValue),
+            artworkURL: nil
         )
     }
 

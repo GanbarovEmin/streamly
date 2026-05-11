@@ -52,6 +52,19 @@ final class TorrentPlaybackIntegrationTests: XCTestCase {
         XCTAssertEqual(status.media?.url, streamURL)
         XCTAssertEqual(streamURL.host, "127.0.0.1")
 
+        let sustainedPlaybackSeconds = 30.0
+        let continuationDeadline = Date().addingTimeInterval(180)
+        while Date() < continuationDeadline,
+              playbackService.avPlayer.currentTime().seconds < sustainedPlaybackSeconds {
+            try await Task.sleep(nanoseconds: 500_000_000)
+        }
+
+        XCTAssertGreaterThanOrEqual(
+            playbackService.avPlayer.currentTime().seconds,
+            sustainedPlaybackSeconds,
+            "Torrent playback stopped before sustained buffering reached 30 seconds."
+        )
+
         try await playbackService.stop()
         try await bridge.remove(handle: handle, deleteFiles: true)
     }

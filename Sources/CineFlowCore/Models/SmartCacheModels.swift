@@ -4,6 +4,7 @@ public enum SmartCacheCategory: String, Codable, CaseIterable, Identifiable, Sen
     case images
     case torrents
     case subtitles
+    case timelinePreviews
     case metadata
 
     public var id: String { rawValue }
@@ -45,13 +46,16 @@ public struct SmartCacheProtection: Equatable, Sendable {
 public struct SmartCacheScope: Equatable, Sendable {
     public var torrentCacheURL: URL
     public var subtitleCacheURL: URL
+    public var timelinePreviewCacheURL: URL
 
     public init(
         torrentCacheURL: URL = TorrentCacheLocation.defaultStorageURL(),
-        subtitleCacheURL: URL? = nil
+        subtitleCacheURL: URL? = nil,
+        timelinePreviewCacheURL: URL? = nil
     ) {
         self.torrentCacheURL = torrentCacheURL
         self.subtitleCacheURL = subtitleCacheURL ?? Self.defaultSubtitleCacheURL()
+        self.timelinePreviewCacheURL = timelinePreviewCacheURL ?? Self.defaultTimelinePreviewCacheURL()
     }
 
     public static func defaultSubtitleCacheURL(fileManager: FileManager = .default) -> URL {
@@ -60,6 +64,14 @@ public struct SmartCacheScope: Equatable, Sendable {
         return applicationSupport
             .appendingPathComponent("Streamly", isDirectory: true)
             .appendingPathComponent("Subtitles", isDirectory: true)
+    }
+
+    public static func defaultTimelinePreviewCacheURL(fileManager: FileManager = .default) -> URL {
+        let applicationSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        return applicationSupport
+            .appendingPathComponent("Streamly", isDirectory: true)
+            .appendingPathComponent("TimelinePreviews", isDirectory: true)
     }
 }
 

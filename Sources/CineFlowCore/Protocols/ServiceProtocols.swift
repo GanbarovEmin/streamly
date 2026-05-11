@@ -32,6 +32,11 @@ public protocol ImageCacheServiceProtocol: Sendable {
     func clearUnused(olderThan date: Date) async throws
 }
 
+public protocol TimelinePreviewServiceProtocol: Sendable {
+    func preview(for request: TimelinePreviewRequest) async throws -> TimelinePreview?
+    func clearPreviewCache() async throws
+}
+
 public protocol SmartCacheManagerProtocol: Sendable {
     func summary(policy: SmartCachePolicy, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheSummary
     func clear(category: SmartCacheCategory, scope: SmartCacheScope, protection: SmartCacheProtection) async throws -> SmartCacheCleanupResult
@@ -247,8 +252,12 @@ public protocol PlaybackServiceProtocol {
     func setVolume(_ volume: Double) async throws
     func setMuted(_ isMuted: Bool) async throws
     func setPlaybackSpeed(_ speed: Double) async throws
+    func setAudioBoost(_ boost: Double) async throws
     func selectAudioTrack(id: String?) async throws
     func selectSubtitleTrack(id: String?) async throws
+    func setSubtitleDelay(_ seconds: Double) async throws
+    func setSubtitleFontSize(_ fontSize: Double) async throws
+    func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws
     func setFullscreen(_ isFullscreen: Bool) async throws
     func setPictureInPicture(_ isActive: Bool) async throws
     func statusUpdates() -> AsyncThrowingStream<PlaybackStatus, Error>
@@ -295,12 +304,28 @@ public extension PlaybackServiceProtocol {
         throw PlaybackServiceError.unsupported(operation: "setPlaybackSpeed")
     }
 
+    func setAudioBoost(_ boost: Double) async throws {
+        throw PlaybackServiceError.unsupported(operation: "setAudioBoost")
+    }
+
     func selectAudioTrack(id: String?) async throws {
         throw PlaybackServiceError.unsupported(operation: "selectAudioTrack")
     }
 
     func selectSubtitleTrack(id: String?) async throws {
         throw PlaybackServiceError.unsupported(operation: "selectSubtitleTrack")
+    }
+
+    func setSubtitleDelay(_ seconds: Double) async throws {
+        throw PlaybackServiceError.unsupported(operation: "setSubtitleDelay")
+    }
+
+    func setSubtitleFontSize(_ fontSize: Double) async throws {
+        throw PlaybackServiceError.unsupported(operation: "setSubtitleFontSize")
+    }
+
+    func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {
+        throw PlaybackServiceError.unsupported(operation: "setSubtitleStyle")
     }
 
     func setFullscreen(_ isFullscreen: Bool) async throws {
@@ -330,6 +355,8 @@ public protocol SubtitleServiceProtocol {
     func searchOnlineSubtitles(query: SubtitleSearchQuery, languages: [String]) async throws -> [SubtitleSearchResult]
     func downloadSubtitle(_ result: SubtitleSearchResult) async throws -> SubtitleTrack
     func cacheSubtitle(data: Data, fileName: String, languageCode: String, source: SubtitleSource) async throws -> SubtitleTrack
+    func cachedSubtitles() async throws -> [CachedSubtitleItem]
+    func deleteCachedSubtitle(id: String) async throws
     func selectSubtitle(_ track: SubtitleTrack?, playbackService: any PlaybackServiceProtocol) async throws
 }
 
@@ -361,6 +388,12 @@ public extension SubtitleServiceProtocol {
     func cacheSubtitle(data: Data, fileName: String, languageCode: String, source: SubtitleSource) async throws -> SubtitleTrack {
         throw SubtitleServiceError.unsupported(operation: "cacheSubtitle")
     }
+
+    func cachedSubtitles() async throws -> [CachedSubtitleItem] {
+        []
+    }
+
+    func deleteCachedSubtitle(id: String) async throws {}
 
     func selectSubtitle(_ track: SubtitleTrack?, playbackService: any PlaybackServiceProtocol) async throws {
         try await playbackService.selectSubtitleTrack(id: track?.id)

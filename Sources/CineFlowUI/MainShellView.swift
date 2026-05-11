@@ -28,7 +28,7 @@ public struct MainShellView: View {
         self.sourceManager = sourceManager
         self.playbackProgressRecorder = playbackProgressRecorder
         self.navigationCoordinator = navigationCoordinator
-        _viewModel = StateObject(wrappedValue: CineFlowRootViewModel(environment: environment))
+        _viewModel = StateObject(wrappedValue: CineFlowRootViewModel(environment: environment, sourceManager: sourceManager))
         _searchViewModel = StateObject(wrappedValue: SearchViewModel(
             provider: searchProvider,
             diagnosticsService: environment.diagnosticsService,

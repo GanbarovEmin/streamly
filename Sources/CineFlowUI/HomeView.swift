@@ -114,6 +114,8 @@ public struct HomeView: View {
 
     private func localizedSectionTitle(_ kind: HomeSectionKind) -> String {
         switch kind {
+        case .watchNext:
+            t(.homeSectionWatchNext)
         case .continueWatching:
             t(.homeSectionContinueWatching)
         case .popularMovies:

@@ -33,6 +33,9 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         }
 
         let item = AVPlayerItem(url: source.url)
+        item.preferredForwardBufferDuration = source.url.isStreamlyLocalTorrentStreamURL ? 30 : 0
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+        avPlayer.automaticallyWaitsToMinimizeStalling = true
         avPlayer.replaceCurrentItem(with: item)
         avPlayer.play()
 
@@ -44,9 +47,13 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
             bufferingState: .ready,
             volume: Double(avPlayer.volume),
             isMuted: avPlayer.isMuted,
-            playbackSpeed: 1,
+            playbackSpeed: status.playbackSpeed,
             qualityLabel: source.qualityLabel,
-            sourceName: source.sourceName
+            sourceName: source.sourceName,
+            audioBoost: status.audioBoost,
+            subtitleDelaySeconds: status.subtitleDelaySeconds,
+            subtitleFontSize: status.subtitleFontSize,
+            subtitleStyle: status.subtitleStyle
         )
         legacyState = source.release.map { .playing($0) } ?? .preparing
     }
@@ -104,9 +111,25 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         status = statusWithPlayerTime(playbackSpeed: Double(bounded), state: bounded == 0 ? .paused : .playing)
     }
 
+    public func setAudioBoost(_ boost: Double) async throws {
+        status = statusWithPlayerTime(audioBoost: max(1, min(boost, 2.5)))
+    }
+
     public func selectAudioTrack(id: String?) async throws {}
 
     public func selectSubtitleTrack(id: String?) async throws {}
+
+    public func setSubtitleDelay(_ seconds: Double) async throws {
+        status = statusWithPlayerTime(subtitleDelaySeconds: max(-10, min(seconds, 10)))
+    }
+
+    public func setSubtitleFontSize(_ fontSize: Double) async throws {
+        status = statusWithPlayerTime(subtitleFontSize: max(24, min(fontSize, 72)))
+    }
+
+    public func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {
+        status = statusWithPlayerTime(subtitleStyle: style)
+    }
 
     public func setFullscreen(_ isFullscreen: Bool) async throws {
         status = statusWithPlayerTime(isFullscreen: isFullscreen)
@@ -165,7 +188,11 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
     private func statusWithPlayerTime(
         playbackSpeed: Double? = nil,
         state: PlaybackRunState? = nil,
-        isFullscreen: Bool? = nil
+        isFullscreen: Bool? = nil,
+        audioBoost: Double? = nil,
+        subtitleDelaySeconds: Double? = nil,
+        subtitleFontSize: Double? = nil,
+        subtitleStyle: SubtitleVisualStyle? = nil
     ) -> PlaybackStatus {
         let item = avPlayer.currentItem
         let runState = state ?? status.state
@@ -185,7 +212,12 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
             isFullscreen: isFullscreen ?? status.isFullscreen,
             isPictureInPictureActive: status.isPictureInPictureActive,
             qualityLabel: status.qualityLabel,
-            sourceName: status.sourceName
+            sourceName: status.sourceName,
+            chapters: status.chapters,
+            audioBoost: audioBoost ?? status.audioBoost,
+            subtitleDelaySeconds: subtitleDelaySeconds ?? status.subtitleDelaySeconds,
+            subtitleFontSize: subtitleFontSize ?? status.subtitleFontSize,
+            subtitleStyle: subtitleStyle ?? status.subtitleStyle
         )
     }
 
@@ -224,7 +256,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     private var transcodeDirectoryURL: URL?
     private var hlsServer: LocalHLSFileServer?
     private var originalSource: PlaybackMediaSource?
-    private let hlsStartupTimeoutSeconds: TimeInterval = 90
+    private let hlsStartupTimeoutSeconds: TimeInterval = 120
     private let maxHLSStartupAttempts = 6
 
     public init(
@@ -267,7 +299,8 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 url: playlistURL,
                 release: source.release,
                 qualityLabel: source.qualityLabel,
-                sourceName: source.sourceName
+                sourceName: source.sourceName,
+                selectionContext: source.selectionContext
             )
             try await directService.play(bridgedSource)
             return
@@ -310,12 +343,28 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         try await directService.setPlaybackSpeed(speed)
     }
 
+    public func setAudioBoost(_ boost: Double) async throws {
+        try await directService.setAudioBoost(boost)
+    }
+
     public func selectAudioTrack(id: String?) async throws {
         try await directService.selectAudioTrack(id: id)
     }
 
     public func selectSubtitleTrack(id: String?) async throws {
         try await directService.selectSubtitleTrack(id: id)
+    }
+
+    public func setSubtitleDelay(_ seconds: Double) async throws {
+        try await directService.setSubtitleDelay(seconds)
+    }
+
+    public func setSubtitleFontSize(_ fontSize: Double) async throws {
+        try await directService.setSubtitleFontSize(fontSize)
+    }
+
+    public func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {
+        try await directService.setSubtitleStyle(style)
     }
 
     public func setFullscreen(_ isFullscreen: Bool) async throws {
@@ -414,12 +463,14 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     ) -> Process {
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = [
+        let isLocalTorrentStream = sourceURL.isStreamlyLocalTorrentStreamURL
+        let readTimeoutMicros = isLocalTorrentStream ? "120000000" : "8000000"
+        var arguments = [
             "-hide_banner",
             "-loglevel", "warning",
             "-nostdin",
             "-fflags", "+genpts",
-            "-rw_timeout", "8000000",
+            "-rw_timeout", readTimeoutMicros,
             "-i", sourceURL.absoluteString,
             "-map", "0:v:0",
             "-map", "0:a:0?",
@@ -434,11 +485,24 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             "-b:a", "192k",
             "-f", "hls",
             "-hls_time", "2",
-            "-hls_list_size", "8",
-            "-hls_flags", "delete_segments+independent_segments+temp_file",
+        ]
+        if isLocalTorrentStream {
+            arguments += [
+                "-hls_playlist_type", "event",
+                "-hls_list_size", "0",
+                "-hls_flags", "independent_segments+temp_file"
+            ]
+        } else {
+            arguments += [
+                "-hls_list_size", "8",
+                "-hls_flags", "delete_segments+independent_segments+temp_file"
+            ]
+        }
+        arguments += [
             "-hls_segment_filename", segmentPatternURL.path,
             playlistURL.path
         ]
+        process.arguments = arguments
         process.standardOutput = logPipe
         process.standardError = logPipe
         return process
@@ -474,7 +538,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             if fileManager.fileExists(atPath: playlistURL.path),
                let data = try? Data(contentsOf: playlistURL),
                let text = String(data: data, encoding: .utf8),
-               text.contains("#EXTINF") {
+               Self.playlistIsReadyForStartup(text) {
                 return
             }
 
@@ -486,6 +550,23 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         }
 
         throw TranscodeStartupFailure.timedOut
+    }
+
+    static func playlistIsReadyForStartup(_ text: String) -> Bool {
+        var segmentCount = 0
+        var duration = 0.0
+        for line in text.split(separator: "\n") {
+            guard line.hasPrefix("#EXTINF:") else { continue }
+            segmentCount += 1
+            let rawValue = line
+                .dropFirst("#EXTINF:".count)
+                .split(separator: ",", maxSplits: 1)
+                .first
+            if let rawValue, let seconds = Double(rawValue) {
+                duration += seconds
+            }
+        }
+        return segmentCount >= 4 && duration >= 8
     }
 
     private func shouldRetryTranscodeStartup(after error: Error, logText: String) -> Bool {
@@ -581,7 +662,12 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             isFullscreen: status.isFullscreen,
             isPictureInPictureActive: status.isPictureInPictureActive,
             qualityLabel: originalSource.qualityLabel,
-            sourceName: originalSource.sourceName
+            sourceName: originalSource.sourceName,
+            chapters: status.chapters,
+            audioBoost: status.audioBoost,
+            subtitleDelaySeconds: status.subtitleDelaySeconds,
+            subtitleFontSize: status.subtitleFontSize,
+            subtitleStyle: status.subtitleStyle
         )
     }
 }
@@ -799,5 +885,12 @@ private extension URL {
             return false
         }
         return host == "127.0.0.1" || host == "localhost"
+    }
+
+    var isStreamlyLocalTorrentStreamURL: Bool {
+        guard requiresLocalHLSBridge else {
+            return false
+        }
+        return path.hasPrefix("/stream/")
     }
 }

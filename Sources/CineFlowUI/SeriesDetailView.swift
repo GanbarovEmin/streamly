@@ -249,6 +249,23 @@ public struct SeriesDetailView: View {
             .font(CFTypography.bodyEmphasis)
             .foregroundStyle(CFColors.textSecondary)
 
+            if let seasonProgress = viewModel.seasonProgressSummaries.first(where: { $0.seasonID == viewModel.selectedSeason?.id }),
+               seasonProgress.totalEpisodes > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Сезон \(seasonProgress.seasonNumber)")
+                        Spacer()
+                        Text("\(seasonProgress.completedEpisodes)/\(seasonProgress.totalEpisodes)")
+                            .monospacedDigit()
+                    }
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+
+                    ProgressBar(value: seasonProgress.progressFraction)
+                        .frame(height: 5)
+                }
+            }
+
             HStack(spacing: 10) {
                 TextField("ПОИСК ВИДЕО", text: $episodeSearchQuery)
                     .textFieldStyle(.plain)
@@ -332,7 +349,7 @@ public struct SeriesDetailView: View {
                         viewModel.playEpisode(id: episode.id)
                     }
                 }
-                DockIconButton(systemImage: "hand.thumbsup", title: "Продолжить") {
+                DockIconButton(systemImage: "hand.thumbsup", title: viewModel.continueWatchingTitle) {
                     viewModel.continueWatching()
                     if let episode = viewModel.selectedEpisode, episode.isReleased {
                         playBestSeries(series, episode: episode)
@@ -457,7 +474,7 @@ public struct SeriesDetailView: View {
                         playSeries(series)
                     }
                 }
-                SecondaryButton(t(.seriesActionContinue), systemImage: "play.rectangle.fill") {
+                SecondaryButton(viewModel.continueWatchingTitle, systemImage: "play.rectangle.fill") {
                     viewModel.continueWatching()
                     playSeries(series)
                 }
@@ -593,7 +610,7 @@ public struct SeriesDetailView: View {
                 release: release,
                 fallbackReleases: viewModel.releases.map(\.release),
                 selectionContext: playbackContext(for: series, episode: episode),
-                nextEpisodePrompt: nextEpisodePrompt(after: episode)
+                nextEpisodePrompt: viewModel.nextEpisodePrompt(after: episode)
             ))
             return
         }
@@ -609,7 +626,7 @@ public struct SeriesDetailView: View {
             release: release,
             fallbackReleases: viewModel.releases.map(\.release),
             selectionContext: viewModel.series.map { playbackContext(for: $0, episode: episode) },
-            nextEpisodePrompt: nextEpisodePrompt(after: episode)
+            nextEpisodePrompt: viewModel.nextEpisodePrompt(after: episode)
         ))
     }
 
@@ -643,14 +660,6 @@ public struct SeriesDetailView: View {
             return PlaybackSelectionContext(mediaID: mediaID, displayTitle: series.title, mediaKind: .series)
         }
         return playbackContext(for: series, episode: episode)
-    }
-
-    private func nextEpisodePrompt(after episode: SeriesEpisode) -> PlayerNextEpisodePrompt? {
-        guard let next = viewModel.nextReleasedEpisode(after: episode) else { return nil }
-        return PlayerNextEpisodePrompt(
-            title: "S\(next.seasonNumber)E\(next.episodeNumber) \(next.title)",
-            subtitle: next.runtime
-        )
     }
 
     private func openLocalMediaPanel(mediaID: String) {

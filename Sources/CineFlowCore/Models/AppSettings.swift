@@ -160,7 +160,72 @@ public enum CodecPreference: String, Codable, CaseIterable, Identifiable, Sendab
     }
 }
 
+public enum PreferredAudioOrder: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case russianEnglishOriginal
+    case englishRussianOriginal
+    case originalRussianEnglish
+    case custom
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .russianEnglishOriginal:
+            "Russian -> English -> Original"
+        case .englishRussianOriginal:
+            "English -> Russian -> Original"
+        case .originalRussianEnglish:
+            "Original -> Russian -> English"
+        case .custom:
+            "Custom order"
+        }
+    }
+
+    public func languagePriority(customLanguages: [String]) -> [String] {
+        switch self {
+        case .russianEnglishOriginal:
+            ["ru", "en", "original"]
+        case .englishRussianOriginal:
+            ["en", "ru", "original"]
+        case .originalRussianEnglish:
+            ["original", "ru", "en"]
+        case .custom:
+            Self.normalizedCustomLanguages(customLanguages)
+        }
+    }
+
+    private static func normalizedCustomLanguages(_ languages: [String]) -> [String] {
+        var result = languages
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        if !result.contains("original") {
+            result.append("original")
+        }
+        return result.isEmpty ? ["ru", "en", "original"] : Array(NSOrderedSet(array: result)) as? [String] ?? result
+    }
+}
+
+public struct AudioSelectionOverride: Codable, Equatable, Sendable {
+    public var trackID: String?
+    public var languageCode: String?
+    public var isOriginal: Bool
+    public var updatedAt: Date
+
+    public init(
+        trackID: String? = nil,
+        languageCode: String? = nil,
+        isOriginal: Bool = false,
+        updatedAt: Date = Date()
+    ) {
+        self.trackID = trackID
+        self.languageCode = languageCode?.lowercased()
+        self.isOriginal = isOriginal
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct PlaybackSettings: Codable, Equatable, Sendable {
+    public var preferredAudioOrder: PreferredAudioOrder
     public var preferredAudioLanguages: [String]
     public var preferredQuality: PreferredQuality
     public var hdrPreference: HDRPreference
@@ -171,8 +236,19 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
     public var startFromLastPosition: Bool
     public var defaultFullscreen: Bool
     public var seekStepSeconds: Int
+    public var rememberedVolume: Double
+    public var rememberedAudioLanguage: String?
+    public var rememberedSubtitleLanguage: String?
+    public var subtitlesEnabled: Bool
+    public var playbackSpeed: Double
+    public var audioBoost: Double
+    public var dimBackgroundAroundVideo: Bool
+    public var enableTimelinePreviews: Bool
+    public var autoplayNextEpisode: Bool
+    public var manualAudioOverridesByMediaID: [String: AudioSelectionOverride]
 
     public init(
+        preferredAudioOrder: PreferredAudioOrder = .russianEnglishOriginal,
         preferredAudioLanguages: [String] = ["ru", "en"],
         preferredQuality: PreferredQuality = .auto,
         hdrPreference: HDRPreference = .auto,
@@ -182,9 +258,20 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         hardwareAccelerationEnabled: Bool = true,
         startFromLastPosition: Bool = true,
         defaultFullscreen: Bool = false,
-        seekStepSeconds: Int = 10
+        seekStepSeconds: Int = 10,
+        rememberedVolume: Double = 1,
+        rememberedAudioLanguage: String? = nil,
+        rememberedSubtitleLanguage: String? = nil,
+        subtitlesEnabled: Bool = true,
+        playbackSpeed: Double = 1,
+        audioBoost: Double = 1,
+        dimBackgroundAroundVideo: Bool = false,
+        enableTimelinePreviews: Bool = true,
+        autoplayNextEpisode: Bool = true,
+        manualAudioOverridesByMediaID: [String: AudioSelectionOverride] = [:]
     ) {
-        self.preferredAudioLanguages = preferredAudioLanguages
+        self.preferredAudioOrder = preferredAudioOrder
+        self.preferredAudioLanguages = Self.normalizedLanguages(preferredAudioLanguages)
         self.preferredQuality = preferredQuality
         self.hdrPreference = hdrPreference
         self.codecPreference = codecPreference
@@ -194,9 +281,20 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         self.startFromLastPosition = startFromLastPosition
         self.defaultFullscreen = defaultFullscreen
         self.seekStepSeconds = seekStepSeconds
+        self.rememberedVolume = min(max(rememberedVolume, 0), 1)
+        self.rememberedAudioLanguage = rememberedAudioLanguage?.lowercased()
+        self.rememberedSubtitleLanguage = rememberedSubtitleLanguage?.lowercased()
+        self.subtitlesEnabled = subtitlesEnabled
+        self.playbackSpeed = min(max(playbackSpeed, 0.25), 4)
+        self.audioBoost = min(max(audioBoost, 1), 2.5)
+        self.dimBackgroundAroundVideo = dimBackgroundAroundVideo
+        self.enableTimelinePreviews = enableTimelinePreviews
+        self.autoplayNextEpisode = autoplayNextEpisode
+        self.manualAudioOverridesByMediaID = manualAudioOverridesByMediaID
     }
 
     private enum CodingKeys: String, CodingKey {
+        case preferredAudioOrder
         case preferredAudioLanguages
         case preferredQuality
         case hdrPreference
@@ -207,11 +305,22 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         case startFromLastPosition
         case defaultFullscreen
         case seekStepSeconds
+        case rememberedVolume
+        case rememberedAudioLanguage
+        case rememberedSubtitleLanguage
+        case subtitlesEnabled
+        case playbackSpeed
+        case audioBoost
+        case dimBackgroundAroundVideo
+        case enableTimelinePreviews
+        case autoplayNextEpisode
+        case manualAudioOverridesByMediaID
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        preferredAudioLanguages = try container.decodeIfPresent([String].self, forKey: .preferredAudioLanguages) ?? ["ru", "en"]
+        preferredAudioOrder = try container.decodeIfPresent(PreferredAudioOrder.self, forKey: .preferredAudioOrder) ?? .russianEnglishOriginal
+        preferredAudioLanguages = Self.normalizedLanguages(try container.decodeIfPresent([String].self, forKey: .preferredAudioLanguages) ?? ["ru", "en"])
         preferredQuality = try container.decodeIfPresent(PreferredQuality.self, forKey: .preferredQuality) ?? .auto
         hdrPreference = try container.decodeIfPresent(HDRPreference.self, forKey: .hdrPreference) ?? .auto
         codecPreference = try container.decodeIfPresent(CodecPreference.self, forKey: .codecPreference) ?? .auto
@@ -221,10 +330,21 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         startFromLastPosition = try container.decodeIfPresent(Bool.self, forKey: .startFromLastPosition) ?? true
         defaultFullscreen = try container.decodeIfPresent(Bool.self, forKey: .defaultFullscreen) ?? false
         seekStepSeconds = try container.decodeIfPresent(Int.self, forKey: .seekStepSeconds) ?? 10
+        rememberedVolume = min(max(try container.decodeIfPresent(Double.self, forKey: .rememberedVolume) ?? 1, 0), 1)
+        rememberedAudioLanguage = try container.decodeIfPresent(String.self, forKey: .rememberedAudioLanguage)?.lowercased()
+        rememberedSubtitleLanguage = try container.decodeIfPresent(String.self, forKey: .rememberedSubtitleLanguage)?.lowercased()
+        subtitlesEnabled = try container.decodeIfPresent(Bool.self, forKey: .subtitlesEnabled) ?? true
+        playbackSpeed = min(max(try container.decodeIfPresent(Double.self, forKey: .playbackSpeed) ?? 1, 0.25), 4)
+        audioBoost = min(max(try container.decodeIfPresent(Double.self, forKey: .audioBoost) ?? 1, 1), 2.5)
+        dimBackgroundAroundVideo = try container.decodeIfPresent(Bool.self, forKey: .dimBackgroundAroundVideo) ?? false
+        enableTimelinePreviews = try container.decodeIfPresent(Bool.self, forKey: .enableTimelinePreviews) ?? true
+        autoplayNextEpisode = try container.decodeIfPresent(Bool.self, forKey: .autoplayNextEpisode) ?? true
+        manualAudioOverridesByMediaID = try container.decodeIfPresent([String: AudioSelectionOverride].self, forKey: .manualAudioOverridesByMediaID) ?? [:]
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(preferredAudioOrder, forKey: .preferredAudioOrder)
         try container.encode(preferredAudioLanguages, forKey: .preferredAudioLanguages)
         try container.encode(preferredQuality, forKey: .preferredQuality)
         try container.encode(hdrPreference, forKey: .hdrPreference)
@@ -235,6 +355,16 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
         try container.encode(startFromLastPosition, forKey: .startFromLastPosition)
         try container.encode(defaultFullscreen, forKey: .defaultFullscreen)
         try container.encode(seekStepSeconds, forKey: .seekStepSeconds)
+        try container.encode(rememberedVolume, forKey: .rememberedVolume)
+        try container.encodeIfPresent(rememberedAudioLanguage, forKey: .rememberedAudioLanguage)
+        try container.encodeIfPresent(rememberedSubtitleLanguage, forKey: .rememberedSubtitleLanguage)
+        try container.encode(subtitlesEnabled, forKey: .subtitlesEnabled)
+        try container.encode(playbackSpeed, forKey: .playbackSpeed)
+        try container.encode(audioBoost, forKey: .audioBoost)
+        try container.encode(dimBackgroundAroundVideo, forKey: .dimBackgroundAroundVideo)
+        try container.encode(enableTimelinePreviews, forKey: .enableTimelinePreviews)
+        try container.encode(autoplayNextEpisode, forKey: .autoplayNextEpisode)
+        try container.encode(manualAudioOverridesByMediaID, forKey: .manualAudioOverridesByMediaID)
     }
 
     public func rankingPreferences(
@@ -251,6 +381,17 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
             maxFileSizeBytes: maxFileSizeBytes,
             preferHighSeedersOverHighestQuality: preferHighSeedersOverHighestQuality
         )
+    }
+
+    public var resolvedAudioLanguagePriority: [String] {
+        preferredAudioOrder.languagePriority(customLanguages: preferredAudioLanguages)
+    }
+
+    private static func normalizedLanguages(_ languages: [String]) -> [String] {
+        let normalized = languages
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        return normalized.isEmpty ? ["ru", "en"] : Array(NSOrderedSet(array: normalized)) as? [String] ?? normalized
     }
 }
 

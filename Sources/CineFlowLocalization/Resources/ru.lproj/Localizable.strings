@@ -161,6 +161,7 @@
 "home.state.error.title" = "Главный экран недоступен";
 "home.state.error.message" = "Не удалось подготовить главный экран.";
 "home.section.continueWatching" = "Продолжить просмотр";
+"home.section.watchNext" = "Следующая серия";
 "home.section.popularMovies" = "Популярное — Фильмы";
 "home.section.popularSeries" = "Популярное — Сериалы";
 "home.section.recentlyAdded" = "Недавно добавлено в библиотеку";
@@ -199,8 +200,10 @@
 "player.resume.continue" = "Продолжить";
 "player.resume.startOver" = "Сначала";
 "player.nextEpisode.title" = "Следующая серия";
-"player.nextEpisode.action" = "Открыть следующую";
-"player.nextEpisode.dismiss" = "Не сейчас";
+"player.nextEpisode.action" = "Смотреть сейчас";
+"player.nextEpisode.chooseRelease" = "Выбрать релиз";
+"player.nextEpisode.dismiss" = "Отмена";
+"player.nextEpisode.countdown.format" = "Подсказка: %d с";
 "player.buffering.title" = "Буферизация";
 "player.buffering.message.format" = "Готовим поток · %d%%";
 "player.advancedDetails" = "Технические детали";

@@ -10,6 +10,7 @@ public struct AppEnvironment {
     public let diagnosticsService: any DiagnosticsServiceProtocol
     public let updateService: any UpdateServiceProtocol
     public let imageCacheService: (any ImageCacheServiceProtocol)?
+    public let timelinePreviewService: (any TimelinePreviewServiceProtocol)?
     public let smartCacheManager: (any SmartCacheManagerProtocol)?
     public let playbackProgressRepository: (any PlaybackProgressRepositoryProtocol)?
     public let watchHistoryRepository: (any WatchHistoryRepositoryProtocol)?
@@ -26,6 +27,7 @@ public struct AppEnvironment {
         diagnosticsService: any DiagnosticsServiceProtocol,
         updateService: any UpdateServiceProtocol,
         imageCacheService: (any ImageCacheServiceProtocol)? = nil,
+        timelinePreviewService: (any TimelinePreviewServiceProtocol)? = nil,
         smartCacheManager: (any SmartCacheManagerProtocol)? = nil,
         playbackProgressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
         watchHistoryRepository: (any WatchHistoryRepositoryProtocol)? = nil,
@@ -41,6 +43,7 @@ public struct AppEnvironment {
         self.diagnosticsService = diagnosticsService
         self.updateService = updateService
         self.imageCacheService = imageCacheService
+        self.timelinePreviewService = timelinePreviewService
         self.smartCacheManager = smartCacheManager
         self.playbackProgressRepository = playbackProgressRepository
         self.watchHistoryRepository = watchHistoryRepository

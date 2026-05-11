@@ -327,12 +327,23 @@ public struct SettingsView: View {
     private var playbackSection: some View {
         SettingsCard {
             Picker("Preferred audio", selection: Binding(
+                get: { viewModel.settings.playback.preferredAudioOrder },
+                set: { value in Task { await viewModel.updatePreferredAudioOrder(value) } }
+            )) {
+                ForEach(PreferredAudioOrder.allCases) { order in
+                    Text(order.title).tag(order)
+                }
+            }
+
+            Picker("Custom audio order", selection: Binding(
                 get: { viewModel.settings.playback.preferredAudioLanguages.joined(separator: ",") },
                 set: { value in Task { await viewModel.updatePreferredAudioLanguages(value.split(separator: ",").map(String.init)) } }
             )) {
                 Text("Russian -> English").tag("ru,en")
                 Text("English -> Russian").tag("en,ru")
+                Text("English only").tag("en")
             }
+            .disabled(viewModel.settings.playback.preferredAudioOrder != .custom)
 
             Picker("Preferred quality", selection: Binding(
                 get: { viewModel.settings.playback.preferredQuality },
@@ -381,6 +392,51 @@ public struct SettingsView: View {
                 set: { value in Task { await viewModel.updateDefaultFullscreen(value) } }
             ))
 
+            SettingsToggleRow(title: "Dim around video", subtitle: "Use a darker viewing surface around the player controls.", isOn: Binding(
+                get: { viewModel.settings.playback.dimBackgroundAroundVideo },
+                set: { value in Task { await viewModel.updateDimBackgroundAroundVideo(value) } }
+            ))
+
+            SettingsToggleRow(title: "Timeline previews", subtitle: "Show cached frame thumbnails while hovering the timeline.", isOn: Binding(
+                get: { viewModel.settings.playback.enableTimelinePreviews },
+                set: { value in Task { await viewModel.updateTimelinePreviewsEnabled(value) } }
+            ))
+
+            SettingsToggleRow(title: "Autoplay next episode", subtitle: "Start the next episode countdown at the end of a series episode.", isOn: Binding(
+                get: { viewModel.settings.playback.autoplayNextEpisode },
+                set: { value in Task { await viewModel.updateAutoplayNextEpisode(value) } }
+            ))
+
+            Slider(
+                value: Binding(
+                    get: { viewModel.settings.playback.rememberedVolume },
+                    set: { value in Task { await viewModel.updateRememberedVolume(value) } }
+                ),
+                in: 0...1
+            ) {
+                Text("Default volume")
+            } minimumValueLabel: {
+                Image(systemName: "speaker.slash")
+            } maximumValueLabel: {
+                Image(systemName: "speaker.wave.3")
+            }
+            .accessibilityValue("\(Int(viewModel.settings.playback.rememberedVolume * 100))%")
+
+            Picker("Default speed", selection: Binding(
+                get: { viewModel.settings.playback.playbackSpeed },
+                set: { value in Task { await viewModel.updateDefaultPlaybackSpeed(value) } }
+            )) {
+                ForEach([0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { speed in
+                    Text("\(speed, specifier: "%.2g")x").tag(speed)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Stepper("Audio boost: \(viewModel.settings.playback.audioBoost, specifier: "%.2g")x", value: Binding(
+                get: { viewModel.settings.playback.audioBoost },
+                set: { value in Task { await viewModel.updateAudioBoost(value) } }
+            ), in: 1...2.5, step: 0.25)
+
             Stepper("Seek step: \(viewModel.settings.playback.seekStepSeconds)s", value: Binding(
                 get: { viewModel.settings.playback.seekStepSeconds },
                 set: { value in Task { await viewModel.updateSeekStep(value) } }
@@ -425,6 +481,16 @@ public struct SettingsView: View {
                 set: { value in Task { await viewModel.updateAutoSearchOpenSubtitles(value) } }
             ))
 
+            Picker("Auto subtitle mode", selection: Binding(
+                get: { viewModel.subtitleSettings.autoMode },
+                set: { value in Task { await viewModel.updateSubtitleAutoMode(value) } }
+            )) {
+                ForEach(SubtitleAutoMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Stepper("Font size: \(Int(viewModel.subtitleSettings.fontSize))", value: Binding(
                 get: { viewModel.subtitleSettings.fontSize },
                 set: { value in Task { await viewModel.updateSubtitleFontSize(value) } }
@@ -434,6 +500,63 @@ public struct SettingsView: View {
                 get: { viewModel.subtitleSettings.subtitleDelaySeconds },
                 set: { value in Task { await viewModel.updateSubtitleDelay(value) } }
             ), in: -10...10, step: 0.5)
+
+            Picker("Subtitle style", selection: Binding(
+                get: { viewModel.subtitleSettings.visualStyle },
+                set: { value in Task { await viewModel.updateSubtitleVisualStyle(value) } }
+            )) {
+                ForEach(SubtitleVisualStyle.allCases) { style in
+                    Text(style.title).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Picker("Subtitle position", selection: Binding(
+                get: { viewModel.subtitleSettings.placement },
+                set: { value in Task { await viewModel.updateSubtitlePlacement(value) } }
+            )) {
+                ForEach(SubtitlePlacement.allCases) { placement in
+                    Text(placement.title).tag(placement)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            HStack {
+                Text("Cached subtitles")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+                Spacer()
+                SecondaryButton("Reload", systemImage: "arrow.clockwise") {
+                    Task { await viewModel.refreshCachedSubtitles() }
+                }
+            }
+
+            if viewModel.cachedSubtitleItems.isEmpty {
+                Text("Downloaded SRT and ASS files will appear here after playback or manual subtitle search.")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+            } else {
+                ForEach(viewModel.cachedSubtitleItems) { item in
+                    HStack(spacing: CFSpacing.sm) {
+                        Image(systemName: "captions.bubble")
+                            .foregroundStyle(CFColors.textSecondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.fileName)
+                                .font(CFTypography.body)
+                                .foregroundStyle(CFColors.textPrimary)
+                            Text("\(item.languageCode.uppercased()) · \(item.fileExtension.uppercased()) · \(viewModel.cacheLabel(item.sizeBytes))")
+                                .font(CFTypography.caption)
+                                .foregroundStyle(CFColors.textMuted)
+                        }
+                        Spacer()
+                        IconButton(systemImage: "trash", accessibilityLabel: "Delete cached subtitle") {
+                            Task { await viewModel.deleteCachedSubtitle(id: item.id) }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -701,6 +824,8 @@ public struct SettingsView: View {
             await viewModel.clearTorrentCache()
         case .subtitles:
             await viewModel.clearSubtitlesCache()
+        case .timelinePreviews:
+            await viewModel.clearTimelinePreviewCache()
         case .metadata:
             await viewModel.clearMetadataCache()
         }
@@ -711,6 +836,7 @@ public struct SettingsView: View {
         case .images: "Image cache"
         case .torrents: "Torrent cache"
         case .subtitles: "Subtitles cache"
+        case .timelinePreviews: "Timeline previews"
         case .metadata: "Metadata cache"
         }
     }
@@ -720,6 +846,7 @@ public struct SettingsView: View {
         case .images: "photo.on.rectangle"
         case .torrents: "arrow.down.doc"
         case .subtitles: "captions.bubble"
+        case .timelinePreviews: "rectangle.stack"
         case .metadata: "database"
         }
     }
@@ -729,6 +856,7 @@ public struct SettingsView: View {
         case .images: "Artwork files cached locally for faster browsing."
         case .torrents: "Torrent data is cleaned without touching active playback."
         case .subtitles: "Downloaded subtitle files stored locally."
+        case .timelinePreviews: "Frame thumbnails generated lazily for timeline hover."
         case .metadata: "Local provider responses used for faster detail screens."
         }
     }

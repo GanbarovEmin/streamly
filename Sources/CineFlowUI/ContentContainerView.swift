@@ -209,12 +209,27 @@ public struct ContentContainerView: View {
                 selectionContext: selectionContext,
                 nextEpisodePrompt: nextEpisodePrompt,
                 environment: environment,
+                sourceManager: sourceManager,
                 playbackService: viewModel.playbackService,
                 playbackProgressRecorder: playbackProgressRecorder,
-                language: selectedLanguage
-            ) {
-                navigationCoordinator.goBack()
-            }
+                language: selectedLanguage,
+                onExit: {
+                    navigationCoordinator.goBack()
+                },
+                onNextEpisode: { action in
+                    if action.requiresManualReleaseSelection || action.release == nil {
+                        navigationCoordinator.goBack()
+                    } else {
+                        navigationCoordinator.navigate(to: .player(
+                            mediaID: action.mediaID,
+                            sourceID: action.sourceID,
+                            release: action.release,
+                            fallbackReleases: action.fallbackReleases,
+                            selectionContext: action.selectionContext
+                        ))
+                    }
+                }
+            )
         case .settingsSection:
             DeepLinkPlaceholderView(
                 title: t(.navigationSettingsSection),
@@ -371,13 +386,17 @@ private struct PlayerRouteView: View {
     let selectionContext: PlaybackSelectionContext?
     let nextEpisodePrompt: PlayerNextEpisodePrompt?
     let environment: AppEnvironment
+    let sourceManager: SourceManager?
     let playbackService: any PlaybackServiceProtocol
     let playbackProgressRecorder: PlaybackProgressRecorder?
     let language: AppLanguage
     let onExit: () -> Void
+    let onNextEpisode: (PlayerNextEpisodeAction) -> Void
 
     @State private var state: RouteState = .loading
     @State private var rankingPreferences = RankingPreferences()
+    @State private var activeFallbackReleases: [TorrentRelease] = []
+    @State private var activeSelectionContext: PlaybackSelectionContext?
     @StateObject private var sessionCoordinator = PlaybackSessionCoordinator()
 
     var body: some View {
@@ -421,23 +440,28 @@ private struct PlayerRouteView: View {
                 .padding(CFSpacing.xl)
             case .chooseMediaFile(let session, let release, let options):
                 mediaFileSelectionView(session: session, release: release, options: options)
-            case .ready(let source):
+            case .ready(let source, let torrentSession):
                 PlayerView(
                     viewModel: PlayerViewModel(
                         service: playbackService,
                         mediaSource: source,
+                        torrentEngine: torrentSession == nil ? nil : environment.torrentEngine,
+                        torrentSession: torrentSession,
                         subtitleService: environment.subtitleService,
+                        settingsRepository: environment.settingsRepository,
+                        timelinePreviewService: environment.timelinePreviewService,
                         diagnosticsService: environment.diagnosticsService,
                         progressRecorder: playbackProgressRecorder,
                         progressRepository: environment.playbackProgressRepository,
-                        fallbackReleases: fallbackReleases,
+                        fallbackReleases: effectiveFallbackReleases,
                         fallbackPreferences: rankingPreferences,
                         fallbackHandler: { release in
                             await loadTorrentRelease(release)
                         },
                         nextEpisodePrompt: nextEpisodePrompt
                     ),
-                    onExit: onExit
+                    onExit: onExit,
+                    onNextEpisode: onNextEpisode
                 )
             }
         }
@@ -488,6 +512,9 @@ private struct PlayerRouteView: View {
     }
 
     private func load() async {
+        activeSelectionContext = selectionContext
+        activeFallbackReleases = fallbackReleases
+
         if let release {
             await loadTorrentRelease(release)
             return
@@ -500,6 +527,24 @@ private struct PlayerRouteView: View {
             mediaID: mediaID,
             reason: "local.source.load"
         )
+
+        if sourceID == nil,
+           let sourceManager,
+           let resolution = await PlaybackAutoSourceResolver(
+            metadataService: environment.metadataService,
+            sourceManager: sourceManager,
+            diagnosticsService: environment.diagnosticsService
+           ).resolveBestRelease(mediaID: mediaID, selectionContext: selectionContext) {
+            guard sessionCoordinator.isCurrent(requestID) else { return }
+            activeSelectionContext = resolution.selectionContext
+            activeFallbackReleases = resolution.fallbackReleases
+            await loadTorrentRelease(
+                resolution.release,
+                fallbackReleases: resolution.fallbackReleases,
+                selectionContext: resolution.selectionContext
+            )
+            return
+        }
 
         guard let repository = environment.userMediaSourceRepository else {
             await environment.diagnosticsService.log(
@@ -530,14 +575,15 @@ private struct PlayerRouteView: View {
             if let playbackSource = source.playbackMediaSource {
                 state = .ready(
                     PlaybackMediaSource(
-                        id: selectionContext?.episodeID ?? playbackSource.id,
-                        title: selectionContext?.displayTitle ?? playbackSource.title,
+                        id: effectiveSelectionContext?.episodeID ?? playbackSource.id,
+                        title: effectiveSelectionContext?.displayTitle ?? playbackSource.title,
                         url: playbackSource.url,
                         release: playbackSource.release,
                         qualityLabel: playbackSource.qualityLabel,
                         sourceName: playbackSource.sourceName,
-                        selectionContext: selectionContext
-                    )
+                        selectionContext: effectiveSelectionContext
+                    ),
+                    nil
                 )
             } else {
                 state = .unsupportedSource(source.displayName)
@@ -549,7 +595,24 @@ private struct PlayerRouteView: View {
         }
     }
 
-    private func loadTorrentRelease(_ release: TorrentRelease) async {
+    private var effectiveFallbackReleases: [TorrentRelease] {
+        activeFallbackReleases.isEmpty ? fallbackReleases : activeFallbackReleases
+    }
+
+    private var effectiveSelectionContext: PlaybackSelectionContext? {
+        activeSelectionContext ?? selectionContext
+    }
+
+    private func loadTorrentRelease(
+        _ release: TorrentRelease,
+        fallbackReleases overrideFallbackReleases: [TorrentRelease]? = nil,
+        selectionContext overrideSelectionContext: PlaybackSelectionContext? = nil
+    ) async {
+        let resolvedFallbackReleases = overrideFallbackReleases ?? effectiveFallbackReleases
+        let resolvedSelectionContext = overrideSelectionContext ?? effectiveSelectionContext
+        activeFallbackReleases = resolvedFallbackReleases
+        activeSelectionContext = resolvedSelectionContext
+
         let requestID = await sessionCoordinator.beginNewSession(
             torrentEngine: environment.torrentEngine,
             playbackService: playbackService,
@@ -575,9 +638,9 @@ private struct PlayerRouteView: View {
         let result = await pipeline.resolve(
             PlaybackPipelineRequest(
                 mediaID: mediaID,
-                selectionContext: selectionContext,
+                selectionContext: resolvedSelectionContext,
                 primaryRelease: release,
-                fallbackReleases: fallbackReleases,
+                fallbackReleases: resolvedFallbackReleases,
                 bandwidthLimits: appSettings.storage.torrentBandwidthLimits,
                 maxAutomaticFallbacks: 2,
                 rankingPreferences: preferences
@@ -589,7 +652,7 @@ private struct PlayerRouteView: View {
         switch result {
         case .ready(let source, let session, _):
             sessionCoordinator.activate(session)
-            state = .ready(source)
+            state = .ready(source, session)
         case .needsMediaFileSelection(let session, let release, let options, _):
             sessionCoordinator.activate(session)
             state = .chooseMediaFile(session, release, options)
@@ -608,22 +671,25 @@ private struct PlayerRouteView: View {
         guard streamingURL.isCineFlowPlayableMediaURL else {
             throw PlaybackServiceError.invalidMediaURL
         }
-        switch await DefaultPlaybackStreamAvailabilityChecker().check(streamingURL, timeoutSeconds: 8) {
-        case .available:
-            break
-        case .unavailable(let reason):
-            throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
+        if !streamingURL.isStreamlyLocalTorrentStreamURL {
+            switch await DefaultPlaybackStreamAvailabilityChecker().check(streamingURL, timeoutSeconds: 8) {
+            case .available:
+                break
+            case .unavailable(let reason):
+                throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
+            }
         }
         state = .ready(
             PlaybackMediaSource(
-                id: selectionContext?.episodeID ?? mediaID,
-                title: selectionContext?.displayTitle ?? release.title,
+                id: effectiveSelectionContext?.episodeID ?? mediaID,
+                title: effectiveSelectionContext?.displayTitle ?? release.title,
                 url: streamingURL,
                 release: release,
                 qualityLabel: release.qualityLabel,
                 sourceName: release.sourceName,
-                selectionContext: selectionContext
-            )
+                selectionContext: effectiveSelectionContext
+            ),
+            session
         )
     }
 
@@ -689,7 +755,7 @@ private struct PlayerRouteView: View {
     private func fallbackSuggestion(for release: TorrentRelease, reason: ReleaseFallbackReason) -> ReleaseFallbackSuggestion? {
         ReleaseFallbackPlanner.suggestion(
             for: release,
-            in: fallbackReleases,
+            in: effectiveFallbackReleases,
             reason: reason,
             preferences: rankingPreferences
         )
@@ -716,7 +782,7 @@ private struct PlayerRouteView: View {
         case unsupportedSource(String)
         case torrentFailed(String, ReleaseFallbackSuggestion?)
         case chooseMediaFile(TorrentSession, TorrentRelease, [TorrentMediaFileOption])
-        case ready(PlaybackMediaSource)
+        case ready(PlaybackMediaSource, TorrentSession?)
     }
 
     private func t(_ key: L10nKey) -> String {
@@ -929,6 +995,19 @@ private struct SubtitleSettingsCard: View {
                 Toggle("Auto-search", isOn: binding(\.autoSearchSubtitles))
             }
 
+            Picker("Mode", selection: Binding(
+                get: { settings.autoMode },
+                set: {
+                    settings.autoMode = $0
+                    persist()
+                }
+            )) {
+                ForEach(SubtitleAutoMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             HStack(spacing: CFSpacing.md) {
                 Picker("Priority", selection: Binding(
                     get: { settings.languagePreference.languageCodes.joined(separator: ",") },
@@ -1046,5 +1125,17 @@ private struct ShellMetric: View {
                         .stroke(CFColors.separator, lineWidth: CFSeparators.width)
                 )
         )
+    }
+}
+
+private extension URL {
+    var isStreamlyLocalTorrentStreamURL: Bool {
+        guard let scheme = scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              host == "127.0.0.1" || host == "localhost"
+        else {
+            return false
+        }
+        return path.hasPrefix("/stream/")
     }
 }

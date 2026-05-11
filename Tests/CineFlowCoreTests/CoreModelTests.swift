@@ -170,6 +170,18 @@ final class CoreModelTests: XCTestCase {
         XCTAssertEqual(settings.storage.torrentBandwidthLimits, .unlimited)
     }
 
+    func testPlaybackSettingsExposeAutoplayNextEpisodePreference() throws {
+        let settings = PlaybackSettings(autoplayNextEpisode: false)
+
+        XCTAssertFalse(settings.autoplayNextEpisode)
+
+        let encoded = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(PlaybackSettings.self, from: encoded)
+
+        XCTAssertFalse(decoded.autoplayNextEpisode)
+        XCTAssertTrue(PlaybackSettings().autoplayNextEpisode)
+    }
+
     func testStorageSettingsDecodeOlderPayloadWithSmartCacheDefaults() throws {
         let data = Data(#"{"torrentCacheFolderPath":"/tmp/torrents","downloadsFolderPath":null}"#.utf8)
 

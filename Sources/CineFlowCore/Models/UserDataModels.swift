@@ -203,12 +203,123 @@ public struct AudioTrack: Identifiable, Codable, Equatable, Sendable {
     public let displayName: String
     public let codec: String?
     public let channels: String?
+    public let isOriginal: Bool
 
-    public init(id: String, languageCode: String, displayName: String, codec: String? = nil, channels: String? = nil) {
+    public init(
+        id: String,
+        languageCode: String,
+        displayName: String,
+        codec: String? = nil,
+        channels: String? = nil,
+        isOriginal: Bool? = nil
+    ) {
         self.id = id
-        self.languageCode = languageCode
+        self.languageCode = languageCode.lowercased()
         self.displayName = displayName
         self.codec = codec
         self.channels = channels
+        self.isOriginal = isOriginal ?? Self.detectOriginalFlag(id: id, languageCode: languageCode, displayName: displayName)
+    }
+
+    public var qualityLabel: String {
+        let normalizedChannels = normalizedChannelLabel
+        let codecFamily = normalizedCodecFamily
+        switch (normalizedChannels, codecFamily) {
+        case let (channels?, codec?):
+            return "\(channels) \(codec)"
+        case let (channels?, nil):
+            return channels
+        case let (nil, codec?):
+            return codec
+        case (nil, nil):
+            return "Audio"
+        }
+    }
+
+    public var menuTitle: String {
+        "\(displayName) · \(qualityLabel)"
+    }
+
+    public var qualityScore: Int {
+        var score = 0
+        switch normalizedChannelLabel {
+        case "7.1":
+            score += 70
+        case "5.1":
+            score += 50
+        case "Stereo":
+            score += 20
+        default:
+            score += 10
+        }
+
+        switch normalizedCodecFamily {
+        case "DTS":
+            score += 18
+        case "Dolby":
+            score += 16
+        default:
+            score += 0
+        }
+        return score
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case languageCode
+        case displayName
+        case codec
+        case channels
+        case isOriginal
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        languageCode = try container.decode(String.self, forKey: .languageCode).lowercased()
+        displayName = try container.decode(String.self, forKey: .displayName)
+        codec = try container.decodeIfPresent(String.self, forKey: .codec)
+        channels = try container.decodeIfPresent(String.self, forKey: .channels)
+        isOriginal = try container.decodeIfPresent(Bool.self, forKey: .isOriginal)
+            ?? Self.detectOriginalFlag(id: id, languageCode: languageCode, displayName: displayName)
+    }
+
+    private var normalizedChannelLabel: String? {
+        let value = (channels ?? displayName).lowercased()
+        if value.contains("7.1") || value.contains("8ch") || value.contains("8 ch") {
+            return "7.1"
+        }
+        if value.contains("5.1") || value.contains("6ch") || value.contains("6 ch") {
+            return "5.1"
+        }
+        if value.contains("stereo") || value.contains("2.0") || value.contains("2ch") || value.contains("2 ch") {
+            return "Stereo"
+        }
+        return channels?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfBlank
+    }
+
+    private var normalizedCodecFamily: String? {
+        let value = (codec ?? displayName).lowercased()
+        if value.contains("dts") {
+            return "DTS"
+        }
+        if value.contains("dolby") || value.contains("truehd") || value.contains("atmos") || value.contains("ac-3") || value.contains("e-ac-3") {
+            return "Dolby"
+        }
+        return nil
+    }
+
+    private static func detectOriginalFlag(id: String, languageCode: String, displayName: String) -> Bool {
+        let text = "\(id) \(languageCode) \(displayName)".lowercased()
+        return languageCode.caseInsensitiveCompare("und") == .orderedSame
+            || text.contains("original")
+            || text.contains("оригинал")
+    }
+}
+
+private extension String {
+    var nilIfBlank: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

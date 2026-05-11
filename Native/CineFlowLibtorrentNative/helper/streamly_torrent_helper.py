@@ -32,6 +32,9 @@ PRIORITY_MAP = {
     3: 7,
 }
 STREAM_CHUNK_BYTES = 1024 * 1024
+INITIAL_STREAM_BYTES = 16 * 1024 * 1024
+BACKGROUND_BUFFER_WINDOW_BYTES = 128 * 1024 * 1024
+STREAM_RANGE_TIMEOUT_SECONDS = 120.0
 HELPER_PID_FILE_PREFIX = ".streamly-helper-"
 HELPER_PID_FILE_SUFFIX = ".pid"
 
@@ -72,6 +75,8 @@ class TorrentEntry:
     streaming_url: str | None = None
     download_limit_bytes_per_second: int | None = None
     upload_limit_bytes_per_second: int | None = None
+    background_thread: threading.Thread | None = None
+    background_stop: threading.Event | None = None
 
 
 class TorrentRuntime:
@@ -124,6 +129,7 @@ class TorrentRuntime:
             entries = list(self.entries.items())
             self.entries.clear()
         for _, entry in entries:
+            self.stop_background_download(entry)
             try:
                 self.session.remove_torrent(entry.handle, 0)
             except Exception:
@@ -192,6 +198,7 @@ class TorrentRuntime:
             entry = self.entries.pop(handle_id, None)
         if entry is None:
             raise RuntimeError("session_not_found")
+        self.stop_background_download(entry)
         option = lt.options_t.delete_files if delete_files else 0
         self.session.remove_torrent(entry.handle, option)
         if delete_files:
@@ -203,7 +210,13 @@ class TorrentRuntime:
         total_bytes = int(getattr(status, "total_wanted", 0) or 0)
         downloaded_bytes = int(getattr(status, "total_wanted_done", 0) or getattr(status, "total_done", 0) or 0)
         selected_index = self.selected_file_index(entry)
-        buffered_bytes = self.file_progress(entry, selected_index) if selected_index is not None else downloaded_bytes
+        buffered_bytes = downloaded_bytes
+        if selected_index is not None:
+            selected_total = self.file_size(entry, selected_index)
+            if selected_total > 0:
+                total_bytes = selected_total
+            downloaded_bytes = self.file_progress(entry, selected_index)
+            buffered_bytes = self.contiguous_file_progress(entry, selected_index)
         return {
             "sessionId": handle_id,
             "state": self.state_name(entry, status),
@@ -256,6 +269,8 @@ class TorrentRuntime:
     def select_file(self, handle_id: str, file_id: str) -> None:
         entry = self.entry(handle_id)
         index = self.file_index(entry, file_id)
+        if entry.selected_file_id is not None and entry.selected_file_id != str(index):
+            self.stop_background_download(entry)
         storage = entry.handle.torrent_file().files()
         priorities = [0] * storage.num_files()
         priorities[index] = 7
@@ -263,6 +278,8 @@ class TorrentRuntime:
         entry.handle.set_sequential_download(True)
         entry.selected_file_id = str(index)
         entry.sequential = True
+        self.prioritize_file_start(entry, index)
+        self.ensure_background_download(entry, index)
 
     def set_sequential(self, handle_id: str, enabled: bool) -> None:
         entry = self.entry(handle_id)
@@ -296,6 +313,9 @@ class TorrentRuntime:
         self.ensure_stream_server()
         port = self.stream_server.server_address[1]
         entry.streaming_url = f"http://127.0.0.1:{port}/stream/{handle_id}/{entry.selected_file_id}"
+        selected_index = self.selected_file_index(entry)
+        if selected_index is not None:
+            self.ensure_background_download(entry, selected_index)
         return entry.streaming_url
 
     def entry(self, handle_id: str) -> TorrentEntry:
@@ -317,17 +337,25 @@ class TorrentRuntime:
             time.sleep(0.25)
         raise RuntimeError("metadata_timeout")
 
-    def wait_for_file_bytes(self, entry: TorrentEntry, file_index: int, byte_count: int, timeout: float = 45.0) -> None:
+    def wait_for_file_bytes(self, entry: TorrentEntry, file_index: int, byte_count: int, timeout: float = STREAM_RANGE_TIMEOUT_SECONDS) -> None:
         self.wait_for_file_range(entry, file_index, 0, max(0, byte_count - 1), timeout)
 
-    def wait_for_file_range(self, entry: TorrentEntry, file_index: int, start: int, end: int, timeout: float = 45.0) -> None:
+    def wait_for_file_range(self, entry: TorrentEntry, file_index: int, start: int, end: int, timeout: float = STREAM_RANGE_TIMEOUT_SECONDS) -> None:
         first_piece, last_piece = self.piece_range(entry, file_index, start, end)
-        deadline = time.time() + timeout
+        last_progress_at = time.time()
+        last_have_count = -1
         self.prioritize_piece_window(entry, first_piece, last_piece)
-        while time.time() < deadline:
-            if all(entry.handle.have_piece(piece) for piece in range(first_piece, last_piece + 1)):
+        while True:
+            have_count = sum(1 for piece in range(first_piece, last_piece + 1) if entry.handle.have_piece(piece))
+            if have_count == last_piece - first_piece + 1:
                 return
+            if have_count > last_have_count:
+                last_have_count = have_count
+                last_progress_at = time.time()
+            if time.time() - last_progress_at > timeout:
+                raise RuntimeError("buffer_timeout:no_progress")
             entry.handle.set_sequential_download(True)
+            self.prioritize_piece_window(entry, first_piece, last_piece)
             time.sleep(0.2)
         raise RuntimeError("buffer_timeout")
 
@@ -345,6 +373,62 @@ class TorrentRuntime:
                 entry.handle.set_piece_deadline(piece, offset * 50)
         except Exception:
             return
+
+    def prioritize_file_start(self, entry: TorrentEntry, file_index: int) -> None:
+        try:
+            storage = entry.handle.torrent_file().files()
+            size = int(storage.file_size(file_index))
+            if size <= 0:
+                return
+            end = min(size - 1, INITIAL_STREAM_BYTES - 1)
+            first_piece, last_piece = self.piece_range(entry, file_index, 0, end)
+            self.prioritize_piece_window(entry, first_piece, last_piece)
+        except Exception:
+            return
+
+    def ensure_background_download(self, entry: TorrentEntry, file_index: int) -> None:
+        if entry.background_thread is not None and entry.background_thread.is_alive():
+            return
+        stop_event = threading.Event()
+        entry.background_stop = stop_event
+
+        def worker() -> None:
+            while not stop_event.wait(1.0):
+                try:
+                    if self.shutdown_requested.is_set():
+                        return
+                    if entry.selected_file_id != str(file_index):
+                        return
+                    size = self.file_size(entry, file_index)
+                    if size <= 0:
+                        continue
+
+                    priorities = [0] * entry.handle.torrent_file().files().num_files()
+                    priorities[file_index] = 7
+                    entry.handle.prioritize_files(priorities)
+                    entry.handle.set_sequential_download(True)
+                    entry.handle.resume()
+
+                    downloaded = self.file_progress(entry, file_index)
+                    contiguous = self.contiguous_file_progress(entry, file_index)
+                    if downloaded >= size:
+                        return
+
+                    window_start = min(contiguous, max(0, size - 1))
+                    window_end = min(size - 1, window_start + BACKGROUND_BUFFER_WINDOW_BYTES - 1)
+                    first_piece, last_piece = self.piece_range(entry, file_index, window_start, window_end)
+                    self.prioritize_piece_window(entry, first_piece, last_piece)
+                except Exception:
+                    continue
+
+        entry.background_thread = threading.Thread(target=worker, daemon=True)
+        entry.background_thread.start()
+
+    def stop_background_download(self, entry: TorrentEntry) -> None:
+        if entry.background_stop is not None:
+            entry.background_stop.set()
+        entry.background_thread = None
+        entry.background_stop = None
 
     def file_index(self, entry: TorrentEntry, file_id: str) -> int:
         self.wait_for_metadata(entry)
@@ -376,6 +460,40 @@ class TorrentRuntime:
         progresses = self.file_progresses(entry)
         return int(progresses[file_index]) if file_index < len(progresses) else 0
 
+    def file_size(self, entry: TorrentEntry, file_index: int | None) -> int:
+        if file_index is None:
+            return 0
+        try:
+            return int(entry.handle.torrent_file().files().file_size(file_index))
+        except Exception:
+            return 0
+
+    def contiguous_file_progress(self, entry: TorrentEntry, file_index: int | None) -> int:
+        if file_index is None:
+            return 0
+        try:
+            torrent_info = entry.handle.torrent_file()
+            storage = torrent_info.files()
+            size = int(storage.file_size(file_index))
+            if size <= 0:
+                return 0
+            first_piece, last_piece = self.piece_range(entry, file_index, 0, size - 1)
+            piece_length = max(1, int(torrent_info.piece_length()))
+            first_request = torrent_info.map_file(file_index, 0, 1)
+            file_global_start = (int(first_request.piece) * piece_length) + int(first_request.start)
+            file_global_end = file_global_start + size
+            loaded = 0
+            for piece in range(first_piece, last_piece + 1):
+                if not entry.handle.have_piece(piece):
+                    break
+                piece_start = piece * piece_length
+                piece_end = piece_start + piece_length
+                contribution = max(0, min(piece_end, file_global_end) - max(piece_start, file_global_start))
+                loaded += contribution
+            return min(size, int(loaded))
+        except Exception:
+            return self.file_progress(entry, file_index)
+
     def file_path(self, entry: TorrentEntry, file_index: int) -> tuple[Path, int]:
         self.wait_for_metadata(entry)
         storage = entry.handle.torrent_file().files()
@@ -392,8 +510,13 @@ class TorrentRuntime:
         runtime = self
 
         class StreamHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
             def do_GET(self):
                 runtime.handle_stream(self)
+
+            def do_HEAD(self):
+                runtime.handle_stream(self, headers_only=True)
 
             def log_message(self, format, *args):
                 return
@@ -402,7 +525,7 @@ class TorrentRuntime:
         self.stream_thread = threading.Thread(target=self.stream_server.serve_forever, daemon=True)
         self.stream_thread.start()
 
-    def handle_stream(self, request: BaseHTTPRequestHandler) -> None:
+    def handle_stream(self, request: BaseHTTPRequestHandler, headers_only: bool = False) -> None:
         parts = urlparse(request.path).path.strip("/").split("/")
         if len(parts) != 3 or parts[0] != "stream":
             self.send_error(request, HTTPStatus.NOT_FOUND, "not_found")
@@ -411,9 +534,18 @@ class TorrentRuntime:
             entry = self.entry(parts[1])
             file_index = self.file_index(entry, parts[2])
             path, size = self.file_path(entry, file_index)
-            start, end = self.parse_range(request.headers.get("Range"), size)
-            self.wait_for_file_range(entry, file_index, start, end)
-            self.send_file_range(request, path, start, end, size)
+            start, end, is_range_request = self.parse_range(request.headers.get("Range"), size)
+            self.send_file_range(
+                request,
+                entry,
+                file_index,
+                path,
+                start,
+                end,
+                size,
+                is_range_request=is_range_request,
+                headers_only=headers_only
+            )
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception as exc:
@@ -422,35 +554,55 @@ class TorrentRuntime:
             except (BrokenPipeError, ConnectionResetError):
                 return
 
-    def parse_range(self, range_header: str | None, size: int) -> tuple[int, int]:
+    def parse_range(self, range_header: str | None, size: int) -> tuple[int, int, bool]:
         if not range_header or not range_header.startswith("bytes="):
-            return 0, min(max(0, size - 1), STREAM_CHUNK_BYTES - 1)
+            return 0, max(0, size - 1), False
         value = range_header.removeprefix("bytes=").split(",", 1)[0].strip()
         start_text, _, end_text = value.partition("-")
         if start_text == "":
             length = int(end_text)
-            return max(0, size - length), max(0, size - 1)
+            return max(0, size - length), max(0, size - 1), True
         start = int(start_text)
-        end = int(end_text) if end_text else min(size - 1, start + STREAM_CHUNK_BYTES - 1)
-        return max(0, start), min(size - 1, end)
+        end = int(end_text) if end_text else size - 1
+        return max(0, start), min(size - 1, end), True
 
-    def send_file_range(self, request: BaseHTTPRequestHandler, path: Path, start: int, end: int, size: int) -> None:
+    def send_file_range(
+        self,
+        request: BaseHTTPRequestHandler,
+        entry: TorrentEntry,
+        file_index: int,
+        path: Path,
+        start: int,
+        end: int,
+        size: int,
+        is_range_request: bool,
+        headers_only: bool = False
+    ) -> None:
         length = max(0, end - start + 1)
-        request.send_response(HTTPStatus.PARTIAL_CONTENT)
+        request.send_response(HTTPStatus.PARTIAL_CONTENT if is_range_request else HTTPStatus.OK)
         request.send_header("Content-Type", "application/octet-stream")
         request.send_header("Accept-Ranges", "bytes")
-        request.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        if is_range_request:
+            request.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         request.send_header("Content-Length", str(length))
         request.end_headers()
+        if headers_only:
+            return
         with path.open("rb") as file:
-            file.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = file.read(min(256 * 1024, remaining))
-                if not chunk:
-                    break
-                request.wfile.write(chunk)
-                remaining -= len(chunk)
+            offset = start
+            while offset <= end:
+                chunk_end = min(end, offset + STREAM_CHUNK_BYTES - 1)
+                self.wait_for_file_range(entry, file_index, offset, chunk_end)
+                file.seek(offset)
+                remaining = chunk_end - offset + 1
+                while remaining > 0:
+                    chunk = file.read(min(256 * 1024, remaining))
+                    if not chunk:
+                        return
+                    request.wfile.write(chunk)
+                    remaining -= len(chunk)
+                request.wfile.flush()
+                offset = chunk_end + 1
 
     def send_error(self, request: BaseHTTPRequestHandler, status: HTTPStatus, message: str) -> None:
         data = message.encode("utf-8", errors="replace")

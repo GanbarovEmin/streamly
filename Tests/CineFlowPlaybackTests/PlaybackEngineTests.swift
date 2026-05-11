@@ -5,6 +5,98 @@ import XCTest
 @testable import CineFlowPlayback
 
 final class PlaybackEngineTests: XCTestCase {
+    @MainActor
+    func testTorrentHLSStartupRequiresFourSegmentsAndEightSeconds() {
+        let oneSegment = """
+        #EXTM3U
+        #EXT-X-TARGETDURATION:2
+        #EXTINF:2.000000,
+        segment_00000.ts
+        """
+        let fourShortSegments = """
+        #EXTM3U
+        #EXTINF:1.000000,
+        segment_00000.ts
+        #EXTINF:1.000000,
+        segment_00001.ts
+        #EXTINF:1.000000,
+        segment_00002.ts
+        #EXTINF:1.000000,
+        segment_00003.ts
+        """
+        let readyPlaylist = """
+        #EXTM3U
+        #EXTINF:2.000000,
+        segment_00000.ts
+        #EXTINF:2.000000,
+        segment_00001.ts
+        #EXTINF:2.000000,
+        segment_00002.ts
+        #EXTINF:2.000000,
+        segment_00003.ts
+        """
+
+        XCTAssertFalse(TranscodingAVPlaybackService.playlistIsReadyForStartup(oneSegment))
+        XCTAssertFalse(TranscodingAVPlaybackService.playlistIsReadyForStartup(fourShortSegments))
+        XCTAssertTrue(TranscodingAVPlaybackService.playlistIsReadyForStartup(readyPlaylist))
+    }
+
+    func testTimelinePreviewServiceGeneratesAndReusesLocalCacheWithoutRemoteGeneration() async throws {
+        let cacheRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TimelinePreviewServiceTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: cacheRoot) }
+        let generator = RecordingTimelineFrameGenerator(data: Data("jpeg-thumbnail".utf8))
+        let service = TimelinePreviewService(
+            cache: TimelinePreviewCache(storageURL: cacheRoot),
+            generator: generator
+        )
+        let localRequest = TimelinePreviewRequest(
+            mediaID: "tmdb:movie:603",
+            mediaURL: URL(fileURLWithPath: "/tmp/matrix.mkv"),
+            timeSeconds: 41.7,
+            durationSeconds: 120,
+            bufferedUntilSeconds: 120,
+            isPlaybackActive: true,
+            width: 240,
+            height: 135
+        )
+
+        let generated = try await service.preview(for: localRequest)
+        let cached = try await service.preview(for: localRequest)
+        let loopback = try await service.preview(
+            for: TimelinePreviewRequest(
+                mediaID: "tmdb:movie:loopback",
+                mediaURL: URL(string: "http://127.0.0.1:49152/movie.mkv")!,
+                timeSeconds: 55,
+                durationSeconds: 120,
+                bufferedUntilSeconds: 60,
+                isPlaybackActive: true,
+                width: 240,
+                height: 135
+            )
+        )
+        let remote = try await service.preview(
+            for: TimelinePreviewRequest(
+                mediaID: "tmdb:movie:remote",
+                mediaURL: URL(string: "https://streamly.local/movie.mkv")!,
+                timeSeconds: 40,
+                durationSeconds: 120,
+                bufferedUntilSeconds: nil,
+                isPlaybackActive: true,
+                width: 240,
+                height: 135
+            )
+        )
+
+        XCTAssertEqual(generated?.source, .generated)
+        XCTAssertEqual(cached?.source, .cache)
+        XCTAssertEqual(loopback?.source, .generated)
+        XCTAssertEqual(generated?.imageData, Data("jpeg-thumbnail".utf8))
+        XCTAssertNil(remote)
+        let generatedTimes = await generator.generatedTimes()
+        XCTAssertEqual(generatedTimes, [40, 50])
+    }
+
     func testPlaybackRunStateCoversProductionLifecycle() {
         XCTAssertEqual(
             PlaybackRunState.productionLifecycleStates,
@@ -278,6 +370,110 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(events.first?.metadata["releaseID"], "on")
     }
 
+    func testPlaybackPipelineDebugTraceIncludesTorrentReadinessAndStreamURL() async throws {
+        let diagnostics = PlaybackPipelineRecordingDiagnostics()
+        let release = TorrentRelease(
+            id: "debug",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "Debug Release",
+            magnetURI: "magnet:?xt=urn:btih:debug",
+            quality: .fullHD,
+            seeders: 120
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: FallbackRecordingTorrentEngine(preselectsFile: false),
+            availabilityChecker: RecordingAvailabilityChecker(),
+            debugLogger: PlaybackDebugLogger(enabled: true),
+            diagnosticsService: diagnostics
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:603",
+                primaryRelease: release,
+                bandwidthLimits: .unlimited
+            )
+        )
+
+        guard case .ready(let source, _, _) = result else {
+            return XCTFail("Expected ready playback source, got \(result)")
+        }
+
+        XCTAssertEqual(source.url.lastPathComponent, "debug.mkv")
+        let events = await diagnostics.events()
+        let eventsByName = Dictionary(uniqueKeysWithValues: events.compactMap { event -> (String, DiagnosticsEvent)? in
+            guard let name = event.metadata["event"] else { return nil }
+            return (name, event)
+        })
+
+        let sourceSelected = try XCTUnwrap(eventsByName["source.selected"])
+        XCTAssertEqual(sourceSelected.metadata["sourceName"], "Torrentio")
+        XCTAssertEqual(sourceSelected.metadata["infoHash"], "debug")
+
+        let metadataReady = try XCTUnwrap(eventsByName["torrent.metadata.ready"])
+        XCTAssertEqual(metadataReady.metadata["fileCount"], "1")
+        XCTAssertEqual(metadataReady.metadata["peersCount"], "4")
+        XCTAssertEqual(metadataReady.metadata["seedersCount"], "120")
+        XCTAssertEqual(metadataReady.metadata["torrentState"], "streaming")
+
+        let fileSelected = try XCTUnwrap(eventsByName["torrent.file.selected"])
+        XCTAssertEqual(fileSelected.metadata["fileID"], "debug.mkv")
+        XCTAssertEqual(fileSelected.metadata["fileName"], "debug.mkv")
+
+        let streamURLReady = try XCTUnwrap(eventsByName["stream.url.ready"])
+        XCTAssertEqual(streamURLReady.metadata["streamURL"], "file://<local-file>/debug.mkv")
+
+        let streamReady = try XCTUnwrap(eventsByName["stream.ready"])
+        XCTAssertEqual(streamReady.metadata["streamURL"], "file://<local-file>/debug.mkv")
+    }
+
+    func testPlaybackPipelineHandsLocalTorrentStreamToPlayerWithoutBytePreflight() async throws {
+        let diagnostics = PlaybackPipelineRecordingDiagnostics()
+        let localStreamURL = try XCTUnwrap(URL(string: "http://127.0.0.1:11470/stream/session-local/0"))
+        let release = TorrentRelease(
+            id: "local",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "Local Stream Release",
+            magnetURI: "magnet:?xt=urn:btih:local",
+            quality: .fullHD,
+            seeders: 4
+        )
+        let checker = RecordingAvailabilityChecker(
+            responses: ["0": .unavailable(reason: "HTTP 503 while waiting for first torrent piece")]
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: FallbackRecordingTorrentEngine(
+                preselectsFile: false,
+                streamingURL: localStreamURL
+            ),
+            availabilityChecker: checker,
+            debugLogger: PlaybackDebugLogger(enabled: true),
+            diagnosticsService: diagnostics
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:603",
+                primaryRelease: release,
+                bandwidthLimits: .unlimited
+            )
+        )
+
+        guard case .ready(let source, _, _) = result else {
+            return XCTFail("Expected local torrent stream to be handed to the player, got \(result)")
+        }
+
+        XCTAssertEqual(source.url, localStreamURL)
+        let checkedURLs = await checker.checkedURLs()
+        XCTAssertTrue(checkedURLs.isEmpty, "Local torrent streams must not be byte-probed before player buffering.")
+
+        let events = await diagnostics.events()
+        XCTAssertTrue(events.contains { $0.metadata["event"] == "stream.availability.skipped" })
+        XCTAssertFalse(events.contains { $0.metadata["event"] == "stream.availability.start" })
+    }
+
     func testMockPlaybackServicePlaysLocalMediaAndExposesControls() async throws {
         let service: any PlaybackServiceProtocol = MockPlaybackService()
         let source = PlaybackMediaSource(
@@ -508,6 +704,24 @@ final class PlaybackEngineTests: XCTestCase {
     }
 }
 
+private actor RecordingTimelineFrameGenerator: TimelineFrameGenerating {
+    private let data: Data
+    private var times: [Double] = []
+
+    init(data: Data) {
+        self.data = data
+    }
+
+    func frameData(for url: URL, at seconds: Double, width: Int, height: Int) async throws -> Data {
+        times.append(seconds)
+        return data
+    }
+
+    func generatedTimes() -> [Double] {
+        times
+    }
+}
+
 private final class PlaybackTestHTTPFileServer: @unchecked Sendable {
     private let rootURL: URL
     private let listener: NWListener
@@ -653,14 +867,23 @@ private final class PlaybackTestHTTPFileServer: @unchecked Sendable {
 private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
     private let failures: [String: Error]
     private let startDelays: [String: UInt64]
+    private let preselectsFile: Bool
+    private let streamingURL: URL?
     private var startedIDs: [String] = []
     private var removedIDs: [String] = []
     private var sessions: [String: TorrentSession] = [:]
     private var releaseIDsBySessionID: [String: String] = [:]
 
-    init(failures: [String: Error] = [:], startDelays: [String: UInt64] = [:]) {
+    init(
+        failures: [String: Error] = [:],
+        startDelays: [String: UInt64] = [:],
+        preselectsFile: Bool = true,
+        streamingURL: URL? = nil
+    ) {
         self.failures = failures
         self.startDelays = startDelays
+        self.preselectsFile = preselectsFile
+        self.streamingURL = streamingURL
     }
 
     func searchReleases(for item: MediaItem) async throws -> [TorrentRelease] {
@@ -669,6 +892,7 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
 
     func startStreaming(_ release: TorrentRelease) async throws -> TorrentSession {
         startedIDs.append(release.id)
+        let fileID = "\(release.id).mkv"
         let session = TorrentSession(
             id: "session-\(release.id)",
             releaseId: release.id,
@@ -676,8 +900,8 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
             magnetURI: release.magnetURI,
             torrentFileURL: release.torrentFileURL,
             storageURL: URL(fileURLWithPath: "/tmp/session-\(release.id)", isDirectory: true),
-            selectedFileId: "\(release.id).mkv",
-            streamingURL: URL(fileURLWithPath: "/tmp/\(release.id).mkv"),
+            selectedFileId: preselectsFile ? fileID : nil,
+            streamingURL: preselectsFile ? (streamingURL ?? URL(fileURLWithPath: "/tmp/\(fileID)")) : nil,
             isSequentialDownloadEnabled: true
         )
         sessions[session.id] = session
@@ -696,9 +920,12 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
     }
 
     func getFileList(sessionId: String) async throws -> [TorrentFile] {
-        guard let session = sessions[sessionId], let fileID = session.selectedFileId else {
+        guard let session = sessions[sessionId],
+              let releaseID = releaseIDsBySessionID[session.id]
+        else {
             throw TorrentEngineError.sessionNotFound(sessionId)
         }
+        let fileID = session.selectedFileId ?? "\(releaseID).mkv"
         return [
             TorrentFile(
                 id: fileID,
@@ -716,13 +943,21 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
             throw TorrentEngineError.sessionNotFound(sessionId)
         }
         session.selectedFileId = fileId
-        session.streamingURL = URL(fileURLWithPath: "/tmp/\(fileId)")
+        session.streamingURL = streamingURL ?? URL(fileURLWithPath: "/tmp/\(fileId)")
         sessions[sessionId] = session
     }
 
     func setBandwidthLimits(sessionId: String, _ limits: TorrentBandwidthLimits) async throws {
         _ = sessionId
         _ = limits
+    }
+
+    func setDownloadPriority(sessionId: String, fileId: String, priority: TorrentFilePriority) async throws {
+        guard sessions[sessionId] != nil else {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        _ = fileId
+        _ = priority
     }
 
     func getStreamingURL(sessionId: String) async throws -> URL {
