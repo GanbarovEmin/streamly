@@ -88,7 +88,9 @@ final class SearchViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.queryText, "arrival")
         XCTAssertEqual(viewModel.state, .loading)
 
-        try await Task.sleep(nanoseconds: 40_000_000)
+        for _ in 0..<50 where viewModel.state != .loaded {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
 
         XCTAssertEqual(viewModel.state, .loaded)
         XCTAssertEqual(viewModel.results.topMatches.map(\.title), ["Arrival"])
