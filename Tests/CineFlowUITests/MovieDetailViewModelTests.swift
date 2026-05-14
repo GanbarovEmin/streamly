@@ -34,6 +34,71 @@ final class MovieDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPremiumPresentationHighlightsBestReleaseAndHeroMetadata() async throws {
+        let viewModel = MovieDetailViewModel(mediaID: "tmdb:movie:603", provider: MockMovieDetailProvider())
+
+        await viewModel.load()
+
+        let highlight = try XCTUnwrap(viewModel.bestReleaseHighlight)
+        XCTAssertEqual(highlight.releaseID, "matrix-2160p-hdr-remux")
+        XCTAssertEqual(highlight.badge, "Best Release")
+        XCTAssertEqual(highlight.primaryMetadata, "2160p · Dolby Vision · HEVC")
+        XCTAssertEqual(highlight.secondaryMetadata, "92 seeders · 78.4 GB · Archive")
+        XCTAssertEqual(viewModel.primaryWatchActionTitle, "Смотреть лучший релиз")
+        XCTAssertNil(viewModel.releaseFallbackTitle)
+        XCTAssertEqual(viewModel.heroMetadataBadges.map(\.title), ["1999", "2h 16m", "IMDb 8.7", "Sci-Fi", "Action"])
+    }
+
+    @MainActor
+    func testMovieFallbackPresentationKeepsDetailReadableWithoutReleasesCastOrMetadata() async {
+        let viewModel = MovieDetailViewModel(mediaID: "movie:sparse", provider: SparseMovieDetailProvider())
+
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.bestReleaseHighlight)
+        XCTAssertEqual(viewModel.primaryWatchActionTitle, "Выбрать локальный файл")
+        XCTAssertEqual(viewModel.releaseFallbackTitle, "Релизы пока не найдены")
+        XCTAssertEqual(viewModel.castFallbackTitle, "Актёры пока не загружены")
+        XCTAssertEqual(viewModel.heroMetadataBadges.map(\.title), ["Год неизвестен", "Runtime n/a", "IMDb n/a"])
+    }
+
+    @MainActor
+    func testMovieDetailUsesLocalRecommendationServiceAndDisableSettingHidesSimilar() async {
+        let localRecommendation = MediaItem(
+            id: "tmdb:movie:900",
+            title: "Local Similar",
+            kind: .movie,
+            overview: "Fixture",
+            releaseYear: 2025,
+            posterPath: nil
+        )
+        let recommendationService = DetailRecommendationFixtureService(items: [localRecommendation])
+        let enabledViewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: SparseMovieDetailProvider(),
+            settingsRepository: CoreMockSettingsRepository(settings: AppSettings()),
+            recommendationService: recommendationService
+        )
+
+        await enabledViewModel.load()
+
+        XCTAssertEqual(enabledViewModel.similar.map(\.title), ["Local Similar"])
+
+        var settings = AppSettings()
+        settings.recommendations.localRecommendationsEnabled = false
+        let disabledViewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: SparseMovieDetailProvider(),
+            settingsRepository: CoreMockSettingsRepository(settings: settings),
+            recommendationService: recommendationService
+        )
+
+        await disabledViewModel.load()
+
+        XCTAssertTrue(disabledViewModel.similar.isEmpty)
+    }
+
+    @MainActor
     func testGlobalQualityPreferencesAffectDetailReleaseRanking() async {
         let settingsRepository = CoreMockSettingsRepository(
             settings: AppSettings(
@@ -134,6 +199,28 @@ final class MovieDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRemoveFromHistoryClearsMovieProgressWithoutRemovingLibraryState() async throws {
+        let repository = MovieDetailInMemoryLibraryRepository()
+        let viewModel = MovieDetailViewModel(
+            mediaID: "tmdb:movie:603",
+            provider: MockMovieDetailProvider(),
+            libraryRepository: repository
+        )
+        await viewModel.load()
+        viewModel.addToLibrary()
+        viewModel.markWatched()
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        await viewModel.removeFromHistory()
+
+        XCTAssertTrue(viewModel.isInLibrary)
+        XCTAssertFalse(viewModel.isWatched)
+        XCTAssertNil(viewModel.progress)
+        let watchedItems = try await repository.watchedItems()
+        XCTAssertTrue(watchedItems.isEmpty)
+    }
+
+    @MainActor
     func testContinueWatchingStateUsesPlaybackProgress() async {
         let viewModel = MovieDetailViewModel(mediaID: "tmdb:movie:603", provider: MockMovieDetailProvider())
 
@@ -223,6 +310,23 @@ final class MovieDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.state, .empty)
         XCTAssertNil(viewModel.movie)
     }
+
+    @MainActor
+    func testRefreshMetadataAndClearItemCacheDelegateToProviderWithoutBreakingLoadedUI() async {
+        let provider = RefreshableMovieDetailProvider()
+        let viewModel = MovieDetailViewModel(mediaID: "tmdb:movie:603", provider: provider)
+
+        await viewModel.load()
+        XCTAssertEqual(viewModel.movie?.title, "The Matrix")
+
+        await viewModel.refreshMetadata()
+        XCTAssertEqual(viewModel.movie?.title, "The Matrix Refreshed")
+        XCTAssertEqual(viewModel.state, .loaded)
+
+        await viewModel.clearMetadataCacheForItem()
+        let calls = await provider.calls()
+        XCTAssertEqual(calls, ["detail:tmdb:movie:603", "refresh:tmdb:movie:603", "clear:tmdb:movie:603"])
+    }
 }
 
 private struct MovieDetailLoadStep: Sendable {
@@ -263,6 +367,76 @@ private actor SequencedMovieDetailProvider: MovieDetailProviderProtocol {
     }
 }
 
+private actor RefreshableMovieDetailProvider: MovieDetailProviderProtocol {
+    private var storedCalls: [String] = []
+    private var refreshed = false
+
+    func movieDetail(id: String) async throws -> MovieDetailResponse? {
+        storedCalls.append("detail:\(id)")
+        return response(id: id, title: refreshed ? "The Matrix Refreshed" : "The Matrix")
+    }
+
+    func refreshMovieDetail(id: String) async throws -> MovieDetailResponse? {
+        storedCalls.append("refresh:\(id)")
+        refreshed = true
+        return response(id: id, title: "The Matrix Refreshed")
+    }
+
+    func clearMetadataCache(id: String) async throws {
+        storedCalls.append("clear:\(id)")
+    }
+
+    func calls() -> [String] {
+        storedCalls
+    }
+
+    private func response(id: String, title: String) -> MovieDetailResponse {
+        MovieDetailResponse(
+            movie: MovieDetail(
+                id: id,
+                title: title,
+                originalTitle: "The Matrix",
+                year: 1999,
+                runtime: "2h 16m",
+                genres: ["Sci-Fi"],
+                tmdbRating: "8.2",
+                imdbRating: "8.7",
+                overview: "Fixture.",
+                backdropAccentIndex: 1
+            ),
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progress: nil
+        )
+    }
+}
+
+private struct SparseMovieDetailProvider: MovieDetailProviderProtocol {
+    func movieDetail(id: String) async throws -> MovieDetailResponse? {
+        MovieDetailResponse(
+            movie: MovieDetail(
+                id: id,
+                title: "Untitled",
+                originalTitle: "",
+                year: 0,
+                runtime: "",
+                genres: [],
+                tmdbRating: "",
+                imdbRating: "",
+                overview: "",
+                backdropAccentIndex: 0
+            ),
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progress: nil
+        )
+    }
+}
+
 private struct FailingMovieDetailProvider: MovieDetailProviderProtocol {
     func movieDetail(id: String) async throws -> MovieDetailResponse? {
         throw MovieDetailFixtureError()
@@ -278,6 +452,18 @@ private struct MovieDetailFixtureError: Error, CineFlowErrorConvertible {
             recoverySuggestion: "Try again in a moment.",
             logLevel: .error
         )
+    }
+}
+
+private struct DetailRecommendationFixtureService: RecommendationServiceProtocol {
+    let items: [MediaItem]
+
+    func homeRecommendations(limit: Int) async throws -> [RecommendationSection] {
+        []
+    }
+
+    func recommendations(for item: MediaItem, seedSimilar: [MediaItem], limit: Int) async throws -> [MediaItem] {
+        Array(items.prefix(limit))
     }
 }
 
@@ -339,7 +525,7 @@ final class InMemoryReleaseSelectionStore: ReleaseSelectionStoreProtocol {
     }
 }
 
-private actor MovieDetailInMemoryLibraryRepository: LibraryRepositoryProtocol {
+actor MovieDetailInMemoryLibraryRepository: LibraryRepositoryProtocol {
     private var storedItems: [MediaItem] = []
     private var storedFavorites: [MediaItem] = []
     private var storedWatchedItems: [WatchedMediaItem] = []
@@ -357,6 +543,10 @@ private actor MovieDetailInMemoryLibraryRepository: LibraryRepositoryProtocol {
         storedFavorites.removeAll { $0.id == mediaID }
         storedWatchedItems.removeAll { $0.item.id == mediaID }
         storedRatedItems.removeAll { $0.item.id == mediaID }
+    }
+
+    func removeFromHistory(mediaID: String) async throws {
+        storedWatchedItems.removeAll { $0.item.id == mediaID }
     }
 
     func favorites() async throws -> [MediaItem] { storedFavorites }

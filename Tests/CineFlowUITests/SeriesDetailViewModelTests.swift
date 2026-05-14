@@ -58,6 +58,60 @@ final class SeriesDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPremiumSeriesPresentationShowsContinueEpisodeAndBestReleaseScope() async throws {
+        let viewModel = SeriesDetailViewModel(seriesID: "tmdb:tv:1399", provider: MockSeriesDetailProvider())
+
+        await viewModel.load()
+
+        let episode = try XCTUnwrap(viewModel.selectedEpisodePresentation)
+        let highlight = try XCTUnwrap(viewModel.bestReleaseHighlight)
+        XCTAssertEqual(viewModel.heroMetadataBadges.map(\.title), ["2011-2019", "2 seasons", "IMDb 8.4", "Drama", "Fantasy"])
+        XCTAssertEqual(episode.label, "S01E01")
+        XCTAssertEqual(episode.progressFraction ?? -1, 1, accuracy: 0.001)
+        XCTAssertEqual(viewModel.continueEpisodeLabel, "S01E02 The Kingsroad")
+        XCTAssertEqual(highlight.releaseID, "got-series-2160p")
+        XCTAssertEqual(highlight.badge, "Best Release")
+        XCTAssertEqual(highlight.scopeLabel, "Whole series")
+        XCTAssertEqual(viewModel.primaryWatchActionTitle, "Продолжить S01E02")
+    }
+
+    @MainActor
+    func testSeriesFallbackPresentationKeepsDetailReadableWithoutReleasesCastOrEpisodes() async {
+        let viewModel = SeriesDetailViewModel(seriesID: "series:sparse", provider: SparseSeriesDetailProvider())
+
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.selectedEpisodePresentation)
+        XCTAssertNil(viewModel.bestReleaseHighlight)
+        XCTAssertEqual(viewModel.primaryWatchActionTitle, "Выбрать локальный файл")
+        XCTAssertEqual(viewModel.releaseFallbackTitle, "Релизы для серии пока не найдены")
+        XCTAssertEqual(viewModel.castFallbackTitle, "Актёры пока не загружены")
+        XCTAssertEqual(viewModel.episodeFallbackTitle, "Список серий пока пуст")
+    }
+
+    @MainActor
+    func testSeriesDetailUsesLocalRecommendationServiceForSimilarSeries() async {
+        let localRecommendation = MediaItem(
+            id: "tmdb:tv:900",
+            title: "Local Similar Series",
+            kind: .series,
+            overview: "Fixture",
+            releaseYear: 2025,
+            posterPath: nil
+        )
+        let viewModel = SeriesDetailViewModel(
+            seriesID: "series:sparse",
+            provider: SparseSeriesDetailProvider(),
+            settingsRepository: CoreMockSettingsRepository(settings: AppSettings()),
+            recommendationService: SeriesRecommendationFixtureService(items: [localRecommendation])
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.similar.map(\.title), ["Local Similar Series"])
+    }
+
+    @MainActor
     func testContinueWatchingAdvancesToNextEpisodeAfterCompletionThreshold() async {
         let viewModel = SeriesDetailViewModel(seriesID: "tmdb:tv:1399", provider: MockSeriesDetailProvider())
         await viewModel.load()
@@ -111,6 +165,49 @@ final class SeriesDetailViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.isInLibrary)
         XCTAssertEqual(viewModel.selectedListName, "Weekend")
+    }
+
+    @MainActor
+    func testSeriesRatingPersistsThroughLibraryRepository() async throws {
+        let repository = MovieDetailInMemoryLibraryRepository()
+        let viewModel = SeriesDetailViewModel(
+            seriesID: "tmdb:tv:1399",
+            provider: MockSeriesDetailProvider(),
+            libraryRepository: repository
+        )
+        await viewModel.load()
+
+        viewModel.setUserRating(9)
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        XCTAssertEqual(viewModel.userRating, 9)
+        let ratedItems = try await repository.ratedItems()
+        XCTAssertEqual(ratedItems.map(\.item.id), ["tmdb:tv:1399"])
+        XCTAssertEqual(ratedItems.first?.rating, 9)
+    }
+
+    @MainActor
+    func testRemoveFromHistoryClearsSeriesProgressWithoutRemovingLibraryState() async throws {
+        let repository = MovieDetailInMemoryLibraryRepository()
+        let viewModel = SeriesDetailViewModel(
+            seriesID: "tmdb:tv:1399",
+            provider: MockSeriesDetailProvider(),
+            libraryRepository: repository
+        )
+        await viewModel.load()
+        viewModel.addToLibrary()
+        viewModel.updateProgress(episodeID: "got-s1-e2", positionSeconds: 1_800, durationSeconds: 3_600)
+        viewModel.playEpisode(id: "got-s1-e2")
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        await viewModel.removeFromHistory()
+
+        XCTAssertTrue(viewModel.isInLibrary)
+        XCTAssertTrue(viewModel.progressByEpisodeID.isEmpty)
+        XCTAssertNil(viewModel.lastWatchedEpisodeID)
+        XCTAssertNil(viewModel.selectedEpisodePresentation?.progressFraction)
+        let watchedItems = try await repository.watchedItems()
+        XCTAssertTrue(watchedItems.isEmpty)
     }
 
     @MainActor
@@ -242,6 +339,122 @@ final class SeriesDetailViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state, .empty)
         XCTAssertNil(viewModel.series)
+    }
+
+    @MainActor
+    func testRefreshMetadataAndClearItemCacheDelegateToProviderWithoutBreakingLoadedUI() async {
+        let provider = RefreshableSeriesDetailProvider()
+        let viewModel = SeriesDetailViewModel(seriesID: "tmdb:tv:1399", provider: provider)
+
+        await viewModel.load()
+        await viewModel.refreshMetadata()
+        await viewModel.clearMetadataCacheForItem()
+
+        XCTAssertEqual(viewModel.state, .loaded)
+        XCTAssertEqual(viewModel.series?.title, "Game of Thrones Refreshed")
+        let calls = await provider.recordedCalls()
+        XCTAssertEqual(calls, [
+            "detail:tmdb:tv:1399",
+            "refresh:tmdb:tv:1399",
+            "clear:tmdb:tv:1399"
+        ])
+    }
+}
+
+private actor RefreshableSeriesDetailProvider: SeriesDetailProviderProtocol {
+    private var calls: [String] = []
+
+    func seriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        calls.append("detail:\(id)")
+        return response(id: id, title: "Game of Thrones")
+    }
+
+    func refreshSeriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        calls.append("refresh:\(id)")
+        return response(id: id, title: "Game of Thrones Refreshed")
+    }
+
+    func clearMetadataCache(id: String) async throws {
+        calls.append("clear:\(id)")
+    }
+
+    func recordedCalls() -> [String] {
+        calls
+    }
+
+    private func response(id: String, title: String) -> SeriesDetailResponse {
+        SeriesDetailResponse(
+            series: SeriesDetail(
+                id: id,
+                title: title,
+                yearRange: "2011-2019",
+                seasonsCount: 1,
+                rating: "8.4",
+                genres: ["Drama", "Fantasy"],
+                overview: "Noble families fight for control.",
+                backdropAccentIndex: 1
+            ),
+            seasons: [
+                SeriesSeason(
+                    id: "got-s1",
+                    seasonNumber: 1,
+                    title: "Season 1",
+                    episodes: [
+                        SeriesEpisode(
+                            id: "got-s1-e1",
+                            seasonID: "got-s1",
+                            seasonNumber: 1,
+                            episodeNumber: 1,
+                            title: "Winter Is Coming",
+                            runtime: "62m",
+                            overview: "Pilot."
+                        )
+                    ]
+                )
+            ],
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progressByEpisodeID: [:],
+            lastWatchedEpisodeID: nil
+        )
+    }
+}
+
+private struct SparseSeriesDetailProvider: SeriesDetailProviderProtocol {
+    func seriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        SeriesDetailResponse(
+            series: SeriesDetail(
+                id: id,
+                title: "Untitled Show",
+                yearRange: "",
+                seasonsCount: 0,
+                rating: "",
+                genres: [],
+                overview: "",
+                backdropAccentIndex: 0
+            ),
+            seasons: [],
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progressByEpisodeID: [:],
+            lastWatchedEpisodeID: nil
+        )
+    }
+}
+
+private struct SeriesRecommendationFixtureService: RecommendationServiceProtocol {
+    let items: [MediaItem]
+
+    func homeRecommendations(limit: Int) async throws -> [RecommendationSection] {
+        []
+    }
+
+    func recommendations(for item: MediaItem, seedSimilar: [MediaItem], limit: Int) async throws -> [MediaItem] {
+        Array(items.prefix(limit))
     }
 }
 

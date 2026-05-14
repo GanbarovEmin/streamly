@@ -17,13 +17,16 @@ enum DatabaseEncoding {
 }
 
 func mediaItem(from row: Row) -> MediaItem {
-    MediaItem(
+    let metadataJSON: String? = row["metadata_json"]
+    let metadata = metadataJSON.flatMap { try? DatabaseEncoding.decode(MediaMetadata.self, from: $0) }
+    return MediaItem(
         id: row["id"],
         title: row["title"],
         kind: MediaKind(rawValue: row["kind"]) ?? .movie,
         overview: row["overview"],
         releaseYear: row["release_year"],
-        posterPath: row["poster_path"]
+        posterPath: row["poster_path"],
+        metadata: metadata
     )
 }
 

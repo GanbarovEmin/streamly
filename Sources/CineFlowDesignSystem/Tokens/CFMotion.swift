@@ -14,6 +14,7 @@ public struct CFMotionToken: Equatable, Sendable {
     public static let quick = CFMotionToken(duration: 0.14, response: 0.24, dampingFraction: 0.86)
     public static let standard = CFMotionToken(duration: 0.22, response: 0.30, dampingFraction: 0.84)
     public static let spring = CFMotionToken(duration: 0.28, response: 0.34, dampingFraction: 0.82)
+    public static let cinematic = CFMotionToken(duration: 0.42, response: 0.46, dampingFraction: 0.88)
 }
 
 public enum CFMotion {
@@ -22,6 +23,13 @@ public enum CFMotion {
     public static let spring = Animation.spring(
         response: CFMotionToken.spring.response,
         dampingFraction: CFMotionToken.spring.dampingFraction
+    )
+    public static let cinematic = Animation.timingCurve(
+        0.20,
+        0.84,
+        0.24,
+        1.0,
+        duration: CFMotionToken.cinematic.duration
     )
     public static let hoverScale: CGFloat = 1.02
     public static let activeScale: CGFloat = 0.98

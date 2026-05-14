@@ -29,11 +29,33 @@ public struct PlayerView: View {
 
     public var body: some View {
         ZStack(alignment: .bottom) {
+            cinematicPlayerBackground
+                .ignoresSafeArea()
+
             playerRenderSurface
-                .overlay(Color.black.opacity(viewModel.dimBackgroundAroundVideo ? 0.22 : 0).allowsHitTesting(false))
+                .overlay(Color.black.opacity(viewModel.dimBackgroundAroundVideo ? CFCinematicStyle.dimmedPlayerOpacity : 0).allowsHitTesting(false))
+                .overlay(alignment: .top) {
+                    CinematicScrim(edge: .top)
+                        .frame(height: viewModel.controlsAreVisible ? 190 : 86)
+                        .opacity(viewModel.controlsAreVisible ? 1 : 0.34)
+                        .cfAnimation(CFMotion.cinematic, value: viewModel.controlsAreVisible, reduceMotion: reduceMotion)
+                }
+                .overlay(alignment: .bottom) {
+                    CinematicScrim(edge: .bottom)
+                        .frame(height: viewModel.controlsAreVisible ? 250 : 118)
+                        .opacity(viewModel.controlsAreVisible ? 1 : 0.42)
+                        .cfAnimation(CFMotion.cinematic, value: viewModel.controlsAreVisible, reduceMotion: reduceMotion)
+                }
                 .overlay(renderOverlay)
+                .overlay(mouseActivityOverlay)
                 .overlay(keyboardInput)
                 .ignoresSafeArea()
+
+            subtitleOverlay
+                .padding(.bottom, viewModel.controlsAreVisible ? 174 : 42)
+                .opacity(viewModel.activeSubtitleText == nil ? 0 : 1)
+                .allowsHitTesting(false)
+                .cfAnimation(CFMotion.standard, value: viewModel.controlsAreVisible, reduceMotion: reduceMotion)
 
             controls
                 .opacity(viewModel.controlsAreVisible ? 1 : 0)
@@ -43,14 +65,16 @@ public struct PlayerView: View {
         }
         .background(CFColors.backgroundPrimary)
         .onHover { hovering in
-            hovering ? viewModel.showControlsTemporarily() : viewModel.hideControls()
+            if hovering {
+                showCinematicControls()
+            }
         }
         .onTapGesture {
-            viewModel.showControlsTemporarily()
+            showCinematicControls()
         }
         .task {
             await viewModel.start()
-            viewModel.showControlsTemporarily()
+            showCinematicControls()
         }
         .onDisappear {
             Task { await viewModel.saveProgressOnClose() }
@@ -72,6 +96,24 @@ public struct PlayerView: View {
         .frame(width: 0, height: 0)
     }
 
+    private var mouseActivityOverlay: some View {
+        PlayerMouseActivityView {
+            showCinematicControls()
+        }
+    }
+
+    private func showCinematicControls() {
+        viewModel.showControlsTemporarily(autoHideAfter: CFCinematicStyle.playerControlAutoHideDelay)
+    }
+
+    private var cinematicPlayerBackground: some View {
+        ZStack {
+            CFColors.backgroundPrimary
+            CinematicAmbientGlow(reduceMotion: reduceMotion)
+                .opacity(viewModel.dimBackgroundAroundVideo ? 1 : 0.64)
+        }
+    }
+
     @ViewBuilder
     private var playerRenderSurface: some View {
         if let player = viewModel.avPlayer {
@@ -84,17 +126,27 @@ public struct PlayerView: View {
     private var renderOverlay: some View {
         VStack {
             HStack(spacing: CFSpacing.md) {
-                backButton
+                HStack(spacing: CFSpacing.md) {
+                    backButton
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(viewModel.status.media?.title ?? t(.playerTitleFallback))
-                        .font(CFTypography.title)
-                        .foregroundStyle(CFColors.textPrimary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(viewModel.status.media?.title ?? t(.playerTitleFallback))
+                            .font(CFTypography.bodyEmphasis)
+                            .foregroundStyle(CFColors.textPrimary)
+                            .lineLimit(1)
 
-                    Text(sourceInfo)
-                        .font(CFTypography.caption)
-                        .foregroundStyle(CFColors.textSecondary)
+                        Text(sourceInfo)
+                            .font(CFTypography.caption)
+                            .foregroundStyle(CFColors.textSecondary)
+                            .lineLimit(1)
+                    }
                 }
+                .padding(.horizontal, CFSpacing.md)
+                .frame(height: 54)
+                .cinematicChrome(in: Capsule())
+                .opacity(viewModel.controlsAreVisible ? 1 : 0)
+                .allowsHitTesting(viewModel.controlsAreVisible)
+                .cfAnimation(CFMotion.cinematic, value: viewModel.controlsAreVisible, reduceMotion: reduceMotion)
 
                 Spacer()
 
@@ -128,6 +180,21 @@ public struct PlayerView: View {
                 }
             }
             .padding(.bottom, 112)
+        }
+    }
+
+    @ViewBuilder
+    private var subtitleOverlay: some View {
+        if let text = viewModel.activeSubtitleText, !text.isEmpty {
+            Text(text)
+                .font(.system(size: viewModel.status.subtitleFontSize, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.95), radius: 2, x: 0, y: 1)
+                .shadow(color: .black.opacity(0.85), radius: 5, x: 0, y: 2)
+                .padding(.horizontal, CFSpacing.xl)
+                .padding(.vertical, CFSpacing.sm)
+                .frame(maxWidth: 980)
         }
     }
 
@@ -479,14 +546,8 @@ public struct PlayerView: View {
             }
         }
         .padding(CFSpacing.lg)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
-        .background(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous).fill(CFColors.railFill))
+        .cinematicChrome(in: RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous)
-                .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-        )
-        .cfShadow(.elevated)
         .padding(.horizontal, CFSpacing.xl)
         .padding(.bottom, CFSpacing.lg)
     }
@@ -855,6 +916,51 @@ private struct PlayerKeyboardInputView: NSViewRepresentable {
                     return nil
                 }
             }
+        }
+    }
+}
+
+private struct PlayerMouseActivityView: NSViewRepresentable {
+    let onActivity: () -> Void
+
+    func makeNSView(context: Context) -> MouseActivityCaptureView {
+        let view = MouseActivityCaptureView()
+        view.onActivity = onActivity
+        return view
+    }
+
+    func updateNSView(_ nsView: MouseActivityCaptureView, context: Context) {
+        nsView.onActivity = onActivity
+    }
+
+    final class MouseActivityCaptureView: NSView {
+        var onActivity: (() -> Void)?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(
+                NSTrackingArea(
+                    rect: bounds,
+                    options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+                    owner: self,
+                    userInfo: nil
+                )
+            )
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            onActivity?()
+            super.mouseMoved(with: event)
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            onActivity?()
+            super.mouseEntered(with: event)
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            nil
         }
     }
 }

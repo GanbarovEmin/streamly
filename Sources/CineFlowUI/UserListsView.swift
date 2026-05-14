@@ -176,6 +176,10 @@ public struct UserListsView: View {
                             ))
                             .textFieldStyle(.roundedBorder)
                         }
+
+                        if list.isDefault {
+                            watchlistToolbar
+                        }
                     }
                     .padding(CFSpacing.xl)
                     .cfPanelBackground(fill: CFColors.panelFill)
@@ -192,19 +196,65 @@ public struct UserListsView: View {
                         }
                             .frame(maxWidth: .infinity, minHeight: 340)
                     } else {
+                        if let suggestion = viewModel.cleanupSuggestions.first {
+                            watchlistCleanupBanner(suggestion)
+                        }
+
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 170, maximum: 230), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
-                            ForEach(viewModel.visibleItems) { item in
-                                PosterCard(model: viewModel.cardModel(for: item)) {
-                                    navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
-                                } imageDataLoader: { url in
-                                    try await imagePipeline.data(for: url)
+                            ForEach(viewModel.watchlistItems) { watchlistItem in
+                                VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                                    PosterCard(
+                                        model: viewModel.cardModel(for: watchlistItem.item),
+                                        action: {
+                                            navigationCoordinator.navigate(to: .mediaDetail(id: watchlistItem.item.id))
+                                        },
+                                        menuActions: watchlistCardMenuActions(for: watchlistItem.item),
+                                        imageDataLoader: { url in
+                                            try await imagePipeline.data(for: url)
+                                        }
+                                    )
+
+                                    watchlistMetadataRow(watchlistItem)
                                 }
                                 .contextMenu {
                                     Button("Открыть", systemImage: "info.circle") {
-                                        navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+                                        navigationCoordinator.navigate(to: .mediaDetail(id: watchlistItem.item.id))
+                                    }
+                                    Menu("Priority") {
+                                        ForEach(WatchlistPriority.allCases) { priority in
+                                            Button(priorityTitle(priority)) {
+                                                Task {
+                                                    try? await viewModel.setWatchlistPriority(
+                                                        mediaID: watchlistItem.item.id,
+                                                        priority: priority
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Menu("Remind me later") {
+                                        Button("Tomorrow") {
+                                            Task {
+                                                try? await viewModel.remindLater(
+                                                    mediaID: watchlistItem.item.id,
+                                                    until: Date().addingTimeInterval(24 * 60 * 60)
+                                                )
+                                            }
+                                        }
+                                        Button("Next week") {
+                                            Task {
+                                                try? await viewModel.remindLater(
+                                                    mediaID: watchlistItem.item.id,
+                                                    until: Date().addingTimeInterval(7 * 24 * 60 * 60)
+                                                )
+                                            }
+                                        }
+                                        Button("Clear reminder") {
+                                            Task { try? await viewModel.remindLater(mediaID: watchlistItem.item.id, until: nil) }
+                                        }
                                     }
                                     Button("Удалить из списка", systemImage: "minus.circle") {
-                                        Task { try? await viewModel.remove(item.id) }
+                                        Task { try? await viewModel.remove(watchlistItem.item.id) }
                                     }
                                 }
                             }
@@ -220,11 +270,152 @@ public struct UserListsView: View {
         .scrollIndicators(.hidden)
     }
 
+    private var watchlistToolbar: some View {
+        HStack(spacing: CFSpacing.md) {
+            Picker("Sort", selection: Binding(
+                get: { viewModel.watchlistSortOrder },
+                set: { viewModel.setWatchlistSortOrder($0) }
+            )) {
+                ForEach(WatchlistSortOrder.allCases) { order in
+                    Text(sortTitle(order)).tag(order)
+                }
+            }
+            .frame(width: 220)
+
+            Text("Priority, reminders and release badges stay local and sync-ready.")
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textMuted)
+
+            Spacer()
+        }
+    }
+
+    private func watchlistCardMenuActions(for item: MediaItem) -> CFMediaCardMenuActions {
+        CFMediaCardMenuActions(
+            availability: CFMediaCardMenuAvailability(
+                canAddToLibrary: false,
+                canAddToWatchlist: false,
+                canAddToList: false,
+                canHide: false,
+                canFindBestRelease: !item.rankedReleases.isEmpty,
+                canClearProgress: false,
+                canTuneRecommendations: false
+            ),
+            watch: { item in
+                navigationCoordinator.navigate(to: .player(mediaID: item.id))
+            },
+            details: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            library: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            watchlist: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            list: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            rate: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            hideTitle: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            fixMetadata: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            findBestRelease: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            }
+        )
+    }
+
+    private func watchlistCleanupBanner(_ suggestion: WatchlistPresentationItem) -> some View {
+        HStack(spacing: CFSpacing.md) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(CFColors.accentPrimary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Already watched")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+                Text("\(suggestion.item.displayTitle) can be removed from Watchlist.")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textSecondary)
+            }
+            Spacer()
+            SecondaryButton("Keep", systemImage: "bookmark") {}
+            PrimaryButton("Remove", systemImage: "minus.circle") {
+                Task { try? await viewModel.acceptCleanupSuggestion(mediaID: suggestion.item.id) }
+            }
+        }
+        .padding(CFSpacing.lg)
+        .cfPanelBackground(fill: CFColors.panelFill)
+    }
+
+    private func watchlistMetadataRow(_ item: WatchlistPresentationItem) -> some View {
+        VStack(alignment: .leading, spacing: CFSpacing.xs) {
+            HStack(spacing: CFSpacing.xs) {
+                QualityBadge(priorityTitle(item.priority))
+                ForEach(item.badges, id: \.self) { badge in
+                    QualityBadge(badgeTitle(badge))
+                }
+            }
+            .lineLimit(1)
+
+            if let remindLaterAt = item.remindLaterAt {
+                Label("Remind \(dateLabel(remindLaterAt))", systemImage: "bell")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+            }
+        }
+    }
+
     private func dateLabel(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+
+    private func sortTitle(_ order: WatchlistSortOrder) -> String {
+        switch order {
+        case .priority:
+            "Priority"
+        case .addedDate:
+            "Added"
+        case .rating:
+            "Rating"
+        case .runtime:
+            "Runtime"
+        case .quality:
+            "Quality"
+        case .mood:
+            "Mood"
+        }
+    }
+
+    private func priorityTitle(_ priority: WatchlistPriority) -> String {
+        switch priority {
+        case .high:
+            "High"
+        case .normal:
+            "Normal"
+        case .later:
+            "Later"
+        }
+    }
+
+    private func badgeTitle(_ badge: WatchlistBadge) -> String {
+        switch badge {
+        case .availableIn4KHDR:
+            "4K/HDR"
+        case .betterReleaseAvailable:
+            "Better"
+        case .russianAudioAvailable:
+            "RU Audio"
+        }
     }
 
     private var selectedLanguage: AppLanguage {

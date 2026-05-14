@@ -9,6 +9,7 @@ public struct SeriesDetailView: View {
     @StateObject private var viewModel: SeriesDetailViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
+    @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var episodeSearchQuery = ""
     @State private var showingEpisodeReleases = false
 
@@ -19,6 +20,7 @@ public struct SeriesDetailView: View {
         detailProvider: (any SeriesDetailProviderProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
         settingsRepository: (any SettingsRepositoryProtocol)? = nil,
+        recommendationService: (any RecommendationServiceProtocol)? = nil,
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         _viewModel = StateObject(wrappedValue: SeriesDetailViewModel(
@@ -27,6 +29,7 @@ public struct SeriesDetailView: View {
             libraryRepository: libraryRepository,
             userMediaSourceRepository: userMediaSourceRepository,
             settingsRepository: settingsRepository,
+            recommendationService: recommendationService,
             diagnosticsService: diagnosticsService
         ))
         self.navigationCoordinator = navigationCoordinator
@@ -69,9 +72,25 @@ public struct SeriesDetailView: View {
             }
         case .loaded:
             if let series = viewModel.series {
-                cinematicSeries(series)
+                seriesDetailLayout(series)
             }
         }
+    }
+
+    private func seriesDetailLayout(_ series: SeriesDetail) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: CFSpacing.xl) {
+                cinematicSeries(series)
+
+                VStack(alignment: .leading, spacing: CFSpacing.lg) {
+                    tabs
+                    tabContent
+                }
+                .padding(.horizontal, CFSpacing.xxl)
+                .padding(.bottom, CFSpacing.xxl)
+            }
+        }
+        .scrollIndicators(.visible)
     }
 
     private func cinematicSeries(_ series: SeriesDetail) -> some View {
@@ -81,10 +100,13 @@ public struct SeriesDetailView: View {
                 MovieBackdrop(accentIndex: series.backdropAccentIndex, title: series.title, backdropURL: series.backdropURL)
                     .ignoresSafeArea()
 
+                CinematicAmbientGlow(reduceMotion: reduceMotion)
+                    .ignoresSafeArea()
+
                 LinearGradient(
                     colors: [
-                        CFColors.backgroundPrimary.opacity(0.86),
-                        CFColors.backgroundPrimary.opacity(0.48),
+                        CFColors.backgroundPrimary.opacity(0.90),
+                        CFColors.backgroundPrimary.opacity(0.52),
                         CFColors.backgroundPrimary.opacity(0.18)
                     ],
                     startPoint: .leading,
@@ -100,10 +122,15 @@ public struct SeriesDetailView: View {
                 .ignoresSafeArea()
 
                 HStack(alignment: .top, spacing: CFSpacing.lg) {
-                    seriesMetadataPanel(series, compact: proxy.size.width < 1180)
-                        .padding(.leading, CFSpacing.xxl)
-                        .padding(.top, CFSpacing.xxl + CFSpacing.md)
-                        .padding(.bottom, 116)
+                    HStack(alignment: .top, spacing: CFSpacing.xl) {
+                        poster(series)
+                            .padding(.top, CFSpacing.xs)
+                            .shadow(color: .black.opacity(0.42), radius: 32, x: 0, y: 24)
+                        seriesMetadataPanel(series, compact: proxy.size.width < 1180)
+                    }
+                    .padding(.leading, CFSpacing.xxl)
+                    .padding(.top, CFSpacing.xxl + CFSpacing.md)
+                    .padding(.bottom, 116)
 
                     Spacer(minLength: CFSpacing.lg)
 
@@ -119,8 +146,10 @@ public struct SeriesDetailView: View {
                     .padding(.leading, CFSpacing.xxl)
                     .padding(.bottom, CFSpacing.xl)
             }
+            .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 1.006, anchor: .center)))
         }
-        .frame(minHeight: 720)
+        .frame(minHeight: CFCinematicStyle.detailHeroMinHeight)
+        .cfAnimation(CFCinematicStyle.transitionAnimation(reduceMotion: reduceMotion), value: series.id, reduceMotion: reduceMotion)
     }
 
     private func seriesMetadataPanel(_ series: SeriesDetail, compact: Bool) -> some View {
@@ -137,7 +166,7 @@ public struct SeriesDetailView: View {
                         Text(episode.runtime)
                     }
                     Text(series.yearRange)
-                    Text(series.rating)
+                    Text(viewModel.ratingSummary.sources.first?.label ?? "Rating n/a")
                     IMDbBadge()
                 }
                 .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -146,6 +175,22 @@ public struct SeriesDetailView: View {
 
             seriesMetadataSection(title: "ЖАНРЫ", values: series.genres)
             seriesMetadataSection(title: "АКТЁРЫ", values: viewModel.cast.prefix(3).map(\.name))
+
+            if let highlight = viewModel.bestReleaseHighlight {
+                DetailReleaseHighlightView(
+                    highlight: highlight,
+                    actionTitle: viewModel.primaryWatchActionTitle
+                ) {
+                    if let episode = viewModel.selectedEpisode {
+                        playBestSeries(series, episode: episode)
+                    } else {
+                        playSeries(series)
+                    }
+                }
+            } else if let fallbackTitle = viewModel.releaseFallbackTitle {
+                DetailFallbackBlock(title: fallbackTitle, systemImage: "antenna.radiowaves.left.and.right.slash")
+                    .frame(maxWidth: 420)
+            }
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("ОПИСАНИЕ")
@@ -207,10 +252,10 @@ public struct SeriesDetailView: View {
     private var episodeBrowserRail: some View {
         VStack(alignment: .leading, spacing: 20) {
             Toggle(isOn: Binding(
-                get: { viewModel.episodeNotificationsEnabled },
-                set: { value in Task { await viewModel.setEpisodeNotificationsEnabled(value) } }
+                get: { viewModel.isSeriesTracked },
+                set: { value in Task { await viewModel.setSeriesTracked(value) } }
             )) {
-                Text("Получать уведомления о новых эпизодах")
+                Text("Track Series")
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textPrimary)
             }
@@ -360,6 +405,12 @@ public struct SeriesDetailView: View {
                 DockIconButton(systemImage: "heart", title: "В список") {
                     viewModel.addToList("Хочу посмотреть")
                 }
+                DockIconButton(systemImage: "star.fill", title: viewModel.userRating.map { "Оценка \($0)/10" } ?? "Оценить") {
+                    viewModel.setUserRating(8)
+                }
+                DockIconButton(systemImage: viewModel.isSeriesTracked ? "bell.badge.fill" : "bell", title: viewModel.isSeriesTracked ? "Tracked Series" : "Track Series") {
+                    Task { await viewModel.setSeriesTracked(!viewModel.isSeriesTracked) }
+                }
                 DockIconButton(systemImage: "play.fill", title: t(.seriesActionWatchBest)) {
                     if let episode = viewModel.selectedEpisode, episode.isReleased {
                         playBestSeries(series, episode: episode)
@@ -374,6 +425,15 @@ public struct SeriesDetailView: View {
                 DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(series.title, forType: .string)
+                }
+                DockIconButton(systemImage: "arrow.clockwise", title: "Обновить metadata") {
+                    Task { await viewModel.refreshMetadata() }
+                }
+                DockIconButton(systemImage: "clock.badge.xmark", title: "Убрать из истории") {
+                    Task { await viewModel.removeFromHistory() }
+                }
+                DockIconButton(systemImage: "trash", title: "Очистить cache metadata") {
+                    Task { await viewModel.clearMetadataCacheForItem() }
                 }
             }
         }
@@ -430,7 +490,7 @@ public struct SeriesDetailView: View {
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                     .stroke(CFColors.separator, lineWidth: CFSeparators.width)
             )
-            .frame(width: 190, height: 286)
+            .frame(width: CFCinematicStyle.detailPosterWidth, height: CFCinematicStyle.detailPosterHeight)
     }
 
     private func heroCopy(_ series: SeriesDetail, compact: Bool) -> some View {
@@ -444,7 +504,15 @@ public struct SeriesDetailView: View {
             HStack(spacing: CFSpacing.sm) {
                 CFBadge(series.yearRange, tone: .source)
                 CFBadge("\(series.seasonsCount) seasons", tone: .source)
-                RatingBadge(series.rating)
+                ForEach(viewModel.ratingSummary.sources) { source in
+                    RatingBadge(source.label)
+                }
+                ForEach(viewModel.ratingSummary.badges) { badge in
+                    CFBadge(badge.title, tone: .quality)
+                }
+                if let badge = viewModel.newEpisodeBadgeText {
+                    CFBadge(badge, tone: .quality)
+                }
                 ForEach(series.genres, id: \.self) { genre in
                     CFBadge(genre, tone: .source)
                 }
@@ -484,6 +552,9 @@ public struct SeriesDetailView: View {
                 SecondaryButton(t(.seriesActionAddList), systemImage: "list.bullet") {
                     viewModel.addToList("Хочу посмотреть")
                 }
+                SecondaryButton(viewModel.isSeriesTracked ? "Tracked" : "Track Series", systemImage: viewModel.isSeriesTracked ? "bell.badge.fill" : "bell") {
+                    Task { await viewModel.setSeriesTracked(!viewModel.isSeriesTracked) }
+                }
             }
         }
         .frame(maxWidth: 820, alignment: .leading)
@@ -518,7 +589,7 @@ public struct SeriesDetailView: View {
                 navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
             }
         case .cast:
-            simpleList(title: t(.seriesTabCast), items: viewModel.cast.map { "\($0.name) · \($0.role)" })
+            castList(title: t(.seriesTabCast), cast: viewModel.cast)
         case .details:
             if let series = viewModel.series {
                 simpleList(title: t(.seriesTabDetails), items: [
@@ -549,22 +620,26 @@ public struct SeriesDetailView: View {
             }
             .scrollIndicators(.hidden)
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 430), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
-                ForEach(viewModel.visibleEpisodes) { episode in
-                    EpisodeCard(
-                        episode: episode,
-                        progress: viewModel.progressValue(for: episode.id),
-                        isSelected: viewModel.selectedEpisode?.id == episode.id,
-                        episodeLabel: L10n.format(.seriesEpisodeFormat, language: selectedLanguage, episode.episodeNumber)
-                    ) {
-                        Task {
-                            await viewModel.selectEpisodeAndLoadReleases(id: episode.id)
-                        }
-                    } play: {
-                        Task { @MainActor in
-                            await viewModel.selectEpisodeAndLoadReleases(id: episode.id)
-                            if let series = viewModel.series {
-                                playBestSeries(series, episode: episode)
+            if let fallbackTitle = viewModel.episodeFallbackTitle {
+                DetailFallbackBlock(title: fallbackTitle, systemImage: "rectangle.stack.badge.play")
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 430), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
+                    ForEach(viewModel.visibleEpisodes) { episode in
+                        EpisodeCard(
+                            episode: episode,
+                            progress: viewModel.progressValue(for: episode.id),
+                            isSelected: viewModel.selectedEpisode?.id == episode.id,
+                            episodeLabel: L10n.format(.seriesEpisodeFormat, language: selectedLanguage, episode.episodeNumber)
+                        ) {
+                            Task {
+                                await viewModel.selectEpisodeAndLoadReleases(id: episode.id)
+                            }
+                        } play: {
+                            Task { @MainActor in
+                                await viewModel.selectEpisodeAndLoadReleases(id: episode.id)
+                                if let series = viewModel.series {
+                                    playBestSeries(series, episode: episode)
+                                }
                             }
                         }
                     }
@@ -580,20 +655,24 @@ public struct SeriesDetailView: View {
                 .foregroundStyle(CFColors.textPrimary)
 
             LazyVStack(spacing: CFSpacing.md) {
-                ForEach(viewModel.releases, id: \.release.id) { scoped in
-                    SeriesReleaseRow(
-                        scoped: scoped,
-                        scopeTitle: scopeTitle(scoped.scope),
-                        seedersHelp: t(.tooltipSeeders),
-                        rankingHelp: t(.tooltipRankingScore),
-                        advancedTitle: t(.releaseExplanationAdvanced),
-                        language: selectedLanguage,
-                        onPlay: {
-                            if let episode = viewModel.selectedEpisode {
-                                playManualSeriesRelease(scoped.release, episode: episode)
+                if let fallbackTitle = viewModel.releaseFallbackTitle {
+                    DetailFallbackBlock(title: fallbackTitle, systemImage: "antenna.radiowaves.left.and.right.slash")
+                } else {
+                    ForEach(viewModel.releases, id: \.release.id) { scoped in
+                        SeriesReleaseRow(
+                            scoped: scoped,
+                            scopeTitle: scopeTitle(scoped.scope),
+                            seedersHelp: t(.tooltipSeeders),
+                            rankingHelp: t(.tooltipRankingScore),
+                            advancedTitle: t(.releaseExplanationAdvanced),
+                            language: selectedLanguage,
+                            onPlay: {
+                                if let episode = viewModel.selectedEpisode {
+                                    playManualSeriesRelease(scoped.release, episode: episode)
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -689,20 +768,75 @@ public struct SeriesDetailView: View {
                 .font(CFTypography.sectionTitle)
                 .foregroundStyle(CFColors.textPrimary)
 
-            ForEach(items, id: \.self) { item in
-                Text(item)
-                    .font(CFTypography.body)
-                    .foregroundStyle(CFColors.textSecondary)
-                    .padding(CFSpacing.lg)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                            .fill(CFColors.panelFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                                    .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                            )
-                    )
+            if items.isEmpty {
+                DetailFallbackBlock(title: "\(title): нет данных", systemImage: "info.circle")
+            } else {
+                ForEach(items, id: \.self) { item in
+                    Text(item)
+                        .font(CFTypography.body)
+                        .foregroundStyle(CFColors.textSecondary)
+                        .padding(CFSpacing.lg)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                .fill(CFColors.panelFill)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                                )
+                        )
+                }
+            }
+        }
+    }
+
+    private func castList(title: String, cast: [MovieCastMember]) -> some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            Text(title)
+                .font(CFTypography.sectionTitle)
+                .foregroundStyle(CFColors.textPrimary)
+
+            if cast.isEmpty {
+                DetailFallbackBlock(title: "\(title): нет данных", systemImage: "info.circle")
+            } else {
+                ForEach(cast) { member in
+                    Button {
+                        navigationCoordinator.navigate(to: .personDetail(PersonRoutePayload(
+                            id: member.id,
+                            name: member.name,
+                            role: member.role,
+                            profileURL: member.profileURL,
+                            sourceMedia: viewModel.mediaItem.map(PersonSourceMedia.init(mediaItem:))
+                        )))
+                    } label: {
+                        HStack(spacing: CFSpacing.md) {
+                            Image(systemName: "person.crop.circle")
+                                .foregroundStyle(CFColors.textSecondary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(member.name)
+                                    .font(CFTypography.body)
+                                    .foregroundStyle(CFColors.textPrimary)
+                                Text(member.role)
+                                    .font(CFTypography.caption)
+                                    .foregroundStyle(CFColors.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(CFColors.textMuted)
+                        }
+                        .padding(CFSpacing.lg)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                .fill(CFColors.panelFill)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }

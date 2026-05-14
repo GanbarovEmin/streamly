@@ -25,6 +25,7 @@ public enum ImageCacheError: LocalizedError, Equatable {
     case requestFailed(Int)
     case networkUnavailable
     case fileSystemFailure
+    case knownBrokenImage
 
     public var errorDescription: String? {
         switch self {
@@ -36,6 +37,8 @@ public enum ImageCacheError: LocalizedError, Equatable {
             "Network is unavailable."
         case .fileSystemFailure:
             "Image cache file operation failed."
+        case .knownBrokenImage:
+            "Image is known to be unavailable."
         }
     }
 }
@@ -69,6 +72,7 @@ public actor ImageCacheService: ImageCacheServiceProtocol {
     private let session: URLSession
     private let fileManager: FileManager
     private var memoryCache: [URL: Data] = [:]
+    private var brokenURLs: Set<URL> = []
 
     public init(
         cacheRepository: CacheRepository,
@@ -87,6 +91,10 @@ public actor ImageCacheService: ImageCacheServiceProtocol {
     }
 
     public func imageData(for url: URL, kind: CachedImageKind) async throws -> Data {
+        if brokenURLs.contains(url) {
+            throw ImageCacheError.knownBrokenImage
+        }
+
         if let data = memoryCache[url] {
             _ = try await cacheRepository.cachedImageRecord(url: url.absoluteString, touch: true)
             return data
@@ -99,7 +107,17 @@ public actor ImageCacheService: ImageCacheServiceProtocol {
             return data
         }
 
-        let data = try await downloadImageData(from: url)
+        let data: Data
+        do {
+            data = try await downloadImageData(from: url)
+        } catch let error as ImageCacheError {
+            if error.isPermanentBrokenImage {
+                brokenURLs.insert(url)
+                try? await cacheRepository.removeCachedImage(url: url.absoluteString)
+                memoryCache.removeValue(forKey: url)
+            }
+            throw error
+        }
         let fileURL = cacheFileURL(for: url, kind: kind)
 
         do {
@@ -132,6 +150,7 @@ public actor ImageCacheService: ImageCacheServiceProtocol {
         }
         try await cacheRepository.clearImageCache()
         memoryCache.removeAll()
+        brokenURLs.removeAll()
     }
 
     public func clearUnused(olderThan date: Date) async throws {
@@ -204,5 +223,16 @@ public actor ImageCacheService: ImageCacheServiceProtocol {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+private extension ImageCacheError {
+    var isPermanentBrokenImage: Bool {
+        switch self {
+        case .invalidResponse, .requestFailed(404), .requestFailed(410):
+            return true
+        default:
+            return false
+        }
     }
 }

@@ -80,6 +80,10 @@ final class SettingsViewModelTests: XCTestCase {
         await viewModel.updateSubtitleDelay(1.5)
         await viewModel.updateSubtitleVisualStyle(.cinematic)
         await viewModel.updateSubtitlePlacement(.higher)
+        await viewModel.updateBetterReleaseNotificationsEnabled(false)
+        await viewModel.updateBetterReleaseDigestMode(false)
+        await viewModel.updateMacOSBetterReleaseNotificationsEnabled(true)
+        await viewModel.updateNotificationCategory(.cache, isEnabled: false)
 
         let persisted = await settingsRepository.appSettings
         let persistedSubtitles = await settingsRepository.subtitleSettings
@@ -107,6 +111,86 @@ final class SettingsViewModelTests: XCTestCase {
         XCTAssertEqual(persistedSubtitles.subtitleDelaySeconds, 1.5)
         XCTAssertEqual(persistedSubtitles.visualStyle, .cinematic)
         XCTAssertEqual(persistedSubtitles.placement, .higher)
+        XCTAssertFalse(persisted.notifications.betterReleaseNotificationsEnabled)
+        XCTAssertFalse(persisted.notifications.betterReleaseDigestMode)
+        XCTAssertTrue(persisted.notifications.macOSBetterReleaseNotificationsEnabled)
+        XCTAssertFalse(persisted.notifications.isCategoryEnabled(.cache))
+    }
+
+    func testHomePersonalizationPersistsAndResetsDefaults() async {
+        let settingsRepository = CoreMockSettingsRepository()
+        let viewModel = SettingsViewModel(
+            environment: AppEnvironment(
+                metadataService: CoreMockMetadataService(),
+                torrentEngine: CoreMockTorrentEngine(),
+                playbackService: CoreMockPlaybackService(),
+                subtitleService: CoreMockSubtitleService(),
+                libraryRepository: CoreMockLibraryRepository(),
+                settingsRepository: settingsRepository,
+                diagnosticsService: CoreMockDiagnosticsService(),
+                updateService: CoreMockUpdateService()
+            )
+        )
+
+        await viewModel.load()
+        await viewModel.updateHomeSection("continueWatching", isEnabled: false)
+        await viewModel.updateHomeSection("trendingMovies", isEnabled: false)
+        await viewModel.moveHomeSection("recommended", direction: .up)
+        await viewModel.updateHomeLayoutDensity(.compact)
+        await viewModel.updateHomePosterSize(.large)
+        await viewModel.updateLocalRecommendationsEnabled(false)
+        await viewModel.updateTasteGenre("Sci-Fi", preference: .more)
+        await viewModel.updateTasteGenre("Horror", preference: .hidden)
+
+        let customized = await settingsRepository.appSettings.home
+        let customizedSettings = await settingsRepository.appSettings
+        XCTAssertFalse(customized.isSectionEnabled("continueWatching"))
+        XCTAssertFalse(customized.isSectionEnabled("trendingMovies"))
+        XCTAssertEqual(customized.layoutDensity, .compact)
+        XCTAssertEqual(customized.posterSize, .large)
+        XCTAssertGreaterThan(customized.syncRevision, 0)
+        XCTAssertFalse(customizedSettings.recommendations.localRecommendationsEnabled)
+        XCTAssertEqual(customizedSettings.tasteProfile.preference(forGenre: "sci-fi"), .more)
+        XCTAssertEqual(customizedSettings.tasteProfile.preference(forGenre: "Horror"), .hidden)
+
+        await viewModel.resetHomePreferences()
+
+        let reset = await settingsRepository.appSettings.home
+        XCTAssertEqual(reset, HomePreferences())
+        XCTAssertEqual(viewModel.settings.home, HomePreferences())
+    }
+
+    func testHiddenRecommendationItemsCanBeRestoredFromSettings() async {
+        var settings = AppSettings()
+        settings.tasteProfile.hideTitle(
+            mediaID: "tmdb:movie:31",
+            title: "Hidden Space",
+            genres: ["Sci-Fi"],
+            reason: .notInterested,
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        let settingsRepository = CoreMockSettingsRepository(settings: settings)
+        let viewModel = SettingsViewModel(
+            environment: AppEnvironment(
+                metadataService: CoreMockMetadataService(),
+                torrentEngine: CoreMockTorrentEngine(),
+                playbackService: CoreMockPlaybackService(),
+                subtitleService: CoreMockSubtitleService(),
+                libraryRepository: CoreMockLibraryRepository(),
+                settingsRepository: settingsRepository,
+                diagnosticsService: CoreMockDiagnosticsService(),
+                updateService: CoreMockUpdateService()
+            )
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.hiddenRecommendationItems.map(\.title), ["Hidden Space"])
+        await viewModel.restoreHiddenRecommendationItem(mediaID: "tmdb:movie:31")
+
+        let persisted = await settingsRepository.appSettings
+        XCTAssertTrue(persisted.tasteProfile.hiddenItems.isEmpty)
+        XCTAssertTrue(viewModel.hiddenRecommendationItems.isEmpty)
     }
 
     func testTMDBCredentialsCanBeSavedAndClearedFromSettings() async {

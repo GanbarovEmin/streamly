@@ -462,7 +462,7 @@ public final class TMDBMetadataService: MetadataServiceProtocol {
         }
     }
 
-    private static let tmdbDateFormatter: DateFormatter = {
+    fileprivate static let tmdbDateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -549,12 +549,14 @@ private struct TMDBMediaDTO: Decodable {
         let title = displayTitle(for: kindHint)
         let originalTitle = originalDisplayTitle(for: kindHint)
         let year = Self.year(from: kindHint == .movie ? releaseDate : firstAirDate)
+        let resolvedReleaseDate = Self.date(from: kindHint == .movie ? releaseDate : firstAirDate)
         let metadata = MediaMetadata(
             tmdbId: id,
             title: title,
             originalTitle: originalTitle,
             overview: overview ?? "",
             year: year,
+            releaseDate: resolvedReleaseDate,
             genres: (genreIDs ?? []).compactMap { Self.genreNames[$0] },
             rating: voteAverage,
             posterURL: imageURLBuilder.url(path: posterPath, size: .poster),
@@ -593,6 +595,11 @@ private struct TMDBMediaDTO: Decodable {
     static func year(from date: String?) -> Int? {
         guard let prefix = date?.prefix(4), prefix.count == 4 else { return nil }
         return Int(prefix)
+    }
+
+    static func date(from value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        return TMDBMetadataService.tmdbDateFormatter.date(from: value)
     }
 
     static let genreNames: [Int: String] = [
@@ -664,6 +671,7 @@ private struct TMDBMovieDetailDTO: Decodable {
             originalTitle: originalTitle ?? title,
             overview: overview ?? "",
             year: year,
+            releaseDate: TMDBMediaDTO.date(from: releaseDate),
             genres: genres?.map(\.name) ?? [],
             runtime: runtime,
             rating: voteAverage,
@@ -722,6 +730,7 @@ private struct TMDBSeriesDetailDTO: Decodable {
             originalTitle: originalName ?? name,
             overview: overview ?? "",
             year: year,
+            releaseDate: TMDBMediaDTO.date(from: firstAirDate),
             genres: genres?.map(\.name) ?? [],
             rating: voteAverage,
             posterURL: imageURLBuilder.url(path: posterPath, size: .poster),

@@ -93,7 +93,7 @@ struct CineFlowApplication: App {
                 DiagnosticsCacheSummary()
             },
             databaseSchemaVersionProvider: {
-                "v8_user_media_sources"
+                "v10_media_item_metadata_json"
             }
         )
         let sourceManager = SourceManager.development(
@@ -111,6 +111,10 @@ struct CineFlowApplication: App {
         self.updateService = updateService
         let userMediaSourceRepository = liveDatabaseManager
             .map(DatabaseUserMediaSourceRepository.init(databaseManager:))
+        let libraryPortabilityService = liveDatabaseManager
+            .map(DatabaseLibraryPortabilityService.init(databaseManager:))
+        let personalStatsService = liveDatabaseManager
+            .map { DatabasePersonalStatsService(databaseManager: $0) }
         let playbackService: any PlaybackServiceProtocol = TranscodingAVPlaybackService()
         let timelinePreviewService = TimelinePreviewService()
 
@@ -134,7 +138,9 @@ struct CineFlowApplication: App {
             playbackProgressRepository: playbackProgressRepository,
             watchHistoryRepository: watchHistoryRepository,
             keychainService: keychainService,
-            userMediaSourceRepository: userMediaSourceRepository
+            userMediaSourceRepository: userMediaSourceRepository,
+            libraryPortabilityService: libraryPortabilityService,
+            personalStatsService: personalStatsService
         )
         environment = appEnvironment
         _macOSIntegrationViewModel = StateObject(wrappedValue: MacOSIntegrationViewModel(environment: appEnvironment))
@@ -189,14 +195,19 @@ struct CineFlowApplication: App {
 
             CommandMenu(L10n.string(.appName, language: languageSettingsStore.selectedLanguage)) {
                 Button(L10n.string(.commandSearch, language: languageSettingsStore.selectedLanguage)) {
-                    navigationCoordinator.selectSidebarRoute(.search)
+                    navigationCoordinator.handleShortcut(.commandF)
                 }
                 .keyboardShortcut("f", modifiers: [.command])
 
                 Button(L10n.string(.commandFocusSearch, language: languageSettingsStore.selectedLanguage)) {
-                    navigationCoordinator.focusSearchField()
+                    navigationCoordinator.handleShortcut(.commandL)
                 }
                 .keyboardShortcut("l", modifiers: [.command])
+
+                Button("Command Search") {
+                    navigationCoordinator.handleShortcut(.commandK)
+                }
+                .keyboardShortcut("k", modifiers: [.command])
 
                 Button(L10n.string(.commandSettings, language: languageSettingsStore.selectedLanguage)) {
                     navigationCoordinator.selectSidebarRoute(.settings)
@@ -206,14 +217,35 @@ struct CineFlowApplication: App {
                 Divider()
 
                 Button(L10n.string(.commandPlayPause, language: languageSettingsStore.selectedLanguage)) {
-                    navigationCoordinator.togglePlayPause()
+                    navigationCoordinator.handleShortcut(.space)
                 }
                 .keyboardShortcut(.space, modifiers: [])
 
                 Button(L10n.string(.commandBackCloseOverlay, language: languageSettingsStore.selectedLanguage)) {
-                    navigationCoordinator.closeOverlayOrGoBack()
+                    navigationCoordinator.handleShortcut(.escape)
                 }
                 .keyboardShortcut(.cancelAction)
+
+                Button("Toggle Fullscreen") {
+                    navigationCoordinator.handleShortcut(.f)
+                    macOSIntegrationViewModel.toggleFullscreen()
+                }
+                .keyboardShortcut("f", modifiers: [])
+
+                Button("Search") {
+                    navigationCoordinator.handleShortcut(.s)
+                }
+                .keyboardShortcut("s", modifiers: [])
+
+                Button("Library") {
+                    navigationCoordinator.handleShortcut(.a)
+                }
+                .keyboardShortcut("a", modifiers: [])
+
+                Button("Refresh") {
+                    navigationCoordinator.handleShortcut(.r)
+                }
+                .keyboardShortcut("r", modifiers: [])
             }
         }
     }

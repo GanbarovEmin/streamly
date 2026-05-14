@@ -219,11 +219,15 @@ class TorrentRuntime:
             downloaded_bytes = self.file_progress(entry, selected_index)
             buffered_bytes = self.contiguous_file_progress(entry, selected_index)
             first_chunk_end = min(selected_total - 1, STREAM_CHUNK_BYTES - 1)
-            if buffered_bytes > 0 and (
-                not self.file_range_is_available(entry, selected_index, 0, first_chunk_end)
-                or not self.file_start_is_materialized(entry, selected_index)
-            ):
-                buffered_bytes = 0
+            if buffered_bytes > 0:
+                first_range_available = self.file_range_is_available(entry, selected_index, 0, first_chunk_end)
+                if first_range_available:
+                    self.flush_download_cache(entry)
+                if (
+                    not first_range_available
+                    or not self.file_start_is_materialized(entry, selected_index)
+                ):
+                    buffered_bytes = 0
         return {
             "sessionId": handle_id,
             "state": self.state_name(entry, status),
@@ -292,6 +296,10 @@ class TorrentRuntime:
         entry = self.entry(handle_id)
         entry.handle.set_sequential_download(enabled)
         entry.sequential = enabled
+        selected_index = self.selected_file_index(entry)
+        if enabled and selected_index is not None:
+            self.prioritize_file_start(entry, selected_index)
+            self.ensure_background_download(entry, selected_index)
 
     def set_priority(self, handle_id: str, file_id: str, priority: int) -> None:
         entry = self.entry(handle_id)
@@ -301,6 +309,11 @@ class TorrentRuntime:
             priorities.append(0)
         priorities[index] = PRIORITY_MAP.get(priority, 4)
         entry.handle.prioritize_files(priorities)
+        if entry.selected_file_id == str(index) and priority > 0:
+            entry.handle.set_sequential_download(True)
+            entry.sequential = True
+            self.prioritize_file_start(entry, index)
+            self.ensure_background_download(entry, index)
 
     def set_bandwidth_limits(self, handle_id: str, download_limit: int | None, upload_limit: int | None) -> None:
         entry = self.entry(handle_id)
@@ -317,6 +330,13 @@ class TorrentRuntime:
             if not media_files:
                 raise RuntimeError("streaming_url_unavailable:no_media_file")
             self.select_file(handle_id, media_files[0]["id"])
+        else:
+            selected_index = self.selected_file_index(entry)
+            if selected_index is not None:
+                entry.handle.set_sequential_download(True)
+                entry.sequential = True
+                self.prioritize_file_start(entry, selected_index)
+                self.ensure_background_download(entry, selected_index)
         self.ensure_stream_server()
         port = self.stream_server.server_address[1]
         entry.streaming_url = f"http://127.0.0.1:{port}/stream/{handle_id}/{entry.selected_file_id}"

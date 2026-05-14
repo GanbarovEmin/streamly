@@ -81,6 +81,80 @@ final class CoreModelTests: XCTestCase {
         XCTAssertEqual(release.subtitleLanguages, ["ru", "en"])
     }
 
+    func testTorrentMediaFileSelectorUsesEpisodeContextBeforeManualChoice() {
+        let release = TorrentRelease(
+            id: "got-season-pack",
+            title: "Game of Thrones Season 1",
+            magnetURI: "magnet:?xt=urn:btih:got",
+            quality: .ultraHD,
+            seeders: 12
+        )
+        let context = PlaybackSelectionContext(
+            mediaID: "imdb:series:tt0944947",
+            displayTitle: "Game of Thrones",
+            mediaKind: .series,
+            seasonNumber: 1,
+            episodeNumber: 1,
+            episodeID: "tt0944947:1:1"
+        )
+        let files = [
+            TorrentFile(
+                id: "8",
+                path: "Game.of.Thrones.S01.2160p/Game.of.Thrones.S01E08.2160p.mkv",
+                name: "Game.of.Thrones.S01E08.2160p.mkv",
+                lengthBytes: 9_700_000_000,
+                isMediaFile: true
+            ),
+            TorrentFile(
+                id: "1",
+                path: "Game.of.Thrones.S01.2160p/Game.of.Thrones.S01E01.2160p.mkv",
+                name: "Game.of.Thrones.S01E01.2160p.mkv",
+                lengthBytes: 9_200_000_000,
+                isMediaFile: true
+            )
+        ]
+
+        let selection = TorrentMediaFileSelector.selection(for: release, files: files, selectionContext: context)
+
+        XCTAssertEqual(selection?.selectedFile.id, "1")
+        XCTAssertEqual(selection?.requiresManualConfirmation, false)
+        XCTAssertEqual(selection?.manualOptions.map(\.file.id), ["1", "8"])
+    }
+
+    func testTorrentMediaFileSelectorFallsBackToTorrentioEpisodeID() {
+        let release = TorrentRelease(
+            id: "torrentio:tt0944947:1:1:abcdefabcdefabcdefabcdefabcdefabcdefabcd:auto",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "Game of Thrones Season 1 Pack",
+            magnetURI: "magnet:?xt=urn:btih:got",
+            quality: .ultraHD,
+            seeders: 12
+        )
+        let files = [
+            TorrentFile(
+                id: "8",
+                path: "Game of Thrones/Season 1",
+                name: "S01E08. The Pointy End.mkv",
+                lengthBytes: 9_700_000_000,
+                isMediaFile: true
+            ),
+            TorrentFile(
+                id: "1",
+                path: "Game of Thrones/Season 1",
+                name: "S01E01. Winter Is Coming.mkv",
+                lengthBytes: 9_200_000_000,
+                isMediaFile: true
+            )
+        ]
+
+        let selection = TorrentMediaFileSelector.selection(for: release, files: files)
+
+        XCTAssertEqual(selection?.selectedFile.id, "1")
+        XCTAssertEqual(selection?.requiresManualConfirmation, false)
+        XCTAssertEqual(selection?.manualOptions.map(\.file.id), ["1", "8"])
+    }
+
     func testMediaItemSupportsMultipleReleases() {
         let item = MediaItem(
             id: "tmdb:movie:603",
@@ -170,6 +244,47 @@ final class CoreModelTests: XCTestCase {
         XCTAssertEqual(settings.storage.torrentBandwidthLimits, .unlimited)
     }
 
+    func testHomePreferencesAreLocalFirstAndSyncReady() throws {
+        var preferences = HomePreferences()
+
+        XCTAssertEqual(preferences.layoutDensity, .comfortable)
+        XCTAssertEqual(preferences.posterSize, .medium)
+        XCTAssertEqual(preferences.sections.first?.sectionID, HomePreferences.defaultSectionIDs.first)
+        XCTAssertTrue(preferences.isSectionEnabled("continueWatching"))
+        XCTAssertEqual(preferences.schemaVersion, 1)
+        XCTAssertEqual(preferences.syncRevision, 0)
+
+        preferences.setSection("trendingMovies", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 100))
+        preferences.moveSection("recommended", to: 0, updatedAt: Date(timeIntervalSince1970: 120))
+        preferences.layoutDensity = .compact
+        preferences.posterSize = .large
+
+        XCTAssertFalse(preferences.isSectionEnabled("trendingMovies"))
+        XCTAssertEqual(preferences.orderedSections.first?.sectionID, "recommended")
+
+        let decoded = try JSONDecoder().decode(HomePreferences.self, from: try JSONEncoder().encode(preferences))
+        XCTAssertEqual(decoded.layoutDensity, .compact)
+        XCTAssertEqual(decoded.posterSize, .large)
+        XCTAssertFalse(decoded.isSectionEnabled("trendingMovies"))
+        XCTAssertEqual(decoded.orderedSections.first?.sectionID, "recommended")
+        XCTAssertEqual(decoded.syncRevision, 2)
+        XCTAssertEqual(decoded.updatedAt, Date(timeIntervalSince1970: 120))
+    }
+
+    func testAppSettingsDecodeOlderPayloadWithDefaultHomePreferences() throws {
+        let data = Data(#"{"general":{"language":"system","launchAtLogin":true,"openLastScreenOnLaunch":false}}"#.utf8)
+
+        let settings = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        XCTAssertTrue(settings.general.launchAtLogin)
+        XCTAssertEqual(settings.home, HomePreferences())
+        XCTAssertTrue(settings.home.isSectionEnabled("continueWatching"))
+        XCTAssertTrue(settings.home.isSectionEnabled("trendingMovies"))
+        XCTAssertTrue(settings.notifications.betterReleaseNotificationsEnabled)
+        XCTAssertTrue(settings.notifications.betterReleaseDigestMode)
+        XCTAssertFalse(settings.notifications.macOSBetterReleaseNotificationsEnabled)
+    }
+
     func testPlaybackSettingsExposeAutoplayNextEpisodePreference() throws {
         let settings = PlaybackSettings(autoplayNextEpisode: false)
 
@@ -180,6 +295,17 @@ final class CoreModelTests: XCTestCase {
 
         XCTAssertFalse(decoded.autoplayNextEpisode)
         XCTAssertTrue(PlaybackSettings().autoplayNextEpisode)
+    }
+
+    func testAutoPlaybackQualityPrefersHealthySeededReleases() {
+        let settings = PlaybackSettings(
+            preferredQuality: .auto,
+            preferHighSeedersOverHighestQuality: false
+        )
+
+        let preferences = settings.rankingPreferences()
+
+        XCTAssertTrue(preferences.preferHighSeedersOverHighestQuality)
     }
 
     func testStorageSettingsDecodeOlderPayloadWithSmartCacheDefaults() throws {

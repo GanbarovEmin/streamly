@@ -78,6 +78,34 @@ final class ShellNavigationTests: XCTestCase {
     }
 
     @MainActor
+    func testPowerShortcutsRouteThroughNavigationCoordinator() {
+        let coordinator = NavigationCoordinator()
+
+        coordinator.handleShortcut(.commandK)
+        XCTAssertEqual(coordinator.currentRoute, .search)
+        let searchRequestID = coordinator.searchFocusRequestID
+
+        coordinator.handleShortcut(.a)
+        XCTAssertEqual(coordinator.currentRoute, .library)
+
+        coordinator.handleShortcut(.s)
+        XCTAssertEqual(coordinator.currentRoute, .search)
+        XCTAssertGreaterThan(coordinator.searchFocusRequestID, searchRequestID)
+
+        let refreshRequestID = coordinator.refreshRequestID
+        coordinator.handleShortcut(.r)
+        XCTAssertGreaterThan(coordinator.refreshRequestID, refreshRequestID)
+
+        coordinator.navigate(to: .player(mediaID: "tmdb:movie:603"))
+        coordinator.handleShortcut(.space)
+        XCTAssertTrue(coordinator.isPlayerPaused)
+
+        let fullscreenRequestID = coordinator.fullscreenShortcutRequestID
+        coordinator.handleShortcut(.f)
+        XCTAssertGreaterThan(coordinator.fullscreenShortcutRequestID, fullscreenRequestID)
+    }
+
+    @MainActor
     func testSettingsImageCacheActionsUseEnvironmentService() async throws {
         let imageCache = TestImageCacheService(sizeBytes: 1_536)
         let viewModel = CineFlowRootViewModel(environment: AppEnvironment(

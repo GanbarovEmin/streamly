@@ -148,6 +148,48 @@ final class DatabaseLayerTests: XCTestCase {
         XCTAssertFalse(afterDelete.contains { $0.id == customList.id })
     }
 
+    func testWatchlistItemPreferencesPersistAcrossReopen() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+
+        let databaseURL = directory.appendingPathComponent("CineFlow.sqlite")
+        var databaseManager: DatabaseManager? = try DatabaseManager(path: databaseURL.path)
+        let repository = DatabaseLibraryRepository(databaseManager: databaseManager!)
+        let movie = MediaItem(
+            id: "tmdb:movie:603",
+            title: "The Matrix",
+            kind: .movie,
+            overview: "Fixture",
+            releaseYear: 1999,
+            posterPath: nil,
+            torrentReleases: [
+                TorrentRelease(id: "matrix-1080p", title: "The Matrix 1080p", quality: .fullHD, seeders: 50)
+            ]
+        )
+
+        let watchlist = try await repository.defaultList()
+        try await repository.add(movie, to: watchlist.id)
+        let reminderDate = Date().addingTimeInterval(5 * 24 * 60 * 60)
+        try await repository.updateWatchlistItem(
+            listID: watchlist.id,
+            mediaID: movie.id,
+            priority: .high,
+            remindLaterAt: reminderDate
+        )
+        databaseManager = nil
+
+        let reopenedRepository = try DatabaseLibraryRepository(databaseManager: DatabaseManager(path: databaseURL.path))
+        let items = try await reopenedRepository.watchlistItems(in: watchlist.id)
+
+        XCTAssertEqual(items.map(\.mediaID), [movie.id])
+        XCTAssertEqual(items.first?.priority, .high)
+        XCTAssertEqual(items.first?.initialQuality, .fullHD)
+        XCTAssertEqual(items.first?.remindLaterAt?.timeIntervalSince1970 ?? 0, reminderDate.timeIntervalSince1970, accuracy: 1.5)
+    }
+
     func testPlaybackHistoryListsRatingsCacheAndSettingsCRUD() async throws {
         let databaseManager = try DatabaseManager.inMemory()
         let item = makeMovie(id: "tmdb:movie:329865", title: "Arrival")
@@ -422,6 +464,246 @@ final class DatabaseLayerTests: XCTestCase {
         XCTAssertTrue(clearedEntries.isEmpty)
     }
 
+    func testLibraryExportIncludesPortableDataAndExcludesPrivateState() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let repository = DatabaseLibraryRepository(databaseManager: databaseManager)
+        let progressRepository = PlaybackProgressRepository(databaseManager: databaseManager)
+        let sourceRepository = DatabaseUserMediaSourceRepository(databaseManager: databaseManager)
+        let service = DatabaseLibraryPortabilityService(databaseManager: databaseManager)
+        let movie = makeMovie(id: "tmdb:movie:603", title: "The Matrix")
+
+        try await repository.add(movie)
+        try await repository.addFavorite(movie)
+        try await repository.setRating(movie, rating: 9)
+        try await repository.markWatched(movie, positionSeconds: 3_400)
+        let list = try await repository.createList(name: "Sci-Fi", description: "Owned by the user")
+        try await repository.add(movie, to: list.id)
+        try await progressRepository.saveProgress(
+            PlaybackProgress(
+                mediaID: movie.id,
+                releaseID: "matrix-2160p",
+                positionSeconds: 120,
+                durationSeconds: 7_200
+            )
+        )
+        try await sourceRepository.save(
+            UserMediaSource(
+                id: "private-local-file",
+                mediaID: movie.id,
+                displayName: "Private file",
+                kind: .localFile,
+                url: URL(fileURLWithPath: "/Users/local/movie.mkv")
+            )
+        )
+
+        let data = try await service.exportLibraryJSON()
+        let text = String(decoding: data, as: UTF8.self)
+        let snapshot = try JSONDecoder.libraryPortability.decode(LibraryExportSnapshot.self, from: data)
+
+        XCTAssertEqual(snapshot.schemaVersion, 1)
+        XCTAssertEqual(snapshot.mediaItems.map(\.id), [movie.id])
+        XCTAssertEqual(snapshot.libraryItems.map(\.mediaID), [movie.id])
+        XCTAssertEqual(snapshot.favoriteMediaIDs, [movie.id])
+        XCTAssertEqual(snapshot.lists.map(\.name), ["Sci-Fi"])
+        XCTAssertEqual(snapshot.watchHistory.map(\.mediaID), [movie.id])
+        XCTAssertEqual(snapshot.ratings.map(\.rating), [9])
+        XCTAssertEqual(snapshot.playbackProgress.map(\.releaseID), ["matrix-2160p"])
+        XCTAssertFalse(text.contains("source_accounts"))
+        XCTAssertFalse(text.contains("user_media_sources"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("token"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("cookie"))
+        XCTAssertFalse(text.localizedCaseInsensitiveContains("credential"))
+    }
+
+    func testLibraryImportPreviewValidatesReferencesAndRatings() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let service = DatabaseLibraryPortabilityService(databaseManager: databaseManager)
+        let invalid = LibraryExportSnapshot(
+            exportedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            mediaItems: [],
+            libraryItems: [LibraryItem(mediaID: "missing:movie:1")],
+            favoriteMediaIDs: [],
+            lists: [],
+            watchHistory: [],
+            ratings: [UserRating(mediaID: "missing:movie:1", rating: 11)],
+            playbackProgress: []
+        )
+        let data = try JSONEncoder.libraryPortability.encode(invalid)
+
+        let preview = try await service.previewImport(data)
+
+        XCTAssertFalse(preview.canImport)
+        XCTAssertTrue(preview.validationIssues.contains { $0.contains("Missing media item: missing:movie:1") })
+        XCTAssertTrue(preview.validationIssues.contains { $0.contains("Rating must be between 1 and 10") })
+    }
+
+    func testLibraryImportMergesWithoutDuplicateListsHistoryRatingsOrProgress() async throws {
+        let sourceManager = try DatabaseManager.inMemory()
+        let sourceRepository = DatabaseLibraryRepository(databaseManager: sourceManager)
+        let sourceProgress = PlaybackProgressRepository(databaseManager: sourceManager)
+        let sourceService = DatabaseLibraryPortabilityService(databaseManager: sourceManager)
+        let matrix = makeMovie(id: "tmdb:movie:603", title: "The Matrix")
+
+        try await sourceRepository.add(matrix)
+        try await sourceRepository.addFavorite(matrix)
+        try await sourceRepository.setRating(matrix, rating: 9)
+        try await sourceRepository.markWatched(matrix, positionSeconds: 3_400)
+        let sourceList = try await sourceRepository.createList(name: "Sci-Fi", description: "Imported list")
+        try await sourceRepository.add(matrix, to: sourceList.id)
+        try await sourceProgress.saveProgress(
+            PlaybackProgress(
+                mediaID: matrix.id,
+                releaseID: "matrix-2160p",
+                positionSeconds: 500,
+                durationSeconds: 7_200,
+                lastWatchedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                updatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+            )
+        )
+        let exportData = try await sourceService.exportLibraryJSON()
+
+        let targetManager = try DatabaseManager.inMemory()
+        let targetRepository = DatabaseLibraryRepository(databaseManager: targetManager)
+        let targetService = DatabaseLibraryPortabilityService(databaseManager: targetManager)
+        let existingList = try await targetRepository.createList(name: "Sci-Fi", description: "Existing list")
+        try await targetRepository.add(matrix, to: existingList.id)
+        try await targetRepository.setRating(matrix, rating: 8)
+
+        let preview = try await targetService.previewImport(exportData)
+        let result = try await targetService.importLibraryJSON(exportData, options: LibraryImportOptions(createBackupBeforeImport: true))
+        _ = try await targetService.importLibraryJSON(exportData, options: LibraryImportOptions(createBackupBeforeImport: false))
+
+        let lists = try await targetRepository.lists()
+        let matchingLists = lists.filter { $0.name == "Sci-Fi" }
+        let listItems = try await targetRepository.items(in: existingList.id)
+        let historyEntries = try await WatchHistoryRepository(databaseManager: targetManager).entries(limit: 20)
+        let ratingValue = try await RatingsRepository(databaseManager: targetManager).rating(mediaID: matrix.id)
+        let progressValue = try await PlaybackProgressRepository(databaseManager: targetManager).progress(mediaID: matrix.id, episodeID: nil)
+        let importedRating = try XCTUnwrap(ratingValue)
+        let importedProgress = try XCTUnwrap(progressValue)
+
+        XCTAssertTrue(preview.canImport)
+        XCTAssertEqual(result.backupData == nil, false)
+        XCTAssertEqual(matchingLists.count, 1)
+        XCTAssertEqual(listItems.map(\.id), [matrix.id])
+        XCTAssertEqual(historyEntries.count, 1)
+        XCTAssertEqual(importedRating, 9)
+        XCTAssertEqual(importedProgress.releaseID, "matrix-2160p")
+        XCTAssertEqual(importedProgress.positionSeconds, 500)
+    }
+
+    func testPersonalStatsAreComputedLocallyFromWatchHistoryProgressAndMetadata() async throws {
+        let databaseManager = try DatabaseManager.inMemory()
+        let mediaRepository = MediaRepository(databaseManager: databaseManager)
+        let historyRepository = WatchHistoryRepository(databaseManager: databaseManager)
+        let progressRepository = PlaybackProgressRepository(databaseManager: databaseManager)
+        let service = DatabasePersonalStatsService(databaseManager: databaseManager)
+        let firstNight = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-05-05T19:00:00Z"))
+        let firstEpisode = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-05-05T20:00:00Z"))
+        let secondEpisode = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-05-05T21:00:00Z"))
+        let partialMovie = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-05-20T22:00:00Z"))
+        let matrix = makeMovie(
+            id: "tmdb:movie:603",
+            title: "The Matrix",
+            genres: ["Sci-Fi", "Action"],
+            cast: [CastMember(id: "keanu", name: "Keanu Reeves", characterName: "Neo")]
+        )
+        let arrival = makeMovie(
+            id: "tmdb:movie:329865",
+            title: "Arrival",
+            genres: ["Sci-Fi", "Drama"],
+            cast: [CastMember(id: "amy", name: "Amy Adams")]
+        )
+        let series = MediaItem(
+            id: "tmdb:tv:1399",
+            title: "Game of Thrones",
+            kind: .series,
+            overview: "Fixture",
+            releaseYear: 2011,
+            posterPath: nil,
+            metadata: MediaMetadata(
+                tmdbId: 1399,
+                title: "Game of Thrones",
+                originalTitle: "Game of Thrones",
+                overview: "Fixture",
+                year: 2011,
+                genres: ["Drama", "Fantasy"],
+                cast: [CastMember(id: "pedro", name: "Pedro Pascal")]
+            )
+        )
+
+        try await mediaRepository.upsert(matrix)
+        try await mediaRepository.upsert(arrival)
+        try await mediaRepository.upsert(series)
+        try await historyRepository.record(
+            PlaybackProgress(
+                mediaID: matrix.id,
+                positionSeconds: 7_200,
+                durationSeconds: 7_200,
+                progressPercent: 100,
+                lastWatchedAt: firstNight,
+                completed: true
+            )
+        )
+        try await historyRepository.record(
+            PlaybackProgress(
+                mediaID: series.id,
+                episodeID: "s1e1",
+                positionSeconds: 3_600,
+                durationSeconds: 3_600,
+                progressPercent: 100,
+                lastWatchedAt: firstEpisode,
+                completed: true
+            )
+        )
+        try await historyRepository.record(
+            PlaybackProgress(
+                mediaID: series.id,
+                episodeID: "s1e2",
+                positionSeconds: 3_600,
+                durationSeconds: 3_600,
+                progressPercent: 100,
+                lastWatchedAt: secondEpisode,
+                completed: true
+            )
+        )
+        try await historyRepository.record(
+            PlaybackProgress(
+                mediaID: arrival.id,
+                positionSeconds: 3_000,
+                durationSeconds: 6_000,
+                progressPercent: 50,
+                lastWatchedAt: partialMovie,
+                completed: false
+            )
+        )
+        try await progressRepository.saveProgress(
+            PlaybackProgress(
+                mediaID: arrival.id,
+                positionSeconds: 3_000,
+                durationSeconds: 6_000,
+                progressPercent: 50,
+                lastWatchedAt: partialMovie,
+                completed: false
+            )
+        )
+
+        let stats = try await service.personalStats(referenceDate: partialMovie)
+        let reopenedMatrix = try await mediaRepository.item(id: matrix.id)
+
+        XCTAssertEqual(reopenedMatrix?.metadata?.genres, ["Sci-Fi", "Action"])
+        XCTAssertEqual(stats.watchedMoviesCount, 1)
+        XCTAssertEqual(stats.watchedEpisodesCount, 2)
+        XCTAssertEqual(stats.monthlyWatchTimeSeconds, 17_400, accuracy: 0.001)
+        XCTAssertEqual(stats.completionRate, 0.75, accuracy: 0.001)
+        XCTAssertEqual(stats.longestBingeSession?.itemCount, 3)
+        XCTAssertEqual(stats.longestBingeSession?.durationSeconds ?? 0, 14_400, accuracy: 0.001)
+        XCTAssertEqual(stats.favoriteGenres.prefix(2).map(\.name), ["Drama", "Fantasy"])
+        XCTAssertEqual(stats.favoriteActors.first?.name, "Pedro Pascal")
+        XCTAssertEqual(stats.yearRecapStatus, .collectingSignals)
+        XCTAssertFalse(stats.sharesPrivateAnalytics)
+    }
+
     func testImageCacheMetadataTracksSizeAccessAndClearOperations() async throws {
         let databaseManager = try DatabaseManager.inMemory()
         let cacheRepository = CacheRepository(databaseManager: databaseManager)
@@ -566,14 +848,28 @@ final class DatabaseLayerTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
-    private func makeMovie(id: String, title: String) -> MediaItem {
+    private func makeMovie(
+        id: String,
+        title: String,
+        genres: [String] = [],
+        cast: [CastMember] = []
+    ) -> MediaItem {
         MediaItem(
             id: id,
             title: title,
             kind: .movie,
             overview: "Fixture",
             releaseYear: 1999,
-            posterPath: nil
+            posterPath: nil,
+            metadata: MediaMetadata(
+                tmdbId: abs(id.hashValue % 100_000),
+                title: title,
+                originalTitle: title,
+                overview: "Fixture",
+                year: 1999,
+                genres: genres,
+                cast: cast
+            )
         )
     }
 }

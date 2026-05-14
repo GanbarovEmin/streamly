@@ -28,6 +28,25 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
         }
     }
 
+    public func libraryEntries() async throws -> [LibraryItem] {
+        try databaseManager.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT media_id, added_at, source
+                    FROM library_items
+                    ORDER BY added_at DESC
+                    """
+            ).map { row in
+                LibraryItem(
+                    mediaID: row["media_id"],
+                    addedAt: date(from: row["added_at"]),
+                    source: row["source"] ?? "manual"
+                )
+            }
+        }
+    }
+
     public func add(_ item: MediaItem) async throws {
         try databaseManager.write { db in
             try mediaRepository.upsert(item, in: db)
@@ -137,6 +156,13 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
                     """,
                 arguments: [UUID().uuidString, item.id, timestamp(), positionSeconds]
             )
+        }
+    }
+
+    public func removeFromHistory(mediaID: String) async throws {
+        try databaseManager.write { db in
+            try db.execute(sql: "DELETE FROM watch_history WHERE media_id = ?", arguments: [mediaID])
+            try db.execute(sql: "DELETE FROM playback_progress WHERE media_id = ?", arguments: [mediaID])
         }
     }
 
@@ -282,11 +308,17 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
             )
             try db.execute(
                 sql: """
-                    INSERT INTO user_list_items (list_id, media_id, added_at)
-                    VALUES (?, ?, ?)
+                    INSERT INTO user_list_items (list_id, media_id, added_at, priority, initial_quality, initial_hdr)
+                    VALUES (?, ?, ?, 'normal', ?, ?)
                     ON CONFLICT(list_id, media_id) DO NOTHING
                     """,
-                arguments: [listID, item.id, timestamp()]
+                arguments: [
+                    listID,
+                    item.id,
+                    timestamp(),
+                    item.bestWatchlistReleaseSnapshot.quality.rawValue,
+                    item.bestWatchlistReleaseSnapshot.hdr.rawValue
+                ]
             )
             try db.execute(sql: "UPDATE user_lists SET updated_at = ? WHERE id = ?", arguments: [timestamp(), listID])
         }
@@ -318,6 +350,48 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
         }
     }
 
+    public func watchlistItems(in listID: String) async throws -> [WatchlistItem] {
+        try databaseManager.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT list_id, media_id, added_at, priority, remind_later_at, initial_quality, initial_hdr
+                    FROM user_list_items
+                    WHERE list_id = ?
+                    ORDER BY added_at DESC
+                    """,
+                arguments: [listID]
+            ).map { row in
+                let qualityRaw: Int = row["initial_quality"]
+                let hdrRaw: String = row["initial_hdr"]
+                let reminder: String? = row["remind_later_at"]
+                return WatchlistItem(
+                    listID: row["list_id"],
+                    mediaID: row["media_id"],
+                    priority: WatchlistPriority(rawValue: row["priority"]) ?? .normal,
+                    remindLaterAt: reminder.map(date(from:)),
+                    addedAt: date(from: row["added_at"]),
+                    initialQuality: ReleaseQuality(rawValue: qualityRaw) ?? .unknown,
+                    initialHDR: HDRFormat(rawValue: hdrRaw) ?? .unknown
+                )
+            }
+        }
+    }
+
+    public func updateWatchlistItem(listID: String, mediaID: String, priority: WatchlistPriority, remindLaterAt: Date?) async throws {
+        try databaseManager.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE user_list_items
+                    SET priority = ?, remind_later_at = ?
+                    WHERE list_id = ? AND media_id = ?
+                    """,
+                arguments: [priority.rawValue, remindLaterAt.map(timestamp), listID, mediaID]
+            )
+            try db.execute(sql: "UPDATE user_lists SET updated_at = ? WHERE id = ?", arguments: [timestamp(), listID])
+        }
+    }
+
     private func list(id: String) async throws -> UserList? {
         try databaseManager.read { db in
             try Row.fetchOne(
@@ -346,5 +420,14 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
             updatedAt: date(from: row["updated_at"]),
             isDefault: (row["is_default"] as Int) == 1
         )
+    }
+}
+
+private extension MediaItem {
+    var bestWatchlistReleaseSnapshot: (quality: ReleaseQuality, hdr: HDRFormat) {
+        guard let release = rankedReleases.first else {
+            return (.unknown, .unknown)
+        }
+        return (release.quality, release.hdr)
     }
 }

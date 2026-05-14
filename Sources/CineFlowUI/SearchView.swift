@@ -17,6 +17,9 @@ public struct SearchView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: CFSpacing.lg) {
                 header
+                recentSearchesBar
+                suggestionsPanel
+                moodDiscoveryBar
                 filterBar
                 stateContent
             }
@@ -123,6 +126,53 @@ public struct SearchView: View {
                         viewModel.filters.subtitleLanguage = value
                         viewModel.refreshWithCurrentFilters()
                     }
+
+                    SearchFilterMenu(
+                        title: t(.searchFilterCodec),
+                        selection: viewModel.filters.codec?.rawValue ?? t(.searchFilterAll),
+                        options: [nil] + viewModel.availableCodecs.map { Optional.some($0.rawValue) },
+                        emptyTitle: t(.searchFilterAll)
+                    ) { value in
+                        viewModel.filters.codec = value.flatMap(VideoCodec.init(rawValue:))
+                        viewModel.refreshWithCurrentFilters()
+                    }
+
+                    SearchFilterMenu(
+                        title: t(.searchFilterMinRating),
+                        selection: viewModel.filters.minimumRating.map { String(format: "%.1f+", $0) } ?? t(.searchFilterAll),
+                        options: [nil, "6.0+", "7.0+", "8.0+"],
+                        emptyTitle: t(.searchFilterAll)
+                    ) { value in
+                        viewModel.filters.minimumRating = value.flatMap { Double($0.replacingOccurrences(of: "+", with: "")) }
+                        viewModel.refreshWithCurrentFilters()
+                    }
+
+                    Menu {
+                        ForEach(sizeFilterOptions.indices, id: \.self) { index in
+                            Button(sizeFilterOptions[index].title) {
+                                applySizeFilter(sizeFilterOptions[index])
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: CFSpacing.xs) {
+                            Text(t(.searchFilterSize))
+                                .foregroundStyle(CFColors.textMuted)
+                            Text(sizeFilterSelection)
+                                .foregroundStyle(CFColors.textPrimary)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(CFColors.textMuted)
+                        }
+                        .font(CFTypography.caption)
+                        .padding(.horizontal, CFSpacing.md)
+                        .frame(height: 30)
+                        .background(
+                            Capsule()
+                                .fill(CFColors.panelFill)
+                                .overlay(Capsule().stroke(CFColors.separator, lineWidth: CFSeparators.width))
+                        )
+                    }
+                    .menuStyle(.borderlessButton)
                 }
                 .padding(.vertical, 1)
             }
@@ -135,6 +185,140 @@ public struct SearchView: View {
                 .fill(CFColors.horizontalGradient)
                 .frame(width: 78, height: 2)
                 .padding(.leading, CFSpacing.lg)
+        }
+    }
+
+    @ViewBuilder
+    private var recentSearchesBar: some View {
+        if !viewModel.recentSearches.isEmpty {
+            HStack(spacing: CFSpacing.sm) {
+                Text(t(.searchRecent))
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+
+                ScrollView(.horizontal) {
+                    HStack(spacing: CFSpacing.xs) {
+                        ForEach(viewModel.recentSearches, id: \.self) { query in
+                            Button {
+                                Task { await viewModel.runRecentSearch(query) }
+                            } label: {
+                                Text(query)
+                                    .font(CFTypography.caption)
+                                    .foregroundStyle(CFColors.textPrimary)
+                                    .padding(.horizontal, CFSpacing.md)
+                                    .frame(height: 28)
+                                    .background(
+                                        Capsule()
+                                            .fill(CFColors.panelFill)
+                                            .overlay(Capsule().stroke(CFColors.separator, lineWidth: CFSeparators.width))
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+
+                Button(t(.searchClear)) {
+                    viewModel.clearRecentSearches()
+                }
+                .font(CFTypography.caption)
+                .buttonStyle(.plain)
+                .foregroundStyle(CFColors.textMuted)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var suggestionsPanel: some View {
+        if !viewModel.searchSuggestions.isEmpty {
+            VStack(alignment: .leading, spacing: CFSpacing.md) {
+                Text(t(.searchSuggestions).uppercased())
+                    .font(CFTypography.overline)
+                    .tracking(1.2)
+                    .foregroundStyle(CFColors.textMuted)
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 190, maximum: 280), spacing: CFSpacing.sm)],
+                    alignment: .leading,
+                    spacing: CFSpacing.sm
+                ) {
+                    ForEach(viewModel.searchSuggestions.prefix(12)) { suggestion in
+                        Button {
+                            Task { await viewModel.selectSuggestion(suggestion) }
+                        } label: {
+                            HStack(spacing: CFSpacing.sm) {
+                                Image(systemName: suggestionIcon(suggestion))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(CFColors.accentPrimary)
+                                    .frame(width: 18)
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(suggestionTitle(suggestion))
+                                        .font(CFTypography.caption)
+                                        .foregroundStyle(CFColors.textPrimary)
+                                        .lineLimit(1)
+
+                                    Text(suggestionSubtitle(suggestion))
+                                        .font(CFTypography.caption)
+                                        .foregroundStyle(CFColors.textMuted)
+                                        .lineLimit(1)
+                                }
+
+                                Spacer(minLength: CFSpacing.xs)
+                            }
+                            .padding(.horizontal, CFSpacing.md)
+                            .frame(height: 48)
+                            .background(
+                                RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                                    .fill(CFColors.panelFill)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                                            .stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width)
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help(suggestionSubtitle(suggestion))
+                    }
+                }
+            }
+            .padding(CFSpacing.lg)
+            .cfPanelBackground(fill: CFColors.panelFill.opacity(0.72))
+        }
+    }
+
+    @ViewBuilder
+    private var moodDiscoveryBar: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.sm) {
+            Text("What to Watch Today?".uppercased())
+                .font(CFTypography.overline)
+                .tracking(1.2)
+                .foregroundStyle(CFColors.textMuted)
+
+            ScrollView(.horizontal) {
+                HStack(spacing: CFSpacing.xs) {
+                    ForEach(viewModel.moodFilters) { filter in
+                        Button {
+                            Task { await viewModel.applyMoodFilter(filter) }
+                        } label: {
+                            Label(filter.title, systemImage: moodIcon(filter))
+                                .font(CFTypography.caption)
+                                .foregroundStyle(CFColors.textPrimary)
+                                .padding(.horizontal, CFSpacing.md)
+                                .frame(height: 32)
+                                .background(
+                                    Capsule()
+                                        .fill(CFColors.panelFill)
+                                        .overlay(Capsule().stroke(CFColors.separator, lineWidth: CFSeparators.width))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 1)
+            }
+            .scrollIndicators(.hidden)
         }
     }
 
@@ -219,10 +403,12 @@ public struct SearchView: View {
                                     metadata: item.metadata,
                                     badge: item.quality,
                                     artworkURL: item.artworkURL
-                                )
-                            ) {
-                                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
-                            }
+                                ),
+                                action: {
+                                    navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+                                },
+                                menuActions: searchCardMenuActions
+                            )
                             .frame(width: 190)
                         }
                     }
@@ -232,6 +418,43 @@ public struct SearchView: View {
                 .scrollIndicators(.hidden)
             }
         }
+    }
+
+    private var searchCardMenuActions: CFMediaCardMenuActions {
+        CFMediaCardMenuActions(
+            availability: CFMediaCardMenuAvailability(
+                canHide: false,
+                canClearProgress: false,
+                canTuneRecommendations: false
+            ),
+            watch: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            details: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            library: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            watchlist: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            list: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            rate: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            hideTitle: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            fixMetadata: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            },
+            findBestRelease: { item in
+                navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
+            }
+        )
     }
 
     private var torrentReleaseSection: some View {
@@ -316,18 +539,155 @@ public struct SearchView: View {
         languageSettingsStore.selectedLanguage
     }
 
+    private var sizeFilterOptions: [(title: String, minimum: Int64?, maximum: Int64?)] {
+        [
+            (t(.searchFilterSizeAny), nil, nil),
+            (t(.searchFilterSizeUnder8), nil, 8_000_000_000),
+            (t(.searchFilterSize8To25), 8_000_000_000, 25_000_000_000),
+            (t(.searchFilterSize25To50), 25_000_000_000, 50_000_000_000),
+            (t(.searchFilterSizeOver50), 50_000_000_000, nil)
+        ]
+    }
+
+    private var sizeFilterSelection: String {
+        sizeFilterOptions.first {
+            $0.minimum == viewModel.filters.minimumSizeBytes && $0.maximum == viewModel.filters.maximumSizeBytes
+        }?.title ?? t(.searchFilterSize)
+    }
+
+    private func applySizeFilter(_ option: (title: String, minimum: Int64?, maximum: Int64?)) {
+        viewModel.filters.minimumSizeBytes = option.minimum
+        viewModel.filters.maximumSizeBytes = option.maximum
+        viewModel.refreshWithCurrentFilters()
+    }
+
     private func sortTitle(_ option: SearchSortOption) -> String {
         switch option {
-        case .best:
-            "Best"
-        case .seeders:
-            "Seeders"
-        case .quality:
-            "Quality"
-        case .size:
-            "Size"
-        case .date:
-            "Date"
+        case .bestMatch:
+            t(.searchSortBestMatch)
+        case .bestQuality:
+            t(.searchSortBestQuality)
+        case .mostSeeders:
+            t(.searchSortMostSeeders)
+        case .smallestSize:
+            t(.searchSortSmallestSize)
+        case .newest:
+            t(.searchSortNewest)
+        case .preferredLanguage:
+            t(.searchSortPreferredLanguage)
+        case .rating:
+            t(.searchSortRating)
+        }
+    }
+
+    private func suggestionTitle(_ suggestion: SearchSuggestion) -> String {
+        guard let quickFilter = suggestion.quickFilter else {
+            return suggestion.title
+        }
+
+        switch quickFilter {
+        case .movies:
+            return t(.searchQuickFilterMovies)
+        case .series:
+            return t(.searchQuickFilterSeries)
+        case .ultraHD:
+            return t(.searchQuickFilter4K)
+        case .russianAudio:
+            return t(.searchQuickFilterRussianAudio)
+        }
+    }
+
+    private func suggestionSubtitle(_ suggestion: SearchSuggestion) -> String {
+        if suggestion.quickFilter != nil {
+            return t(.searchSuggestionQuickFilter)
+        }
+
+        switch suggestion.kind {
+        case .recent:
+            return t(.searchSuggestionRecent)
+        case .trending:
+            return t(.searchSuggestionTrending)
+        case .title:
+            return t(.searchSuggestionTitle)
+        case .originalTitle:
+            return t(.searchSuggestionOriginalTitle)
+        case .localizedTitle:
+            return t(.searchSuggestionLocalizedTitle)
+        case .actor:
+            return t(.searchSuggestionActor)
+        case .director:
+            return t(.searchSuggestionDirector)
+        case .genre:
+            return t(.searchSuggestionGenre)
+        case .year:
+            return t(.searchSuggestionYear)
+        case .typoCorrection:
+            return t(.searchSuggestionTypo)
+        case .quickFilter:
+            return t(.searchSuggestionQuickFilter)
+        }
+    }
+
+    private func suggestionIcon(_ suggestion: SearchSuggestion) -> String {
+        if let quickFilter = suggestion.quickFilter {
+            switch quickFilter {
+            case .movies:
+                return "film"
+            case .series:
+                return "rectangle.stack"
+            case .ultraHD:
+                return "4k.tv"
+            case .russianAudio:
+                return "speaker.wave.2"
+            }
+        }
+
+        switch suggestion.kind {
+        case .recent:
+            return "clock"
+        case .trending:
+            return "chart.line.uptrend.xyaxis"
+        case .title, .originalTitle, .localizedTitle:
+            return "text.magnifyingglass"
+        case .actor:
+            return "person"
+        case .director:
+            return "megaphone"
+        case .genre:
+            return "tag"
+        case .year:
+            return "calendar"
+        case .typoCorrection:
+            return "wand.and.stars"
+        case .quickFilter:
+            return "line.3.horizontal.decrease.circle"
+        }
+    }
+
+    private func moodIcon(_ filter: MoodDiscoveryFilter) -> String {
+        switch filter {
+        case .lightEvening:
+            "moon"
+        case .epic:
+            "sparkles"
+        case .shortMovie, .runtime30To60, .under90Minutes:
+            "clock"
+        case .backgroundSeries:
+            "rectangle.on.rectangle"
+        case .highRated:
+            "star"
+        case .new:
+            "calendar"
+        case .fourKHDR:
+            "4k.tv"
+        case .drama:
+            "theatermasks"
+        case .action:
+            "bolt"
+        case .comedy:
+            "face.smiling"
+        case .longWeekendPicks:
+            "sofa"
         }
     }
 
@@ -455,6 +815,11 @@ private struct TorrentReleaseRow: View {
                         .foregroundStyle(CFColors.textMuted)
                         .lineLimit(1)
 
+                    Text(release.comparisonSummary)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textSecondary)
+                        .lineLimit(1)
+
                     Text(languagesText)
                         .font(CFTypography.caption)
                         .foregroundStyle(CFColors.textSecondary)
@@ -465,6 +830,16 @@ private struct TorrentReleaseRow: View {
 
                 SeedersBadge(release.seeders)
                     .help(seedersHelp)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(release.codecLabel)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textPrimary)
+                    Text(release.hdrLabel)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
+                .frame(width: 92, alignment: .leading)
 
                 Text(seedersText)
                     .font(CFTypography.compactNumber)

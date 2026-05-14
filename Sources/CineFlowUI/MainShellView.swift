@@ -13,6 +13,8 @@ public struct MainShellView: View {
     @StateObject private var viewModel: CineFlowRootViewModel
     @StateObject private var searchViewModel: SearchViewModel
     @StateObject private var imagePipeline: CineFlowImagePipeline
+    @StateObject private var notificationCenterViewModel: BetterReleaseNotificationCenterViewModel
+    @State private var showsNotificationCenter = false
     @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
     @AppStorage("streamly.reduceMotion") private var appReduceMotion = false
     private let showsPerformanceOverlay: Bool
@@ -35,6 +37,16 @@ public struct MainShellView: View {
             settingsRepository: environment.settingsRepository
         ))
         _imagePipeline = StateObject(wrappedValue: CineFlowImagePipeline(imageCacheService: environment.imageCacheService))
+        let notificationStore = UserDefaultsNotificationCenterStore()
+        _notificationCenterViewModel = StateObject(wrappedValue: NotificationCenterViewModel(
+            store: notificationStore,
+            service: BetterReleaseNotificationService(
+                libraryRepository: environment.libraryRepository,
+                settingsRepository: environment.settingsRepository,
+                store: notificationStore
+            ),
+            settingsRepository: environment.settingsRepository
+        ))
         showsPerformanceOverlay = ProcessInfo.processInfo.environment["CINEFLOW_PERFORMANCE_OVERLAY"] == "1"
     }
 
@@ -53,12 +65,20 @@ public struct MainShellView: View {
                             controls: MainShellState.defaultTopControls,
                             focusRequestID: navigationCoordinator.searchFocusRequestID,
                             queryText: searchViewModel.queryText,
+                            isLoading: searchViewModel.state == .loading,
+                            controlBadges: ["notifications": notificationCenterViewModel.unreadCount],
                             onQueryChange: { query in
                                 searchViewModel.updateQuery(query)
                                 navigationCoordinator.selectSidebarRoute(.search)
                             },
+                            onClear: {
+                                searchViewModel.clearQuery()
+                            },
                             onSearchFocus: {
                                 navigationCoordinator.selectSidebarRoute(.search)
+                            },
+                            onControlAction: { control in
+                                handleTopControl(control)
                             }
                         )
                             .frame(height: 92)
@@ -71,12 +91,39 @@ public struct MainShellView: View {
             if showsPerformanceOverlay {
                 PerformanceDebugOverlay(imagePipeline: imagePipeline, environment: environment)
             }
+
+            if showsNotificationCenter {
+                NotificationCenterView(viewModel: notificationCenterViewModel) { route in
+                    navigationCoordinator.navigate(to: route)
+                    showsNotificationCenter = false
+                }
+                .padding(.top, 74)
+                .padding(.trailing, CFSpacing.xl)
+                .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+            }
         }
         .background(CFColors.clear)
         .environment(\.cfReduceMotion, reduceMotion)
         .cfAnimation(.easeInOut(duration: 0.22), value: navigationCoordinator.currentRoute, reduceMotion: reduceMotion)
         .task {
             await viewModel.load()
+            await notificationCenterViewModel.load()
+        }
+    }
+
+    private func handleTopControl(_ control: ShellTopControl) {
+        switch control.id {
+        case "notifications":
+            showsNotificationCenter.toggle()
+            if showsNotificationCenter {
+                Task { await notificationCenterViewModel.refresh() }
+            }
+        case "updates":
+            navigationCoordinator.navigate(to: .settingsSection(id: SettingsSectionID.updates.rawValue))
+        case "profile":
+            navigationCoordinator.selectSidebarRoute(.settings)
+        default:
+            break
         }
     }
 
@@ -100,7 +147,8 @@ public struct MainShellView: View {
             navigationCoordinator: navigationCoordinator,
             sourceManager: sourceManager,
             playbackProgressRecorder: playbackProgressRecorder,
-            imagePipeline: imagePipeline
+            imagePipeline: imagePipeline,
+            notificationCenterViewModel: notificationCenterViewModel
         )
         .id(navigationCoordinator.currentRoute.id)
         .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.995)))

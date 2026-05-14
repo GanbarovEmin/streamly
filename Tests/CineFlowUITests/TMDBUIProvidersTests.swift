@@ -49,6 +49,31 @@ final class TMDBUIProvidersTests: XCTestCase {
         XCTAssertEqual(items.first?.quality, "Movie")
     }
 
+    func testTMDBPersonProviderKeepsSourceMediaAsFirstKnownForContext() async throws {
+        let service = StubMetadataService(searchResults: [
+            Self.mediaItem(id: "tmdb:movie:100", title: "Emilia", kind: .movie)
+        ])
+        let provider = TMDBPersonDetailProvider(metadataService: service)
+        let source = PersonSourceMedia(
+            id: "tmdb:tv:1399",
+            title: "Game of Thrones",
+            kind: .series,
+            year: 2011,
+            posterURL: try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w500/got.jpg"))
+        )
+
+        let response = try await provider.personDetail(for: PersonRoutePayload(
+            id: "emilia",
+            name: "Emilia Clarke",
+            role: "Daenerys Targaryen",
+            sourceMedia: source
+        ))
+
+        XCTAssertEqual(response?.detail.knownFor.first?.id, "tmdb:tv:1399")
+        XCTAssertEqual(response?.filmography.first?.mediaItem.displayTitle, "Game of Thrones")
+        XCTAssertEqual(response?.filmography.map(\.mediaItem.id), ["tmdb:tv:1399", "tmdb:movie:100"])
+    }
+
     func testTMDBMovieDetailProviderMapsDetailTrailersCastAndSimilarItems() async throws {
         let posterURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w500/matrix.jpg"))
         let backdropURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w1280/matrix-backdrop.jpg"))

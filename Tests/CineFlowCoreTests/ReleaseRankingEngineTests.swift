@@ -219,6 +219,42 @@ final class ReleaseRankingEngineTests: XCTestCase {
         XCTAssertTrue(ranked.first?.reasons.contains(.highSeedersPreference) == true)
     }
 
+    func testHighSeedersPreferenceDemotesLargeLowSeeded4KForFasterStartup() {
+        let releases = [
+            release(
+                id: "got-2160p-one-seeder",
+                quality: .ultraHD,
+                codec: .hevc,
+                hdr: .dolbyVision,
+                seeders: 1,
+                sizeGB: 9.52,
+                audioLanguages: ["ru", "en"],
+                subtitleLanguages: ["ru"]
+            ),
+            release(
+                id: "got-1080p-more-seeders",
+                quality: .fullHD,
+                codec: .hevc,
+                hdr: .none,
+                seeders: 22,
+                sizeGB: 4.66,
+                audioLanguages: ["ru", "en"],
+                subtitleLanguages: ["ru"]
+            )
+        ]
+        let preferences = RankingPreferences(
+            preferredAudioLanguages: ["ru"],
+            preferredSubtitleLanguages: ["ru"],
+            supportsHDR: true,
+            preferHighSeedersOverHighestQuality: true
+        )
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.first?.release.id, "got-1080p-more-seeders")
+        XCTAssertTrue(ranked.last?.reasons.contains(.startupRiskPenalty) == true)
+    }
+
     func testHDRAndCodecPreferencesAffectRanking() {
         let releases = [
             release(id: "hdr-av1", quality: .fullHD, codec: .av1, hdr: .hdr10, seeders: 300, sizeGB: 8),

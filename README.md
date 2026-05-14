@@ -16,7 +16,7 @@
 
 ![Streamly hero banner](docs/assets/hero-banner.png)
 
-Streamly brings media discovery, source selection, playback, subtitles, library management and updates into one polished Apple Silicon app. It is built for people who want a desktop-first media experience without jumping between metadata sites, file managers, torrent tools and video players.
+Streamly brings movie and series discovery, ranked release selection, playback, subtitles, library management and updates into one polished Apple Silicon app. It is built for people who want a desktop-first media experience without jumping between metadata sites, file managers, torrent tools and video players.
 
 Streamly is the public app, Swift package and executable product name. Some legacy source targets still use `CineFlow*` implementation names until a separate module-graph migration renames them safely.
 
@@ -69,13 +69,17 @@ Streamly is the public app, Swift package and executable product name. Some lega
 | --- | --- |
 | ![Home screen](docs/screenshots/home.png) | ![Search screen](docs/screenshots/search.png) |
 
+| Movies | Series |
+| --- | --- |
+| ![Movies catalog](docs/screenshots/library.png) | ![Series catalog](docs/screenshots/series.png) |
+
 | Movie Detail | Series Detail |
 | --- | --- |
 | ![Movie detail screen](docs/screenshots/movie-detail.png) | ![Series detail screen](docs/screenshots/series-detail.png) |
 
-| Player | Library | Settings |
-| --- | --- | --- |
-| ![Player screen](docs/screenshots/player.png) | ![Library screen](docs/screenshots/library.png) | ![Settings screen](docs/screenshots/settings.png) |
+| Settings |
+| --- |
+| ![Settings screen](docs/screenshots/settings.png) |
 
 The screenshot set is intentionally kept in `docs/screenshots/` so the GitHub page can be refreshed with real release captures without changing the README structure.
 

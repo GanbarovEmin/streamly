@@ -41,14 +41,15 @@ public final class MediaRepository {
     func upsert(_ item: MediaItem, in db: Database) throws {
         try db.execute(
             sql: """
-                INSERT INTO media_items (id, title, kind, overview, release_year, poster_path, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO media_items (id, title, kind, overview, release_year, poster_path, metadata_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     title = excluded.title,
                     kind = excluded.kind,
                     overview = excluded.overview,
                     release_year = excluded.release_year,
                     poster_path = excluded.poster_path,
+                    metadata_json = excluded.metadata_json,
                     updated_at = excluded.updated_at
                 """,
             arguments: [
@@ -58,6 +59,7 @@ public final class MediaRepository {
                 item.overview,
                 item.releaseYear,
                 item.posterPath,
+                try item.metadata.map(DatabaseEncoding.jsonString),
                 timestamp()
             ]
         )

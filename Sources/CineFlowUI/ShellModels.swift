@@ -13,6 +13,8 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
     case history
     case settings
     case mediaDetail(id: String)
+    case collectionDetail(id: String)
+    case personDetail(PersonRoutePayload)
     case player(
         mediaID: String,
         sourceID: String? = nil,
@@ -45,6 +47,10 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             "settings"
         case .mediaDetail(let id):
             "mediaDetail:\(id)"
+        case .collectionDetail(let id):
+            "collectionDetail:\(id)"
+        case .personDetail(let person):
+            "personDetail:\(person.id)"
         case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt):
             "player:\(mediaID):\(sourceID ?? "auto"):\(release?.id ?? "no-release"):\(fallbackReleases.map(\.id).joined(separator: ",")):\(selectionContext?.episodeID ?? selectionContext?.mediaID ?? "no-context"):\(nextEpisodePrompt?.title ?? "no-next")"
         case .settingsSection(let id):
@@ -78,6 +84,10 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             .navigationSettings
         case .mediaDetail:
             .navigationMediaDetail
+        case .collectionDetail:
+            .navigationMediaDetail
+        case .personDetail:
+            .navigationMediaDetail
         case .player:
             .navigationPlayer
         case .settingsSection:
@@ -107,6 +117,10 @@ public enum AppRoute: Hashable, Identifiable, Sendable {
             "gearshape.fill"
         case .mediaDetail:
             "info.circle.fill"
+        case .collectionDetail:
+            "rectangle.stack.fill.badge.person.crop"
+        case .personDetail:
+            "person.crop.rectangle.stack.fill"
         case .player:
             "play.circle.fill"
         case .settingsSection:

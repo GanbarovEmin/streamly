@@ -6,7 +6,11 @@ import CineFlowSources
 final class SearchViewModelTests: XCTestCase {
     @MainActor
     func testSearchGroupsMediaAndTorrentResultsFromMockProvider() async {
-        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         await viewModel.searchNow(query: "dune")
 
@@ -23,11 +27,15 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     func testDefaultSortUsesBestQualityThenHighestSeeders() async {
-        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         await viewModel.searchNow(query: "matrix")
 
-        XCTAssertEqual(viewModel.sortOption, .best)
+        XCTAssertEqual(viewModel.sortOption, .bestMatch)
         XCTAssertEqual(viewModel.results.torrentReleases.map(\.title), [
             "The Matrix 2160p HDR REMUX",
             "The Matrix 2160p WEB-DL",
@@ -38,7 +46,11 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     func testSearchTorrentRowsExposeCompactReleaseHealth() async {
-        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         await viewModel.searchNow(query: "matrix")
 
@@ -47,8 +59,35 @@ final class SearchViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSearchRowsExposeReleaseComparisonMetadata() async throws {
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
+
+        await viewModel.searchNow(query: "matrix")
+
+        let release = try XCTUnwrap(viewModel.results.torrentReleases.first)
+        XCTAssertEqual(release.qualityLabel, "2160p Dolby Vision")
+        XCTAssertEqual(release.hdrLabel, "Dolby Vision")
+        XCTAssertEqual(release.codecLabel, "HEVC")
+        XCTAssertEqual(release.sizeLabel, "78.40 GB")
+        XCTAssertEqual(release.source, "Archive")
+        XCTAssertEqual(release.audioLanguages, ["en", "ru"])
+        XCTAssertEqual(release.subtitleLanguages, ["en", "ru"])
+        XCTAssertTrue(release.comparisonSummary.contains("2160p"))
+        XCTAssertTrue(release.comparisonSummary.contains("HEVC"))
+        XCTAssertFalse(release.rankingExplanation.isEmpty)
+    }
+
+    @MainActor
     func testFiltersConstrainTypeQualitySourceYearAndLanguages() async {
-        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         viewModel.filters.mediaType = .movies
         viewModel.filters.qualities = [.ultraHD]
@@ -57,6 +96,9 @@ final class SearchViewModelTests: XCTestCase {
         viewModel.filters.year = 1999
         viewModel.filters.audioLanguage = "en"
         viewModel.filters.subtitleLanguage = "ru"
+        viewModel.filters.codec = .hevc
+        viewModel.filters.minimumSizeBytes = 70_000_000_000
+        viewModel.filters.maximumSizeBytes = 80_000_000_000
         await viewModel.searchNow(query: "matrix")
 
         XCTAssertEqual(viewModel.results.movies.map(\.title), ["The Matrix"])
@@ -66,22 +108,165 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     func testSortOptionsCanOrderBySeedersQualitySizeAndDate() async {
-        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
         await viewModel.searchNow(query: "matrix")
 
-        viewModel.setSortOption(.seeders)
+        viewModel.setSortOption(.mostSeeders)
         XCTAssertEqual(viewModel.results.torrentReleases.first?.title, "The Matrix 1080p BluRay")
 
-        viewModel.setSortOption(.size)
+        viewModel.setSortOption(.smallestSize)
+        XCTAssertEqual(viewModel.results.torrentReleases.first?.title, "The Matrix 1080p BluRay")
+
+        viewModel.setSortOption(.newest)
+        XCTAssertEqual(viewModel.results.torrentReleases.first?.title, "The Matrix 2160p WEB-DL")
+
+        viewModel.setSortOption(.bestQuality)
         XCTAssertEqual(viewModel.results.torrentReleases.first?.title, "The Matrix 2160p HDR REMUX")
 
-        viewModel.setSortOption(.date)
-        XCTAssertEqual(viewModel.results.torrentReleases.first?.title, "The Matrix 2160p WEB-DL")
+        viewModel.filters.audioLanguage = "ru"
+        viewModel.setSortOption(.preferredLanguage)
+        XCTAssertEqual(viewModel.results.torrentReleases.first?.title, "The Matrix 1080p BluRay")
+    }
+
+    @MainActor
+    func testRecentSearchesAndDefaultSortPersistLocally() async {
+        let preferences = InMemorySearchPreferencesStore()
+        let firstViewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: preferences
+        )
+
+        await firstViewModel.searchNow(query: " matrix ")
+        await firstViewModel.searchNow(query: "dune")
+        firstViewModel.setSortOption(.newest)
+
+        XCTAssertEqual(firstViewModel.recentSearches, ["dune", "matrix"])
+        XCTAssertEqual(preferences.recentSearches, ["dune", "matrix"])
+        XCTAssertEqual(preferences.sortOption, .newest)
+
+        let secondViewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: preferences
+        )
+
+        XCTAssertEqual(secondViewModel.recentSearches, ["dune", "matrix"])
+        XCTAssertEqual(secondViewModel.sortOption, .newest)
+
+        secondViewModel.clearRecentSearches()
+        XCTAssertTrue(secondViewModel.recentSearches.isEmpty)
+        XCTAssertTrue(preferences.recentSearches.isEmpty)
+
+        await secondViewModel.runRecentSearch("matrix")
+        XCTAssertEqual(secondViewModel.queryText, "matrix")
+        XCTAssertEqual(secondViewModel.recentSearches, ["matrix"])
+    }
+
+    @MainActor
+    func testEmptySearchSuggestionsShowRecentTrendingAndQuickFilters() {
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore(recentSearches: ["matrix"])
+        )
+
+        XCTAssertEqual(viewModel.searchSuggestions.first?.kind, .recent)
+        XCTAssertEqual(viewModel.searchSuggestions.first?.query, "matrix")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .trending && $0.title == "Dune: Part Two" })
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.quickFilter == .movies })
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.quickFilter == .series })
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.quickFilter == .ultraHD })
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.quickFilter == .russianAudio })
+    }
+
+    @MainActor
+    func testTypingSuggestionsCoverTitlesPeopleGenresYearsAndTypoCorrection() {
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore(recentSearches: ["dune"])
+        )
+
+        viewModel.updateQuery("матри")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .localizedTitle && $0.title == "The Matrix" })
+
+        viewModel.updateQuery("wachowski")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .director && $0.title == "The Matrix" })
+
+        viewModel.updateQuery("keanu")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .actor && $0.title == "The Matrix" })
+
+        viewModel.updateQuery("sci")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .genre && $0.title == "Sci-Fi" })
+
+        viewModel.updateQuery("1999")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .year && $0.query == "1999" })
+
+        viewModel.updateQuery("matrx")
+        XCTAssertTrue(viewModel.searchSuggestions.contains { $0.kind == .typoCorrection && $0.query == "The Matrix" })
+    }
+
+    @MainActor
+    func testSearchMatchesRussianTitleOriginalTitlePeopleGenreYearAndTypoTolerance() async {
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
+
+        await viewModel.searchNow(query: "Матрица")
+        XCTAssertEqual(viewModel.results.movies.map(\.title), ["The Matrix"])
+
+        await viewModel.searchNow(query: "Keanu Reeves")
+        XCTAssertEqual(viewModel.results.movies.map(\.title), ["The Matrix"])
+
+        await viewModel.searchNow(query: "Wachowski")
+        XCTAssertEqual(viewModel.results.movies.map(\.title), ["The Matrix"])
+
+        await viewModel.searchNow(query: "Sci-Fi")
+        XCTAssertTrue(viewModel.results.movies.map(\.title).contains("Dune: Part Two"))
+        XCTAssertTrue(viewModel.results.series.map(\.title).contains("Dune: Prophecy"))
+
+        await viewModel.searchNow(query: "1999")
+        XCTAssertEqual(viewModel.results.movies.map(\.title), ["The Matrix"])
+
+        await viewModel.searchNow(query: "matrx")
+        XCTAssertEqual(viewModel.results.movies.map(\.title), ["The Matrix"])
+    }
+
+    @MainActor
+    func testQuickFilterSuggestionsApplySearchFilters() async {
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
+
+        let movies = try! XCTUnwrap(viewModel.searchSuggestions.first { $0.quickFilter == .movies })
+        await viewModel.selectSuggestion(movies)
+        XCTAssertEqual(viewModel.filters.mediaType, .movies)
+
+        let ultraHD = try! XCTUnwrap(viewModel.searchSuggestions.first { $0.quickFilter == .ultraHD })
+        await viewModel.selectSuggestion(ultraHD)
+        XCTAssertTrue(viewModel.filters.qualities.contains(.ultraHD))
+
+        let russianAudio = try! XCTUnwrap(viewModel.searchSuggestions.first { $0.quickFilter == .russianAudio })
+        await viewModel.selectSuggestion(russianAudio)
+        XCTAssertEqual(viewModel.filters.audioLanguage, "ru")
     }
 
     @MainActor
     func testDebouncedQueryDoesNotBlockAndEventuallyLoads() async throws {
-        let viewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 10_000_000)
+        let viewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 10_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         viewModel.updateQuery("arrival")
 
@@ -98,7 +283,11 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     func testSlowSearchResponseDoesNotOverwriteNewerQuery() async throws {
-        let viewModel = SearchViewModel(provider: DelayedSearchProvider(), debounceNanoseconds: 0)
+        let viewModel = SearchViewModel(
+            provider: DelayedSearchProvider(),
+            debounceNanoseconds: 0,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         let slowSearch = Task { await viewModel.searchNow(query: "slow") }
         try await Task.sleep(nanoseconds: 10_000_000)
@@ -112,7 +301,11 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     func testLargeSearchResponseBuildsLoadedStateWithRankedReleases() async {
-        let viewModel = SearchViewModel(provider: LargeSearchProvider(), debounceNanoseconds: 0)
+        let viewModel = SearchViewModel(
+            provider: LargeSearchProvider(),
+            debounceNanoseconds: 0,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         await viewModel.searchNow(query: "matrix")
 
@@ -125,14 +318,19 @@ final class SearchViewModelTests: XCTestCase {
 
     @MainActor
     func testEmptyAndErrorStatesAreRepresented() async {
-        let emptyViewModel = SearchViewModel(provider: MockSearchProvider(), debounceNanoseconds: 1_000_000)
+        let emptyViewModel = SearchViewModel(
+            provider: MockSearchProvider(),
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
         await emptyViewModel.searchNow(query: "nothing")
 
         XCTAssertEqual(emptyViewModel.state, .empty)
 
         let failingViewModel = SearchViewModel(
             provider: MockSearchProvider(shouldFail: true),
-            debounceNanoseconds: 1_000_000
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
         )
         await failingViewModel.searchNow(query: "dune")
 
@@ -167,7 +365,11 @@ final class SearchViewModelTests: XCTestCase {
             mediaProvider: MockSearchProvider(),
             torrentAggregator: TorrentSearchAggregator(sourceManager: sourceManager)
         )
-        let viewModel = SearchViewModel(provider: provider, debounceNanoseconds: 1_000_000)
+        let viewModel = SearchViewModel(
+            provider: provider,
+            debounceNanoseconds: 1_000_000,
+            preferencesStore: InMemorySearchPreferencesStore()
+        )
 
         await viewModel.searchNow(query: "matrix")
 
@@ -226,6 +428,8 @@ private struct LargeSearchProvider: SearchProviderProtocol {
             source: index.isMultiple(of: 2) ? "Archive" : "Torrentio",
             magnetURI: "magnet:?xt=urn:btih:fixture\(index)",
             quality: index.isMultiple(of: 3) ? .ultraHD : .fullHD,
+            codec: index.isMultiple(of: 4) ? .hevc : .h264,
+            hdrFormat: index.isMultiple(of: 5) ? .hdr10 : HDRFormat.none,
             isHDR: index.isMultiple(of: 5),
             seeders: 1_200 - index,
             leechers: index % 20,

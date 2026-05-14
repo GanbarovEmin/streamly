@@ -25,4 +25,14 @@ final class DesignTokenTests: XCTestCase {
         XCTAssertEqual(CFMotion.reducedHoverScale, 1)
         XCTAssertEqual(CFMotion.reducedActiveScale, 1)
     }
+
+    func testCinematicTokensRespectReduceMotion() {
+        XCTAssertEqual(CFMotionToken.cinematic.duration, 0.42, accuracy: 0.001)
+        XCTAssertEqual(CFCinematicStyle.detailHeroMinHeight, 760)
+        XCTAssertEqual(CFCinematicStyle.playerControlAutoHideDelay, 1.8, accuracy: 0.001)
+        XCTAssertEqual(CFCinematicStyle.backdropBlurRadius(reduceMotion: false), 18)
+        XCTAssertEqual(CFCinematicStyle.backdropBlurRadius(reduceMotion: true), 0)
+        XCTAssertNil(CFCinematicStyle.transitionAnimation(reduceMotion: true))
+        XCTAssertNotNil(CFCinematicStyle.transitionAnimation(reduceMotion: false))
+    }
 }

@@ -48,6 +48,7 @@ public enum ReleaseRankingReason: Equatable, Sendable {
     case codecPreference(CodecPreference)
     case highSeedersPreference
     case fitsSizePreference(Int64)
+    case startupRiskPenalty
 
     public var explanation: String {
         switch self {
@@ -83,6 +84,8 @@ public enum ReleaseRankingReason: Equatable, Sendable {
             "Prefer high seeders"
         case .fitsSizePreference(let bytes):
             "Fits max file size: \(bytes) bytes"
+        case .startupRiskPenalty:
+            "Startup risk: large low-seeded release"
         }
     }
 }
@@ -281,6 +284,12 @@ public struct ReleaseRankingEngine: Sendable {
         score += releaseHealth.healthScore
         reasons.append(.releaseHealth(releaseHealth))
 
+        let startupRiskPenalty = scoreForStartupRisk(release)
+        if startupRiskPenalty != 0 {
+            score += startupRiskPenalty
+            reasons.append(.startupRiskPenalty)
+        }
+
         let hdrScore = scoreForHDR(release.hdr)
         if hdrScore != 0 {
             score += hdrScore
@@ -409,6 +418,24 @@ public struct ReleaseRankingEngine: Sendable {
 
     private var seedersWeight: Double {
         preferences.preferHighSeedersOverHighestQuality ? 10.0 : 2.0
+    }
+
+    private func scoreForStartupRisk(_ release: TorrentRelease) -> Double {
+        guard preferences.preferHighSeedersOverHighestQuality else { return 0 }
+
+        var penalty = 0.0
+        if release.quality == .ultraHD, release.seeders < 25 {
+            penalty -= 2_200
+        }
+
+        guard let sizeBytes = release.sizeBytes else { return penalty }
+        let sizeGB = Double(sizeBytes) / 1_000_000_000
+        if sizeGB >= 20, release.seeders < 50 {
+            penalty -= 1_400
+        } else if sizeGB >= 8, release.seeders < 10 {
+            penalty -= 900
+        }
+        return penalty
     }
 
     private func scoreForPreferredQuality(_ quality: ReleaseQuality) -> Double {

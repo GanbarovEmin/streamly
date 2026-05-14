@@ -12,6 +12,7 @@ public struct CFMediaCardModel: Identifiable, Equatable, Sendable {
     public let progress: Double?
     public let accentIndex: Int
     public let artworkURL: URL?
+    public let genres: [String]
 
     public init(
         id: String,
@@ -20,7 +21,8 @@ public struct CFMediaCardModel: Identifiable, Equatable, Sendable {
         badge: String? = nil,
         progress: Double? = nil,
         accentIndex: Int = 0,
-        artworkURL: URL? = nil
+        artworkURL: URL? = nil,
+        genres: [String] = []
     ) {
         self.id = id
         self.title = title
@@ -29,6 +31,7 @@ public struct CFMediaCardModel: Identifiable, Equatable, Sendable {
         self.progress = progress.map { min(max($0, 0), 1) }
         self.accentIndex = accentIndex
         self.artworkURL = artworkURL
+        self.genres = genres
     }
 }
 
@@ -37,17 +40,180 @@ public enum MediaCardStyle: Equatable, Sendable {
     case landscape
 }
 
+public struct CFMediaCardMenuAvailability: Equatable, Sendable {
+    public var canWatch: Bool
+    public var canOpenDetails: Bool
+    public var canAddToLibrary: Bool
+    public var canAddToWatchlist: Bool
+    public var canAddToList: Bool
+    public var canRate: Bool
+    public var canHide: Bool
+    public var canFixMetadata: Bool
+    public var canFindBestRelease: Bool
+    public var canClearProgress: Bool
+    public var canTuneRecommendations: Bool
+
+    public init(
+        canWatch: Bool = true,
+        canOpenDetails: Bool = true,
+        canAddToLibrary: Bool = true,
+        canAddToWatchlist: Bool = true,
+        canAddToList: Bool = true,
+        canRate: Bool = true,
+        canHide: Bool = true,
+        canFixMetadata: Bool = true,
+        canFindBestRelease: Bool = true,
+        canClearProgress: Bool = false,
+        canTuneRecommendations: Bool = true
+    ) {
+        self.canWatch = canWatch
+        self.canOpenDetails = canOpenDetails
+        self.canAddToLibrary = canAddToLibrary
+        self.canAddToWatchlist = canAddToWatchlist
+        self.canAddToList = canAddToList
+        self.canRate = canRate
+        self.canHide = canHide
+        self.canFixMetadata = canFixMetadata
+        self.canFindBestRelease = canFindBestRelease
+        self.canClearProgress = canClearProgress
+        self.canTuneRecommendations = canTuneRecommendations
+    }
+
+    public static let all = CFMediaCardMenuAvailability(canClearProgress: true)
+}
+
+public struct CFMediaCardMenuActions {
+    public var availability: CFMediaCardMenuAvailability
+    public var watch: (CFMediaCardModel) -> Void
+    public var details: (CFMediaCardModel) -> Void
+    public var library: (CFMediaCardModel) -> Void
+    public var watchlist: (CFMediaCardModel) -> Void
+    public var list: (CFMediaCardModel) -> Void
+    public var rate: (CFMediaCardModel) -> Void
+    public var hideTitle: (CFMediaCardModel) -> Void
+    public var fixMetadata: (CFMediaCardModel) -> Void
+    public var findBestRelease: (CFMediaCardModel) -> Void
+    public var clearProgress: (CFMediaCardModel) -> Void
+    public var notInterested: (CFMediaCardModel) -> Void
+    public var removeFromRecommendations: (CFMediaCardModel) -> Void
+    public var showLessOfGenre: (CFMediaCardModel) -> Void
+    public var showMoreOfGenre: (CFMediaCardModel) -> Void
+
+    public init(
+        availability: CFMediaCardMenuAvailability = .all,
+        watch: @escaping (CFMediaCardModel) -> Void = { _ in },
+        details: @escaping (CFMediaCardModel) -> Void = { _ in },
+        library: @escaping (CFMediaCardModel) -> Void = { _ in },
+        watchlist: @escaping (CFMediaCardModel) -> Void = { _ in },
+        list: @escaping (CFMediaCardModel) -> Void = { _ in },
+        rate: @escaping (CFMediaCardModel) -> Void = { _ in },
+        hideTitle: @escaping (CFMediaCardModel) -> Void = { _ in },
+        fixMetadata: @escaping (CFMediaCardModel) -> Void = { _ in },
+        findBestRelease: @escaping (CFMediaCardModel) -> Void = { _ in },
+        clearProgress: @escaping (CFMediaCardModel) -> Void = { _ in },
+        notInterested: @escaping (CFMediaCardModel) -> Void = { _ in },
+        removeFromRecommendations: @escaping (CFMediaCardModel) -> Void = { _ in },
+        showLessOfGenre: @escaping (CFMediaCardModel) -> Void = { _ in },
+        showMoreOfGenre: @escaping (CFMediaCardModel) -> Void = { _ in }
+    ) {
+        self.availability = availability
+        self.watch = watch
+        self.details = details
+        self.library = library
+        self.watchlist = watchlist
+        self.list = list
+        self.rate = rate
+        self.hideTitle = hideTitle
+        self.fixMetadata = fixMetadata
+        self.findBestRelease = findBestRelease
+        self.clearProgress = clearProgress
+        self.notInterested = notInterested
+        self.removeFromRecommendations = removeFromRecommendations
+        self.showLessOfGenre = showLessOfGenre
+        self.showMoreOfGenre = showMoreOfGenre
+    }
+}
+
+private enum CFGeneratedArtworkStyle {
+    case poster
+    case landscape
+}
+
+private struct CFGeneratedArtworkFallback: View {
+    let model: CFMediaCardModel
+    let style: CFGeneratedArtworkStyle
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            LinearGradient(
+                colors: gradientColors,
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            VStack(alignment: .leading, spacing: style == .poster ? 8 : 4) {
+                Spacer(minLength: 0)
+                Text(initials)
+                    .font(.system(size: style == .poster ? 52 : 34, weight: .black, design: .rounded))
+                    .foregroundStyle(CFColors.textPrimary.opacity(0.88))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                Text(model.title)
+                    .font(style == .poster ? CFTypography.metadata : CFTypography.caption)
+                    .foregroundStyle(CFColors.textSecondary)
+                    .lineLimit(style == .poster ? 3 : 2)
+                    .minimumScaleFactor(0.74)
+            }
+            .padding(style == .poster ? CFSpacing.md : CFSpacing.sm)
+
+            Image(systemName: style == .poster ? "film.stack.fill" : "play.rectangle.fill")
+                .font(.system(size: style == .poster ? 22 : 18, weight: .semibold))
+                .foregroundStyle(CFColors.textPrimary.opacity(0.20))
+                .padding(style == .poster ? CFSpacing.md : CFSpacing.sm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        }
+    }
+
+    private var initials: String {
+        let letters = model.title
+            .split { !$0.isLetter && !$0.isNumber }
+            .prefix(2)
+            .compactMap(\.first)
+            .map { String($0) }
+            .joined()
+        return letters.isEmpty ? "CF" : letters.uppercased()
+    }
+
+    private var gradientColors: [Color] {
+        switch model.accentIndex % 3 {
+        case 0:
+            return [CFColors.backgroundTertiary, CFColors.accentPrimary.opacity(0.34), CFColors.backgroundSecondary]
+        case 1:
+            return [CFColors.backgroundSecondary, CFColors.accentSecondary.opacity(0.30), CFColors.surfaceOverlay]
+        default:
+            return [CFColors.surfaceOverlay, CFColors.accentTertiary.opacity(0.22), CFColors.backgroundTertiary]
+        }
+    }
+}
+
 public struct PosterCard: View {
     private let model: CFMediaCardModel
     private let imageDataLoader: CFImageDataLoader?
+    private let menuActions: CFMediaCardMenuActions
     private let action: () -> Void
 
     @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
-    public init(model: CFMediaCardModel, action: @escaping () -> Void = {}, imageDataLoader: CFImageDataLoader? = nil) {
+    public init(
+        model: CFMediaCardModel,
+        action: @escaping () -> Void = {},
+        menuActions: CFMediaCardMenuActions = CFMediaCardMenuActions(),
+        imageDataLoader: CFImageDataLoader? = nil
+    ) {
         self.model = model
         self.imageDataLoader = imageDataLoader
+        self.menuActions = menuActions
         self.action = action
     }
 
@@ -105,7 +271,9 @@ public struct PosterCard: View {
                 Text(model.metadata)
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
             }
+            .frame(height: 286, alignment: .top)
             .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.012 : 1))
             .cfAnimation(CFMotion.quick, value: isHovering, reduceMotion: reduceMotion)
         }
@@ -139,6 +307,8 @@ public struct PosterCard: View {
                 if let artworkURL = model.artworkURL {
                     CFCachedAsyncImage(url: artworkURL, contentMode: .fill, imageDataLoader: imageDataLoader)
                         .clipShape(RoundedRectangle(cornerRadius: CFRadius.poster, style: .continuous))
+                } else {
+                    CFGeneratedArtworkFallback(model: model, style: .poster)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: CFRadius.poster, style: .continuous))
@@ -154,23 +324,65 @@ public struct PosterCard: View {
 
     @ViewBuilder
     private var cardContextMenu: some View {
-        Button("Watch", systemImage: "play.fill", action: action)
-        Button("Open Details", systemImage: "info.circle", action: action)
-        Button("Add to Library", systemImage: "plus", action: action)
+        Button("Watch", systemImage: "play.fill") { menuActions.watch(model) }
+            .disabled(!menuActions.availability.canWatch)
+        Button("Details", systemImage: "info.circle") { menuActions.details(model) }
+            .disabled(!menuActions.availability.canOpenDetails)
+        Divider()
+        Button("Library", systemImage: "books.vertical") { menuActions.library(model) }
+            .disabled(!menuActions.availability.canAddToLibrary)
+        Button("Watchlist", systemImage: "bookmark") { menuActions.watchlist(model) }
+            .disabled(!menuActions.availability.canAddToWatchlist)
+        Button("Add to List", systemImage: "text.badge.plus") { menuActions.list(model) }
+            .disabled(!menuActions.availability.canAddToList)
+        Button("Rate", systemImage: "star") { menuActions.rate(model) }
+            .disabled(!menuActions.availability.canRate)
+        Divider()
+        Button("Hide", systemImage: "eye.slash") { menuActions.hideTitle(model) }
+            .disabled(!menuActions.availability.canHide)
+        Button("Fix Metadata", systemImage: "wand.and.stars") { menuActions.fixMetadata(model) }
+            .disabled(!menuActions.availability.canFixMetadata)
+        Button("Find Better Release", systemImage: "arrow.triangle.2.circlepath") { menuActions.findBestRelease(model) }
+            .disabled(!menuActions.availability.canFindBestRelease)
+        Button(role: .destructive) {
+            menuActions.clearProgress(model)
+        } label: {
+            Label("Clear Progress", systemImage: "clock.arrow.circlepath")
+        }
+        .disabled(!menuActions.availability.canClearProgress || model.progress == nil)
+        Divider()
+        Button("Not interested", systemImage: "hand.thumbsdown") { menuActions.notInterested(model) }
+            .disabled(!menuActions.availability.canTuneRecommendations)
+        Button("Remove from recommendations", systemImage: "xmark.circle") { menuActions.removeFromRecommendations(model) }
+            .disabled(!menuActions.availability.canTuneRecommendations)
+        if let primaryGenre = model.genres.first {
+            Divider()
+            Button("Show less \(primaryGenre)", systemImage: "minus.circle") { menuActions.showLessOfGenre(model) }
+                .disabled(!menuActions.availability.canTuneRecommendations)
+            Button("Show more \(primaryGenre)", systemImage: "plus.circle") { menuActions.showMoreOfGenre(model) }
+                .disabled(!menuActions.availability.canTuneRecommendations)
+        }
     }
 }
 
 public struct LandscapeCard: View {
     private let model: CFMediaCardModel
     private let imageDataLoader: CFImageDataLoader?
+    private let menuActions: CFMediaCardMenuActions
     private let action: () -> Void
 
     @Environment(\.cfReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
-    public init(model: CFMediaCardModel, action: @escaping () -> Void = {}, imageDataLoader: CFImageDataLoader? = nil) {
+    public init(
+        model: CFMediaCardModel,
+        action: @escaping () -> Void = {},
+        menuActions: CFMediaCardMenuActions = CFMediaCardMenuActions(),
+        imageDataLoader: CFImageDataLoader? = nil
+    ) {
         self.model = model
         self.imageDataLoader = imageDataLoader
+        self.menuActions = menuActions
         self.action = action
     }
 
@@ -189,12 +401,19 @@ public struct LandscapeCard: View {
                                 endPoint: .bottomTrailing
                             )
                         )
-                        .overlay(Image(systemName: "play.fill").foregroundStyle(CFColors.textPrimary))
                         .overlay {
                             if let artworkURL = model.artworkURL {
                                 CFCachedAsyncImage(url: artworkURL, contentMode: .fill, imageDataLoader: imageDataLoader)
                                     .clipShape(RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
+                            } else {
+                                CFGeneratedArtworkFallback(model: model, style: .landscape)
                             }
+                        }
+                        .overlay {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(CFColors.textPrimary.opacity(model.artworkURL == nil ? 0.34 : 0.92))
+                                .cfShadow(.icon)
                         }
                         .overlay(alignment: .bottomLeading) {
                             if isHovering {
@@ -235,6 +454,7 @@ public struct LandscapeCard: View {
                             .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
                     )
             )
+            .frame(height: 136)
             .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.008 : 1))
             .cfAnimation(CFMotion.quick, value: isHovering, reduceMotion: reduceMotion)
         }
@@ -257,9 +477,44 @@ public struct LandscapeCard: View {
 
     @ViewBuilder
     private var cardContextMenu: some View {
-        Button("Resume", systemImage: "play.fill", action: action)
-        Button("Open Details", systemImage: "info.circle", action: action)
-        Button("Remove from Continue Watching", systemImage: "xmark", action: action)
+        Button("Watch", systemImage: "play.fill") { menuActions.watch(model) }
+            .disabled(!menuActions.availability.canWatch)
+        Button("Details", systemImage: "info.circle") { menuActions.details(model) }
+            .disabled(!menuActions.availability.canOpenDetails)
+        Divider()
+        Button("Library", systemImage: "books.vertical") { menuActions.library(model) }
+            .disabled(!menuActions.availability.canAddToLibrary)
+        Button("Watchlist", systemImage: "bookmark") { menuActions.watchlist(model) }
+            .disabled(!menuActions.availability.canAddToWatchlist)
+        Button("Add to List", systemImage: "text.badge.plus") { menuActions.list(model) }
+            .disabled(!menuActions.availability.canAddToList)
+        Button("Rate", systemImage: "star") { menuActions.rate(model) }
+            .disabled(!menuActions.availability.canRate)
+        Divider()
+        Button("Hide", systemImage: "eye.slash") { menuActions.hideTitle(model) }
+            .disabled(!menuActions.availability.canHide)
+        Button("Fix Metadata", systemImage: "wand.and.stars") { menuActions.fixMetadata(model) }
+            .disabled(!menuActions.availability.canFixMetadata)
+        Button("Find Better Release", systemImage: "arrow.triangle.2.circlepath") { menuActions.findBestRelease(model) }
+            .disabled(!menuActions.availability.canFindBestRelease)
+        Button(role: .destructive) {
+            menuActions.clearProgress(model)
+        } label: {
+            Label("Clear Progress", systemImage: "clock.arrow.circlepath")
+        }
+        .disabled(!menuActions.availability.canClearProgress || model.progress == nil)
+        Divider()
+        Button("Not interested", systemImage: "hand.thumbsdown") { menuActions.notInterested(model) }
+            .disabled(!menuActions.availability.canTuneRecommendations)
+        Button("Remove from recommendations", systemImage: "xmark.circle") { menuActions.removeFromRecommendations(model) }
+            .disabled(!menuActions.availability.canTuneRecommendations)
+        if let primaryGenre = model.genres.first {
+            Divider()
+            Button("Show less \(primaryGenre)", systemImage: "minus.circle") { menuActions.showLessOfGenre(model) }
+                .disabled(!menuActions.availability.canTuneRecommendations)
+            Button("Show more \(primaryGenre)", systemImage: "plus.circle") { menuActions.showMoreOfGenre(model) }
+                .disabled(!menuActions.availability.canTuneRecommendations)
+        }
     }
 }
 
@@ -268,24 +523,36 @@ public struct MediaCarousel: View {
     private let items: [CFMediaCardModel]
     private let cardStyle: MediaCardStyle
     private let imageDataLoader: CFImageDataLoader?
+    private let posterWidth: CGFloat
+    private let landscapeWidth: CGFloat
+    private let verticalSpacing: CGFloat
+    private let menuActions: CFMediaCardMenuActions
     private let action: (CFMediaCardModel) -> Void
 
     public init(
         title: String,
         items: [CFMediaCardModel],
         cardStyle: MediaCardStyle = .poster,
+        posterWidth: CGFloat = 190,
+        landscapeWidth: CGFloat = 360,
+        verticalSpacing: CGFloat = CFSpacing.md,
+        menuActions: CFMediaCardMenuActions = CFMediaCardMenuActions(),
         action: @escaping (CFMediaCardModel) -> Void = { _ in },
         imageDataLoader: CFImageDataLoader? = nil
     ) {
         self.title = title
         self.items = items
         self.cardStyle = cardStyle
+        self.posterWidth = posterWidth
+        self.landscapeWidth = landscapeWidth
+        self.verticalSpacing = verticalSpacing
+        self.menuActions = menuActions
         self.imageDataLoader = imageDataLoader
         self.action = action
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: CFSpacing.md) {
+        VStack(alignment: .leading, spacing: verticalSpacing) {
             VStack(alignment: .leading, spacing: CFSpacing.xs) {
                 Text(title)
                     .font(CFTypography.sectionTitle)
@@ -303,20 +570,31 @@ public struct MediaCarousel: View {
                         case .poster:
                             PosterCard(model: item, action: {
                                 action(item)
-                            }, imageDataLoader: imageDataLoader)
-                            .frame(width: 190)
+                            }, menuActions: menuActions, imageDataLoader: imageDataLoader)
+                            .frame(width: posterWidth)
                         case .landscape:
                             LandscapeCard(model: item, action: {
                                 action(item)
-                            }, imageDataLoader: imageDataLoader)
-                            .frame(width: 360)
+                            }, menuActions: menuActions, imageDataLoader: imageDataLoader)
+                            .frame(width: landscapeWidth)
                         }
                     }
                 }
                 .padding(.vertical, CFSpacing.xs)
                 .padding(.horizontal, 1)
+                .frame(minHeight: carouselHeight, alignment: .top)
             }
+            .frame(height: carouselHeight)
             .scrollIndicators(.hidden)
+            .overlay(alignment: .trailing) {
+                LinearGradient(
+                    colors: [CFColors.clear, CFColors.backgroundPrimary.opacity(0.74)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 54)
+                .allowsHitTesting(false)
+            }
             .focusable(true)
             .accessibilityLabel(title)
             .accessibilityHint(L10n.string(.accessibilityCarouselHint))
@@ -328,6 +606,15 @@ public struct MediaCarousel: View {
 
     private var prefetchKey: String {
         items.compactMap { $0.artworkURL?.absoluteString }.prefix(18).joined(separator: "|")
+    }
+
+    private var carouselHeight: CGFloat {
+        switch cardStyle {
+        case .poster:
+            302
+        case .landscape:
+            148
+        }
     }
 
     private func prefetchArtwork() async {

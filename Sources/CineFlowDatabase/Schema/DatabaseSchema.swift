@@ -336,6 +336,35 @@ extension DatabaseManager {
                 """)
         }
 
+        migrator.registerMigration("v9_watchlist_item_preferences") { db in
+            let itemColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(user_list_items)").compactMap { row in
+                row["name"] as String?
+            }
+            if !itemColumns.contains("priority") {
+                try db.execute(sql: "ALTER TABLE user_list_items ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'")
+            }
+            if !itemColumns.contains("remind_later_at") {
+                try db.execute(sql: "ALTER TABLE user_list_items ADD COLUMN remind_later_at TEXT")
+            }
+            if !itemColumns.contains("initial_quality") {
+                try db.execute(sql: "ALTER TABLE user_list_items ADD COLUMN initial_quality INTEGER NOT NULL DEFAULT 0")
+            }
+            if !itemColumns.contains("initial_hdr") {
+                try db.execute(sql: "ALTER TABLE user_list_items ADD COLUMN initial_hdr TEXT NOT NULL DEFAULT 'unknown'")
+            }
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_user_list_items_priority ON user_list_items(list_id, priority, added_at DESC)")
+            try db.execute(sql: "CREATE INDEX IF NOT EXISTS idx_user_list_items_reminder ON user_list_items(list_id, remind_later_at)")
+        }
+
+        migrator.registerMigration("v10_media_item_metadata_json") { db in
+            let mediaColumns = try Row.fetchAll(db, sql: "PRAGMA table_info(media_items)").compactMap { row in
+                row["name"] as String?
+            }
+            if !mediaColumns.contains("metadata_json") {
+                try db.execute(sql: "ALTER TABLE media_items ADD COLUMN metadata_json TEXT")
+            }
+        }
+
         return migrator
     }
 }

@@ -22,6 +22,7 @@ final class TMDBMetadataServiceTests: XCTestCase {
 
         XCTAssertEqual(results.map(\.id), ["tmdb:movie:603"])
         XCTAssertEqual(results.first?.metadata?.title, "The Matrix")
+        XCTAssertEqual(results.first?.metadata?.releaseDate, Self.date("1999-03-31"))
         XCTAssertEqual(results.first?.metadata?.posterURL?.absoluteString, "https://image.tmdb.org/t/p/w500/poster.jpg")
 
         MockURLProtocol.requestHandler = { _ in
@@ -58,6 +59,7 @@ final class TMDBMetadataServiceTests: XCTestCase {
         XCTAssertEqual(series.first?.id, "tmdb:tv:1399")
         XCTAssertEqual(series.first?.kind, .series)
         XCTAssertEqual(movie.metadata.genres, ["Action", "Sci-Fi"])
+        XCTAssertEqual(movie.metadata.releaseDate, Self.date("1999-03-31"))
         XCTAssertEqual(movie.metadata.trailerURLs.map(\.absoluteString), ["https://www.youtube.com/watch?v=abc"])
         XCTAssertEqual(movie.metadata.cast.first?.name, "Keanu Reeves")
         XCTAssertEqual(recommendations.map(\.id), ["tmdb:movie:27205"])
@@ -212,6 +214,14 @@ final class TMDBMetadataServiceTests: XCTestCase {
         XCTAssertEqual(storedAPIKey?.token, "legacy-key")
         XCTAssertNil(legacyToken)
         XCTAssertNil(legacyAPIKey)
+    }
+
+    private static func date(_ value: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
     }
 
     private func makeService(

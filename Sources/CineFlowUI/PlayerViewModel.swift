@@ -117,6 +117,12 @@ public struct TimelinePreviewPresentation: Equatable, Sendable {
     }
 }
 
+private struct PlayerSubtitleCue: Equatable, Sendable {
+    let startTime: Double
+    let endTime: Double
+    let text: String
+}
+
 public struct AudioMenuTrack: Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String
@@ -190,6 +196,7 @@ public final class PlayerViewModel: ObservableObject {
     @Published public private(set) var timelinePreview = TimelinePreviewPresentation.hidden
     @Published public private(set) var nextEpisodeCountdownSeconds: Int?
     @Published public private(set) var torrentStatus: TorrentStatus?
+    @Published public private(set) var activeSubtitleText: String?
 
     private let service: any PlaybackServiceProtocol
     private let mediaSource: PlaybackMediaSource
@@ -213,6 +220,7 @@ public final class PlayerViewModel: ObservableObject {
     private var nextEpisodeCountdownTask: Task<Void, Never>?
     private var lastTimelinePreviewBucket: Double?
     private var automaticallyTriedFallbackReleaseIDs = Set<String>()
+    private var subtitleCueCache: [String: [PlayerSubtitleCue]] = [:]
 
     public init(
         service: any PlaybackServiceProtocol,
@@ -437,13 +445,13 @@ public final class PlayerViewModel: ObservableObject {
 
     public func continueFromResume() async {
         guard let resumePrompt else { return }
-        await seek(to: resumePrompt.positionSeconds)
         self.resumePrompt = nil
+        await seek(to: resumePrompt.positionSeconds)
     }
 
     public func startOverFromBeginning() async {
-        await seek(to: 0)
         resumePrompt = nil
+        await seek(to: 0)
     }
 
     public func togglePlayPause() async {
@@ -556,6 +564,8 @@ public final class PlayerViewModel: ObservableObject {
         await perform {
             try await self.service.selectSubtitleTrack(id: id)
             await self.refreshStatus()
+            await self.prepareSubtitleCuesForSelectedTrack()
+            self.updateActiveSubtitleText(for: self.status)
             await self.rememberSubtitleSelection(id: id)
         }
     }
@@ -581,6 +591,8 @@ public final class PlayerViewModel: ObservableObject {
             self.loadedSubtitleTracks.append(track)
             try? await self.service.selectSubtitleTrack(id: track.id)
             await self.refreshStatusPreservingLoadedSubtitleSelection(track.id)
+            await self.prepareSubtitleCues(for: track)
+            self.updateActiveSubtitleText(for: self.status)
             await self.rememberSubtitleSelection(id: track.id)
         } catch {
             await logError(error, subsystem: .subtitle, operation: "downloadSubtitle")
@@ -614,6 +626,8 @@ public final class PlayerViewModel: ObservableObject {
         loadedSubtitleTracks.append(track)
         try? await service.selectSubtitleTrack(id: track.id)
         await refreshStatusPreservingLoadedSubtitleSelection(track.id)
+        await prepareSubtitleCues(for: track)
+        updateActiveSubtitleText(for: status)
         await rememberSubtitleSelection(id: track.id)
     }
 
@@ -621,6 +635,7 @@ public final class PlayerViewModel: ObservableObject {
         await perform {
             try await self.service.selectSubtitleTrack(id: nil)
             await self.refreshStatusPreservingLoadedSubtitleSelection(nil)
+            self.activeSubtitleText = nil
             await self.updatePlaybackSettings {
                 $0.subtitlesEnabled = false
                 $0.rememberedSubtitleLanguage = nil
@@ -1134,9 +1149,88 @@ public final class PlayerViewModel: ObservableObject {
         }
     }
 
+    private func prepareSubtitleCuesForSelectedTrack() async {
+        guard let track = subtitleTracks.first(where: { $0.id == status.selectedSubtitleTrackId }) else {
+            activeSubtitleText = nil
+            return
+        }
+        await prepareSubtitleCues(for: track)
+    }
+
+    private func prepareSubtitleCues(for track: SubtitleTrack) async {
+        guard subtitleCueCache[track.id] == nil, let localURL = track.localURL else { return }
+        guard let text = try? String(contentsOf: localURL, encoding: .utf8) else { return }
+        subtitleCueCache[track.id] = Self.parseSubtitleCues(text)
+    }
+
+    private func updateActiveSubtitleText(for status: PlaybackStatus) {
+        guard let selectedSubtitleTrackId = status.selectedSubtitleTrackId,
+              let cues = subtitleCueCache[selectedSubtitleTrackId],
+              !cues.isEmpty
+        else {
+            activeSubtitleText = nil
+            return
+        }
+
+        let displayTime = max(0, status.currentTime + status.subtitleDelaySeconds)
+        activeSubtitleText = cues.first { cue in
+            displayTime >= cue.startTime && displayTime <= cue.endTime
+        }?.text
+    }
+
+    private static func parseSubtitleCues(_ text: String) -> [PlayerSubtitleCue] {
+        text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n\n")
+            .compactMap(parseSubtitleCueBlock)
+            .sorted { $0.startTime < $1.startTime }
+    }
+
+    private static func parseSubtitleCueBlock(_ block: String) -> PlayerSubtitleCue? {
+        let lines = block
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }) else { return nil }
+        let timingParts = lines[timingIndex].components(separatedBy: "-->")
+        guard timingParts.count == 2,
+              let start = parseSubtitleTimestamp(timingParts[0]),
+              let end = parseSubtitleTimestamp(timingParts[1])
+        else {
+            return nil
+        }
+        let cueText = lines
+            .dropFirst(timingIndex + 1)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard !cueText.isEmpty, end > start else { return nil }
+        return PlayerSubtitleCue(startTime: start, endTime: end, text: cueText)
+    }
+
+    private static func parseSubtitleTimestamp(_ value: String) -> Double? {
+        let cleaned = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        let parts = cleaned.split(separator: ":")
+        guard parts.count == 3,
+              let hours = Double(parts[0]),
+              let minutes = Double(parts[1]),
+              let seconds = Double(parts[2])
+        else {
+            return nil
+        }
+        return (hours * 3_600) + (minutes * 60) + seconds
+    }
+
     private func selectSubtitleAutomatically(_ track: SubtitleTrack?) async {
         try? await service.selectSubtitleTrack(id: track?.id)
         await refreshStatusPreservingLoadedSubtitleSelection(track?.id)
+        if let track {
+            await prepareSubtitleCues(for: track)
+            updateActiveSubtitleText(for: status)
+        } else {
+            activeSubtitleText = nil
+        }
     }
 
     private func trackMatchingOverride(_ override: SubtitleSelectionOverride) -> SubtitleTrack? {
@@ -1215,6 +1309,7 @@ public final class PlayerViewModel: ObservableObject {
 
     private func refreshStatus() async {
         status = await service.currentStatus
+        updateActiveSubtitleText(for: status)
         updateNextEpisodePromptIfNeeded(for: status)
         try? await progressRecorder?.recordIfNeeded(status: status)
     }
@@ -1244,6 +1339,7 @@ public final class PlayerViewModel: ObservableObject {
             subtitleFontSize: latest.subtitleFontSize,
             subtitleStyle: latest.subtitleStyle
         )
+        updateActiveSubtitleText(for: status)
     }
 
     private func startStatusUpdates() {
@@ -1254,6 +1350,7 @@ public final class PlayerViewModel: ObservableObject {
                 for try await status in service.statusUpdates() {
                     await MainActor.run {
                         self.status = status
+                        self.updateActiveSubtitleText(for: status)
                         self.updateFallbackSuggestionIfNeeded(for: status)
                         self.updateNextEpisodePromptIfNeeded(for: status)
                     }

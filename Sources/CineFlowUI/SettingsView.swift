@@ -47,6 +47,8 @@ public struct SettingsView: View {
                 switch selection {
                 case .general: generalSection
                 case .appearance: appearanceSection
+                case .home: homeSection
+                case .tasteProfile: tasteProfileSection
                 case .sources: sourcesSection
                 case .playback: playbackSection
                 case .subtitles: subtitlesSection
@@ -116,6 +118,102 @@ public struct SettingsView: View {
                 get: { viewModel.settings.appearance.reduceMotion },
                 set: { value in Task { await viewModel.updateReduceMotion(value) } }
             ))
+        }
+    }
+
+    private var homeSection: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: CFSpacing.md) {
+                Text("Start page layout")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+
+                Picker("Layout density", selection: Binding(
+                    get: { viewModel.settings.home.layoutDensity },
+                    set: { value in Task { await viewModel.updateHomeLayoutDensity(value) } }
+                )) {
+                    Text("Compact").tag(HomeLayoutDensity.compact)
+                    Text("Comfortable").tag(HomeLayoutDensity.comfortable)
+                }
+                .pickerStyle(.segmented)
+
+                Picker("Poster size", selection: Binding(
+                    get: { viewModel.settings.home.posterSize },
+                    set: { value in Task { await viewModel.updateHomePosterSize(value) } }
+                )) {
+                    Text("Small").tag(HomePosterSizePreference.small)
+                    Text("Medium").tag(HomePosterSizePreference.medium)
+                    Text("Large").tag(HomePosterSizePreference.large)
+                }
+                .pickerStyle(.segmented)
+
+                SettingsToggleRow(title: "Local recommendations", subtitle: "Use watched genres, favorites, ratings and local progress without cloud analytics.", isOn: Binding(
+                    get: { viewModel.settings.recommendations.localRecommendationsEnabled },
+                    set: { value in Task { await viewModel.updateLocalRecommendationsEnabled(value) } }
+                ))
+            }
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            VStack(alignment: .leading, spacing: CFSpacing.md) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Visible sections")
+                            .font(CFTypography.bodyEmphasis)
+                            .foregroundStyle(CFColors.textPrimary)
+                        Text("Rows stay local-first and can be synced later with the stored section IDs.")
+                            .font(CFTypography.caption)
+                            .foregroundStyle(CFColors.textMuted)
+                    }
+                    Spacer()
+                    SecondaryButton("Reset to defaults", systemImage: "arrow.counterclockwise") {
+                        Task { await viewModel.resetHomePreferences() }
+                    }
+                }
+
+                let orderedSections = viewModel.settings.home.orderedSections
+                ForEach(Array(orderedSections.enumerated()), id: \.element.sectionID) { index, preference in
+                    HStack(alignment: .center, spacing: CFSpacing.md) {
+                        Toggle(isOn: Binding(
+                            get: { preference.isEnabled },
+                            set: { value in Task { await viewModel.updateHomeSection(preference.sectionID, isEnabled: value) } }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(homeSectionTitle(preference.sectionID))
+                                    .font(CFTypography.body)
+                                    .foregroundStyle(CFColors.textPrimary)
+                                Text(preference.sectionID)
+                                    .font(CFTypography.caption)
+                                    .foregroundStyle(CFColors.textMuted)
+                            }
+                        }
+                        .toggleStyle(.switch)
+
+                        Spacer(minLength: CFSpacing.md)
+
+                        HStack(spacing: CFSpacing.xs) {
+                            Button {
+                                Task { await viewModel.moveHomeSection(preference.sectionID, direction: .up) }
+                            } label: {
+                                Image(systemName: "chevron.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(index == 0)
+                            .accessibilityLabel("Move \(homeSectionTitle(preference.sectionID)) up")
+
+                            Button {
+                                Task { await viewModel.moveHomeSection(preference.sectionID, direction: .down) }
+                            } label: {
+                                Image(systemName: "chevron.down")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(index == orderedSections.count - 1)
+                            .accessibilityLabel("Move \(homeSectionTitle(preference.sectionID)) down")
+                        }
+                    }
+                    .settingsDivider(unlessLast: index != orderedSections.count - 1)
+                }
+            }
         }
     }
 
@@ -190,6 +288,92 @@ public struct SettingsView: View {
                         }
                     }
                     .settingsDivider(unlessLast: row.id != viewModel.sourceRows.last?.id)
+                }
+            }
+        }
+    }
+
+    private var tasteProfileSection: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: CFSpacing.md) {
+                Text("Genre controls")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+                Text("These preferences stay local and adjust recommendations without cloud analytics.")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+
+                ForEach(tasteGenreRows, id: \.self) { genre in
+                    HStack(spacing: CFSpacing.md) {
+                        Text(genre)
+                            .font(CFTypography.body)
+                            .foregroundStyle(CFColors.textPrimary)
+                            .frame(width: 140, alignment: .leading)
+
+                        Picker(genre, selection: Binding(
+                            get: { viewModel.settings.tasteProfile.preference(forGenre: genre) },
+                            set: { value in Task { await viewModel.updateTasteGenre(genre, preference: value) } }
+                        )) {
+                            Text("Neutral").tag(TastePreferenceLevel?.none)
+                            Text("More").tag(TastePreferenceLevel?.some(.more))
+                            Text("Less").tag(TastePreferenceLevel?.some(.less))
+                            Text("Hide").tag(TastePreferenceLevel?.some(.hidden))
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                    }
+                }
+            }
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Text("Current profile")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+
+                if viewModel.settings.tasteProfile.genrePreferences.isEmpty {
+                    Text("No manual genre overrides yet.")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                } else {
+                    ForEach(viewModel.settings.tasteProfile.genrePreferences) { preference in
+                        SettingValueRow(title: preference.genre, value: preference.preference.rawValue.capitalized)
+                    }
+                }
+            }
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Text("Hidden items")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+                Text("Hidden titles stay in Library and history, but are removed from recommendation rows.")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+
+                if viewModel.hiddenRecommendationItems.isEmpty {
+                    Text("No hidden recommendation items.")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                } else {
+                    ForEach(viewModel.hiddenRecommendationItems) { item in
+                        HStack(spacing: CFSpacing.md) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title)
+                                    .font(CFTypography.body)
+                                    .foregroundStyle(CFColors.textPrimary)
+                                Text(hiddenItemDetail(item))
+                                    .font(CFTypography.caption)
+                                    .foregroundStyle(CFColors.textMuted)
+                            }
+                            Spacer()
+                            SecondaryButton("Restore", systemImage: "arrow.uturn.backward") {
+                                Task { await viewModel.restoreHiddenRecommendationItem(mediaID: item.mediaID) }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -758,8 +942,91 @@ public struct SettingsView: View {
                 .font(CFTypography.caption)
                 .foregroundStyle(CFColors.textMuted)
 
+            Divider().overlay(CFColors.separatorSubtle)
+
+            libraryPortabilitySection
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            SettingsToggleRow(title: "Better release notifications", subtitle: "Notify when a 4K/HDR, healthier, better seeded or Russian-audio release appears.", isOn: Binding(
+                get: { viewModel.settings.notifications.betterReleaseNotificationsEnabled },
+                set: { value in Task { await viewModel.updateBetterReleaseNotificationsEnabled(value) } }
+            ))
+
+            SettingsToggleRow(title: "Digest mode", subtitle: "Group better release alerts in the in-app Notification Center instead of surfacing each one separately.", isOn: Binding(
+                get: { viewModel.settings.notifications.betterReleaseDigestMode },
+                set: { value in Task { await viewModel.updateBetterReleaseDigestMode(value) } }
+            ))
+
+            SettingsToggleRow(title: "macOS notifications", subtitle: "Optional system alerts for better releases. The in-app Notification Center remains primary.", isOn: Binding(
+                get: { viewModel.settings.notifications.macOSBetterReleaseNotificationsEnabled },
+                set: { value in Task { await viewModel.updateMacOSBetterReleaseNotificationsEnabled(value) } }
+            ))
+
+            Divider().overlay(CFColors.separatorSubtle)
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Text("Notification categories")
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+
+                ForEach(NotificationCategory.allCases) { category in
+                    SettingsToggleRow(title: notificationCategoryTitle(category), subtitle: notificationCategorySubtitle(category), isOn: Binding(
+                        get: { viewModel.settings.notifications.isCategoryEnabled(category) },
+                        set: { value in Task { await viewModel.updateNotificationCategory(category, isEnabled: value) } }
+                    ))
+                }
+            }
+
             SecondaryButton("Clear all local data", systemImage: "trash") {
                 Task { await viewModel.clearAllLocalData() }
+            }
+        }
+    }
+
+    private var libraryPortabilitySection: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            Text("Library portability")
+                .font(CFTypography.bodyEmphasis)
+                .foregroundStyle(CFColors.textPrimary)
+
+            HStack(spacing: CFSpacing.sm) {
+                SecondaryButton("Export library", systemImage: "square.and.arrow.up") {
+                    Task { await viewModel.exportLibrary() }
+                }
+                SecondaryButton("Import library", systemImage: "square.and.arrow.down") {
+                    Task { await viewModel.chooseLibraryImportFile() }
+                }
+            }
+
+            SettingsToggleRow(title: "Backup before import", subtitle: "Save current library JSON before applying imported data.", isOn: $viewModel.backupBeforeLibraryImport)
+
+            if let preview = viewModel.libraryImportPreview {
+                VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                    SettingValueRow(title: "Preview", value: preview.canImport ? "Ready to import" : "Validation failed")
+                    SettingValueRow(title: "Records", value: libraryImportSummary(preview.summary))
+                    SettingValueRow(title: "Duplicates", value: "\(preview.duplicateCount) will be merged")
+
+                    if !preview.validationIssues.isEmpty {
+                        ForEach(preview.validationIssues, id: \.self) { issue in
+                            Text(issue)
+                                .font(CFTypography.caption)
+                                .foregroundStyle(CFColors.warning)
+                        }
+                    }
+
+                    HStack(spacing: CFSpacing.sm) {
+                        PrimaryButton("Import now", systemImage: "checkmark.circle") {
+                            Task { await viewModel.confirmLibraryImport() }
+                        }
+                        .disabled(!preview.canImport)
+
+                        SecondaryButton("Cancel import", systemImage: "xmark.circle") {
+                            viewModel.cancelLibraryImport()
+                        }
+                    }
+                }
+                .padding(.top, CFSpacing.xs)
             }
         }
     }
@@ -792,6 +1059,8 @@ public struct SettingsView: View {
         switch section {
         case .general: "Language, launch behavior and app startup preferences."
         case .appearance: "Dark visual system, accent color state and motion preference."
+        case .home: "Personalized start page rows, density and poster sizing."
+        case .tasteProfile: "Local taste signals for genres, people, formats and recommendation controls."
         case .sources: "TMDB metadata credentials and user-controlled playback source policy."
         case .playback: "Audio priority, resume behavior, acceleration and seeking."
         case .subtitles: "Subtitle language priority, loading behavior, size and timing."
@@ -801,6 +1070,108 @@ public struct SettingsView: View {
         case .privacy: "Local-only data handling, telemetry default and local reset."
         case .about: "Application identity, credits and license information."
         }
+    }
+
+    private func libraryImportSummary(_ summary: LibraryImportSummary) -> String {
+        "\(summary.libraryItems) library, \(summary.lists) lists, \(summary.watchHistory) history, \(summary.ratings) ratings, \(summary.playbackProgress) progress"
+    }
+
+    private func notificationCategoryTitle(_ category: NotificationCategory) -> String {
+        switch category {
+        case .betterRelease:
+            "Better releases"
+        case .newEpisode:
+            "New episodes"
+        case .sync:
+            "Sync status"
+        case .update:
+            "App updates"
+        case .sourceAuth:
+            "Source authentication"
+        case .cache:
+            "Cache health"
+        case .announcement:
+            "Announcements"
+        }
+    }
+
+    private func notificationCategorySubtitle(_ category: NotificationCategory) -> String {
+        switch category {
+        case .betterRelease:
+            "4K/HDR, better seeded and Russian-audio release alerts."
+        case .newEpisode:
+            "New episodes and tracked-series availability."
+        case .sync:
+            "Local sync completed or failed states when account sync arrives."
+        case .update:
+            "Available app updates and release notices."
+        case .sourceAuth:
+            "Expired or invalid source sessions that need attention."
+        case .cache:
+            "Local cache warnings before storage becomes a problem."
+        case .announcement:
+            "Low-frequency product announcements inside Streamly."
+        }
+    }
+
+    private func homeSectionTitle(_ sectionID: String) -> String {
+        switch HomeSectionKind(rawValue: sectionID) {
+        case .newEpisodes:
+            return "New Episodes"
+        case .upcomingCalendar:
+            return "Upcoming Calendar"
+        case .collections:
+            return "Collections"
+        case .moodDiscovery:
+            return "What to Watch Today?"
+        case .watchNext:
+            return "Watch Next"
+        case .continueWatching:
+            return "Continue Watching"
+        case .popularMovies:
+            return "Popular Movies"
+        case .popularSeries:
+            return "Popular Series"
+        case .trendingMovies:
+            return "Trending Movies"
+        case .trendingSeries:
+            return "Trending Series"
+        case .recentlyAdded:
+            return "Recently Added"
+        case .recommended:
+            return "Because You Watched"
+        case .moreLikeThis:
+            return "More Like This"
+        case .fromFavoriteGenres:
+            return "From Your Favorite Genres"
+        case .continueSeries:
+            return "Continue Series"
+        case .hiddenGems:
+            return "Hidden Gems"
+        case .popularInFavoriteGenres:
+            return "Popular in Your Favorite Genres"
+        case .notFinishedYet:
+            return "Not Finished Yet"
+        case .topQuality:
+            return "Best Quality Available"
+        case .ultraHDR:
+            return "4K/HDR Available"
+        case .favoriteGenres:
+            return "Your Favorite Genres"
+        case .unfinishedMovies:
+            return "Unfinished Movies"
+        case .forgottenInLibrary:
+            return "Forgotten in Library"
+        case .recommendedTonight:
+            return "Recommended Tonight"
+        case .none:
+            return sectionID
+        }
+    }
+
+    private func hiddenItemDetail(_ item: HiddenRecommendationItem) -> String {
+        let genres = item.genres.isEmpty ? "No genre" : item.genres.joined(separator: ", ")
+        return "\(item.reason.displayTitle) · \(genres)"
     }
 
     private func binding(_ dictionary: Binding<[String: String]>, _ key: String) -> Binding<String> {
@@ -863,6 +1234,12 @@ public struct SettingsView: View {
 
     private var selectedLanguage: AppLanguage {
         languageSettingsStore.selectedLanguage
+    }
+
+    private var tasteGenreRows: [String] {
+        let defaults = ["Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", "Mystery", "Romance", "Sci-Fi", "Thriller"]
+        let custom = viewModel.settings.tasteProfile.genrePreferences.map(\.genre)
+        return Array(Set(defaults + custom)).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
     private func t(_ key: L10nKey) -> String {

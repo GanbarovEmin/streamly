@@ -14,6 +14,11 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
 
     private var status = PlaybackStatus()
     private var legacyState: PlaybackState = .idle
+    private var durationOverride: Double?
+    private var audioTracksOverride: [AudioTrack] = []
+    private var subtitleTracksOverride: [SubtitleTrack] = []
+    private var selectedAudioTrackId: String?
+    private var selectedSubtitleTrackId: String?
 
     public init() {}
 
@@ -28,27 +33,60 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
     }
 
     public func play(_ source: PlaybackMediaSource) async throws {
+        try await play(
+            source,
+            durationOverride: nil,
+            audioTracks: [],
+            subtitleTracks: [],
+            selectedAudioTrackId: nil,
+            selectedSubtitleTrackId: nil,
+            autoplay: true,
+            preferredForwardBufferDuration: nil
+        )
+    }
+
+    func play(
+        _ source: PlaybackMediaSource,
+        durationOverride: Double?,
+        audioTracks: [AudioTrack],
+        subtitleTracks: [SubtitleTrack],
+        selectedAudioTrackId: String?,
+        selectedSubtitleTrackId: String?,
+        autoplay: Bool,
+        preferredForwardBufferDuration: TimeInterval?
+    ) async throws {
         guard source.url.isCineFlowPlayableMediaURL else {
             throw PlaybackServiceError.invalidMediaURL
         }
 
         let item = AVPlayerItem(url: source.url)
         let isLocalStreamingSource = source.url.isStreamlyLocalTorrentStreamURL || source.url.isStreamlyLocalHLSBridgePlaylistURL
-        item.preferredForwardBufferDuration = isLocalStreamingSource ? 30 : 0
+        item.preferredForwardBufferDuration = isLocalStreamingSource ? (preferredForwardBufferDuration ?? 2) : 0
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        avPlayer.automaticallyWaitsToMinimizeStalling = true
+        avPlayer.automaticallyWaitsToMinimizeStalling = !isLocalStreamingSource
+        self.durationOverride = durationOverride.flatMap(Self.validDuration)
+        self.audioTracksOverride = audioTracks
+        self.subtitleTracksOverride = subtitleTracks
+        self.selectedAudioTrackId = selectedAudioTrackId ?? audioTracks.first?.id
+        self.selectedSubtitleTrackId = selectedSubtitleTrackId
         avPlayer.replaceCurrentItem(with: item)
-        avPlayer.play()
+        if autoplay {
+            avPlayer.play()
+        }
 
         status = PlaybackStatus(
             media: source,
-            state: .playing,
+            state: autoplay ? .playing : .buffering,
             currentTime: 0,
-            duration: Self.duration(from: item, mediaURL: source.url),
-            bufferingState: .ready,
+            duration: Self.duration(from: item, mediaURL: source.url, durationOverride: self.durationOverride),
+            bufferingState: autoplay ? .ready : .buffering(progress: 0),
             volume: Double(avPlayer.volume),
             isMuted: avPlayer.isMuted,
             playbackSpeed: status.playbackSpeed,
+            audioTracks: audioTracks,
+            subtitleTracks: subtitleTracks,
+            selectedAudioTrackId: self.selectedAudioTrackId,
+            selectedSubtitleTrackId: self.selectedSubtitleTrackId,
             qualityLabel: source.qualityLabel,
             sourceName: source.sourceName,
             audioBoost: status.audioBoost,
@@ -85,6 +123,11 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
     public func stop() async throws {
         avPlayer.pause()
         avPlayer.replaceCurrentItem(with: nil)
+        durationOverride = nil
+        audioTracksOverride = []
+        subtitleTracksOverride = []
+        selectedAudioTrackId = nil
+        selectedSubtitleTrackId = nil
         status = PlaybackStatus()
         legacyState = .idle
     }
@@ -116,9 +159,21 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         status = statusWithPlayerTime(audioBoost: max(1, min(boost, 2.5)))
     }
 
-    public func selectAudioTrack(id: String?) async throws {}
+    public func selectAudioTrack(id: String?) async throws {
+        if let id, !audioTracksOverride.contains(where: { $0.id == id }) {
+            throw PlaybackServiceError.trackNotFound(id)
+        }
+        selectedAudioTrackId = id
+        status = statusWithPlayerTime()
+    }
 
-    public func selectSubtitleTrack(id: String?) async throws {}
+    public func selectSubtitleTrack(id: String?) async throws {
+        if let id, !subtitleTracksOverride.contains(where: { $0.id == id }) && !Self.isExternalSubtitleTrackID(id) {
+            throw PlaybackServiceError.trackNotFound(id)
+        }
+        selectedSubtitleTrackId = id
+        status = statusWithPlayerTime()
+    }
 
     public func setSubtitleDelay(_ seconds: Double) async throws {
         status = statusWithPlayerTime(subtitleDelaySeconds: max(-10, min(seconds, 10)))
@@ -167,7 +222,7 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         if let error = item.error ?? avPlayer.error {
             return .failed(reason: error.localizedDescription)
         }
-        if let duration = Self.duration(from: item, mediaURL: status.media?.url), duration > 0 {
+        if let duration = Self.duration(from: item, mediaURL: status.media?.url, durationOverride: durationOverride), duration > 0 {
             let currentTime = avPlayer.currentTime().seconds.finiteOrZero
             if currentTime >= max(0, duration - 0.35) {
                 return .completed
@@ -197,7 +252,7 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
     ) -> PlaybackStatus {
         let item = avPlayer.currentItem
         let mediaURL = status.media?.url
-        let measuredDuration = Self.duration(from: item, mediaURL: mediaURL)
+        let measuredDuration = Self.duration(from: item, mediaURL: mediaURL, durationOverride: durationOverride)
         let duration = measuredDuration ?? (mediaURL?.isStreamlyLocalHLSBridgePlaylistURL == true ? nil : status.duration)
         let runState = state ?? status.state
         return PlaybackStatus(
@@ -209,10 +264,10 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
             volume: Double(avPlayer.volume),
             isMuted: avPlayer.isMuted,
             playbackSpeed: playbackSpeed ?? status.playbackSpeed,
-            audioTracks: status.audioTracks,
-            subtitleTracks: status.subtitleTracks,
-            selectedAudioTrackId: status.selectedAudioTrackId,
-            selectedSubtitleTrackId: status.selectedSubtitleTrackId,
+            audioTracks: audioTracksOverride.isEmpty ? status.audioTracks : audioTracksOverride,
+            subtitleTracks: subtitleTracksOverride.isEmpty ? status.subtitleTracks : subtitleTracksOverride,
+            selectedAudioTrackId: selectedAudioTrackId,
+            selectedSubtitleTrackId: selectedSubtitleTrackId,
             isFullscreen: isFullscreen ?? status.isFullscreen,
             isPictureInPictureActive: status.isPictureInPictureActive,
             qualityLabel: status.qualityLabel,
@@ -234,7 +289,7 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
     }
 
     private func bufferedFraction(for item: AVPlayerItem) -> Double {
-        guard let duration = Self.duration(from: item, mediaURL: status.media?.url), duration > 0 else { return 0 }
+        guard let duration = Self.duration(from: item, mediaURL: status.media?.url, durationOverride: durationOverride), duration > 0 else { return 0 }
         let ranges = item.loadedTimeRanges.compactMap { $0.timeRangeValue }
         guard let furthest = ranges.map({ $0.start.seconds + $0.duration.seconds }).max(), furthest.isFinite else {
             return 0
@@ -247,10 +302,26 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         return effectiveDuration(item.duration.seconds, mediaURL: mediaURL)
     }
 
-    static func effectiveDuration(_ seconds: Double?, mediaURL: URL?) -> Double? {
+    private static func duration(from item: AVPlayerItem?, mediaURL: URL?, durationOverride: Double?) -> Double? {
+        guard let item else { return validDuration(durationOverride) }
+        return effectiveDuration(item.duration.seconds, mediaURL: mediaURL, durationOverride: durationOverride)
+    }
+
+    static func effectiveDuration(_ seconds: Double?, mediaURL: URL?, durationOverride: Double? = nil) -> Double? {
+        if let override = validDuration(durationOverride) {
+            return override
+        }
         guard mediaURL?.isStreamlyLocalHLSBridgePlaylistURL != true else { return nil }
+        return validDuration(seconds)
+    }
+
+    private static func validDuration(_ seconds: Double?) -> Double? {
         guard let seconds, seconds.isFinite, seconds > 0 else { return nil }
         return seconds
+    }
+
+    private static func isExternalSubtitleTrackID(_ id: String) -> Bool {
+        id.hasPrefix("local:") || id.hasPrefix("cached:") || id.hasPrefix("opensubtitles:")
     }
 }
 
@@ -263,8 +334,15 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     private let fileManager: FileManager
     private var transcodeProcess: Process?
     private var transcodeDirectoryURL: URL?
+    private var transcodeLogCapture: FFmpegLogCapture?
     private var hlsServer: LocalHLSFileServer?
     private var originalSource: PlaybackMediaSource?
+    private var hlsPlaybackBaseTimeSeconds: Double = 0
+    private var hlsSourceDurationSeconds: Double?
+    private var hlsAudioTracks: [AudioTrack] = []
+    private var hlsSubtitleTracks: [SubtitleTrack] = []
+    private var selectedAudioTrackId: String?
+    private var selectedSubtitleTrackId: String?
     private let hlsStartupTimeoutSeconds: TimeInterval = 120
     private let maxHLSStartupAttempts = 6
 
@@ -295,23 +373,47 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     public func play(_ source: PlaybackMediaSource) async throws {
         try await stopTranscodeIfNeeded()
         originalSource = source
+        hlsPlaybackBaseTimeSeconds = 0
+        hlsSourceDurationSeconds = nil
+        hlsAudioTracks = []
+        hlsSubtitleTracks = []
+        selectedAudioTrackId = nil
+        selectedSubtitleTrackId = nil
 
         if source.url.requiresLocalHLSBridge {
             guard let ffmpegExecutableURL else {
                 throw PlaybackServiceError.unsupported(operation: "ffmpeg runtime unavailable")
             }
-            let playlistURL = try await startHLSBridge(source: source, ffmpegExecutableURL: ffmpegExecutableURL)
+            let startup = try await startHLSBridge(
+                source: source,
+                ffmpegExecutableURL: ffmpegExecutableURL,
+                startTimeSeconds: 0,
+                selectedAudioTrackId: nil
+            )
+            hlsSourceDurationSeconds = startup.metadata.durationSeconds
+            hlsAudioTracks = startup.metadata.audioTracks
+            hlsSubtitleTracks = startup.metadata.subtitleTracks
+            selectedAudioTrackId = startup.metadata.audioTracks.first?.id
             var bridgedSource = source
             bridgedSource = PlaybackMediaSource(
                 id: source.id,
                 title: source.title,
-                url: playlistURL,
+                url: startup.playlistURL,
                 release: source.release,
                 qualityLabel: source.qualityLabel,
                 sourceName: source.sourceName,
                 selectionContext: source.selectionContext
             )
-            try await directService.play(bridgedSource)
+            try await directService.play(
+                bridgedSource,
+                durationOverride: remainingHLSDuration(from: 0),
+                audioTracks: hlsAudioTracks,
+                subtitleTracks: hlsSubtitleTracks,
+                selectedAudioTrackId: selectedAudioTrackId,
+                selectedSubtitleTrackId: selectedSubtitleTrackId,
+                autoplay: false,
+                preferredForwardBufferDuration: 1.5
+            )
             await restartBridgedPlaybackAtBeginning()
             return
         }
@@ -335,9 +437,19 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         try await stopTranscodeIfNeeded()
         try await directService.stop()
         originalSource = nil
+        hlsPlaybackBaseTimeSeconds = 0
+        hlsSourceDurationSeconds = nil
+        hlsAudioTracks = []
+        hlsSubtitleTracks = []
+        selectedAudioTrackId = nil
+        selectedSubtitleTrackId = nil
     }
 
     public func seek(to time: Double) async throws {
+        if originalSource?.url.requiresLocalHLSBridge == true {
+            try await restartHLSPlayback(at: time, autoplay: true)
+            return
+        }
         try await directService.seek(to: time)
     }
 
@@ -358,10 +470,30 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     }
 
     public func selectAudioTrack(id: String?) async throws {
+        if originalSource?.url.requiresLocalHLSBridge == true {
+            if let id, !hlsAudioTracks.contains(where: { $0.id == id }) {
+                throw PlaybackServiceError.trackNotFound(id)
+            }
+            selectedAudioTrackId = id
+            let current = await currentStatus.currentTime
+            try await restartHLSPlayback(at: current, autoplay: true)
+            return
+        }
         try await directService.selectAudioTrack(id: id)
     }
 
     public func selectSubtitleTrack(id: String?) async throws {
+        if originalSource?.url.requiresLocalHLSBridge == true {
+            let isEmbeddedTrack = id.map { selectedID in
+                hlsSubtitleTracks.contains(where: { $0.id == selectedID })
+            } ?? false
+            if let id, !isEmbeddedTrack && !Self.isExternalSubtitleTrackID(id) {
+                throw PlaybackServiceError.trackNotFound(id)
+            }
+            selectedSubtitleTrackId = id
+            try await directService.selectSubtitleTrack(id: isEmbeddedTrack ? id : nil)
+            return
+        }
         try await directService.selectSubtitleTrack(id: id)
     }
 
@@ -409,6 +541,71 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         try? await directService.resume()
     }
 
+    private func restartHLSPlayback(at time: Double, autoplay: Bool) async throws {
+        guard let originalSource, let ffmpegExecutableURL else {
+            try await directService.seek(to: time)
+            return
+        }
+
+        let target = clampedHLSTime(time)
+        try await stopTranscodeIfNeeded()
+        hlsPlaybackBaseTimeSeconds = target
+        let startup = try await startHLSBridge(
+            source: originalSource,
+            ffmpegExecutableURL: ffmpegExecutableURL,
+            startTimeSeconds: target,
+            selectedAudioTrackId: selectedAudioTrackId
+        )
+        if let duration = startup.metadata.durationSeconds {
+            hlsSourceDurationSeconds = duration
+        }
+        if !startup.metadata.audioTracks.isEmpty {
+            hlsAudioTracks = startup.metadata.audioTracks
+            if let selectedAudioTrackId, !hlsAudioTracks.contains(where: { $0.id == selectedAudioTrackId }) {
+                self.selectedAudioTrackId = hlsAudioTracks.first?.id
+            } else if selectedAudioTrackId == nil {
+                selectedAudioTrackId = hlsAudioTracks.first?.id
+            }
+        }
+        if !startup.metadata.subtitleTracks.isEmpty {
+            hlsSubtitleTracks = startup.metadata.subtitleTracks
+        }
+
+        let bridgedSource = PlaybackMediaSource(
+            id: originalSource.id,
+            title: originalSource.title,
+            url: startup.playlistURL,
+            release: originalSource.release,
+            qualityLabel: originalSource.qualityLabel,
+            sourceName: originalSource.sourceName,
+            selectionContext: originalSource.selectionContext
+        )
+        try await directService.play(
+            bridgedSource,
+            durationOverride: remainingHLSDuration(from: target),
+            audioTracks: hlsAudioTracks,
+            subtitleTracks: hlsSubtitleTracks,
+            selectedAudioTrackId: selectedAudioTrackId,
+            selectedSubtitleTrackId: selectedSubtitleTrackId,
+            autoplay: false,
+            preferredForwardBufferDuration: 1.5
+        )
+
+        guard autoplay else { return }
+        await restartBridgedPlaybackAtBeginning()
+    }
+
+    private func clampedHLSTime(_ time: Double) -> Double {
+        let lowerBound = max(0, time)
+        guard let duration = hlsSourceDurationSeconds, duration > 0 else { return lowerBound }
+        return min(lowerBound, max(0, duration - 1))
+    }
+
+    private func remainingHLSDuration(from startTime: Double) -> Double? {
+        guard let duration = hlsSourceDurationSeconds, duration > 0 else { return nil }
+        return max(1, duration - max(0, startTime))
+    }
+
     private func waitForDirectItemReadyForInitialSeek(_ item: AVPlayerItem) async {
         let deadline = Date().addingTimeInterval(5)
         while Date() < deadline {
@@ -426,7 +623,12 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             .min() ?? 0
     }
 
-    private func startHLSBridge(source: PlaybackMediaSource, ffmpegExecutableURL: URL) async throws -> URL {
+    private func startHLSBridge(
+        source: PlaybackMediaSource,
+        ffmpegExecutableURL: URL,
+        startTimeSeconds: Double,
+        selectedAudioTrackId: String?
+    ) async throws -> HLSBridgeStartup {
         let directoryURL = try makeTranscodeDirectory()
         let playlistURL = directoryURL.appendingPathComponent("stream.m3u8")
         let segmentPatternURL = directoryURL.appendingPathComponent("segment_%05d.ts")
@@ -446,12 +648,16 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 sourceURL: source.url,
                 playlistURL: playlistURL,
                 segmentPatternURL: segmentPatternURL,
+                startTimeSeconds: startTimeSeconds,
+                selectedAudioTrackId: selectedAudioTrackId,
                 videoMode: videoMode(for: attempt, isLocalTorrentStream: source.url.isStreamlyLocalTorrentStreamURL),
                 logPipe: logPipe
             )
 
             try process.run()
             transcodeProcess = process
+            let logCapture = FFmpegLogCapture(pipe: logPipe, logURL: logURL)
+            logCapture.start()
 
             do {
                 try await waitForPlayablePlaylist(
@@ -459,16 +665,17 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                     process: process,
                     timeoutSeconds: startupDeadline.timeIntervalSinceNow
                 )
-                streamFFmpegLog(from: logPipe, to: logURL)
+                transcodeLogCapture = logCapture
                 let server = try LocalHLSFileServer(rootURL: directoryURL)
                 hlsServer = server
-                return server.url(for: "stream.m3u8")
+                let metadata = Self.mediaMetadata(fromFFmpegLog: logCapture.text)
+                return HLSBridgeStartup(playlistURL: server.url(for: "stream.m3u8"), metadata: metadata)
             } catch {
                 if process.isRunning {
                     process.terminate()
                     process.waitUntilExit()
                 }
-                let logText = captureFFmpegLog(from: logPipe, to: logURL)
+                let logText = logCapture.stopAndFlush()
                 lastStartupError = transcodeStartupError(
                     from: error,
                     logText: logText,
@@ -500,6 +707,8 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         sourceURL: URL,
         playlistURL: URL,
         segmentPatternURL: URL,
+        startTimeSeconds: Double,
+        selectedAudioTrackId: String?,
         videoMode: FFmpegHLSVideoMode,
         logPipe: Pipe
     ) -> Process {
@@ -509,29 +718,32 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         let readTimeoutMicros = isLocalTorrentStream ? "120000000" : "8000000"
         var arguments = [
             "-hide_banner",
-            "-loglevel", "warning",
+            "-loglevel", "info",
             "-nostdin",
             "-fflags", "+genpts",
             "-probesize", isLocalTorrentStream ? "33554432" : "5000000",
             "-analyzeduration", isLocalTorrentStream ? "30000000" : "5000000",
             "-rw_timeout", readTimeoutMicros,
         ]
+        if startTimeSeconds > 0 {
+            arguments += ["-ss", Self.ffmpegTimeLabel(startTimeSeconds)]
+        }
         if isLocalTorrentStream {
             arguments += ["-seekable", "0"]
         }
         arguments += [
             "-i", sourceURL.absoluteString,
             "-map", "0:v:0",
-            "-map", "0:a:0?",
             "-sn",
         ]
+        arguments += ["-map", "0:a:\(Self.audioOrdinal(from: selectedAudioTrackId) ?? 0)?"]
         arguments += videoMode.arguments
         arguments += [
             "-c:a", "aac",
             "-ac", "2",
             "-b:a", "192k",
             "-f", "hls",
-            "-hls_time", "2",
+            "-hls_time", "1",
         ]
         if isLocalTorrentStream {
             arguments += [
@@ -559,8 +771,6 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         if isLocalTorrentStream {
             switch attempt {
             case 1, 2:
-                return .copy
-            case 3, 4:
                 return .hardwareH264
             default:
                 return .softwareH264
@@ -628,7 +838,20 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 duration += seconds
             }
         }
-        return segmentCount >= 4 && duration >= 8
+        return segmentCount >= 1 && duration >= 1
+    }
+
+    static func mediaMetadata(fromFFmpegLog text: String) -> HLSMediaMetadata {
+        HLSMediaMetadata.parse(ffmpegLog: text)
+    }
+
+    private static func audioOrdinal(from trackId: String?) -> Int? {
+        guard let trackId, trackId.hasPrefix("audio:") else { return nil }
+        return Int(trackId.dropFirst("audio:".count))
+    }
+
+    private static func ffmpegTimeLabel(_ seconds: Double) -> String {
+        String(format: "%.3f", max(0, seconds))
     }
 
     private func shouldRetryTranscodeStartup(after error: Error, logText: String, isLocalTorrentStream: Bool = false) -> Bool {
@@ -706,6 +929,8 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 await waitForProcessExit(transcodeProcess, timeoutSeconds: 1.25)
             }
         }
+        _ = transcodeLogCapture?.stopAndFlush()
+        transcodeLogCapture = nil
         transcodeProcess = nil
 
         hlsServer?.stop()
@@ -726,19 +951,22 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
 
     private func statusPreservingOriginalSource(_ status: PlaybackStatus) async -> PlaybackStatus {
         guard let originalSource else { return status }
+        refreshHLSMetadataFromActiveLogIfNeeded()
+        let logicalTime = hlsPlaybackBaseTimeSeconds + status.currentTime
+        let logicalDuration = hlsSourceDurationSeconds ?? status.duration
         return PlaybackStatus(
             media: originalSource,
             state: status.state,
-            currentTime: status.currentTime,
-            duration: status.duration,
+            currentTime: min(logicalTime, logicalDuration ?? logicalTime),
+            duration: logicalDuration,
             bufferingState: status.bufferingState,
             volume: status.volume,
             isMuted: status.isMuted,
             playbackSpeed: status.playbackSpeed,
-            audioTracks: status.audioTracks,
-            subtitleTracks: status.subtitleTracks,
-            selectedAudioTrackId: status.selectedAudioTrackId,
-            selectedSubtitleTrackId: status.selectedSubtitleTrackId,
+            audioTracks: hlsAudioTracks.isEmpty ? status.audioTracks : hlsAudioTracks,
+            subtitleTracks: hlsSubtitleTracks.isEmpty ? status.subtitleTracks : hlsSubtitleTracks,
+            selectedAudioTrackId: selectedAudioTrackId ?? status.selectedAudioTrackId,
+            selectedSubtitleTrackId: selectedSubtitleTrackId ?? status.selectedSubtitleTrackId,
             isFullscreen: status.isFullscreen,
             isPictureInPictureActive: status.isPictureInPictureActive,
             qualityLabel: originalSource.qualityLabel,
@@ -749,6 +977,25 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             subtitleFontSize: status.subtitleFontSize,
             subtitleStyle: status.subtitleStyle
         )
+    }
+
+    private func refreshHLSMetadataFromActiveLogIfNeeded() {
+        guard let text = transcodeLogCapture?.text, !text.isEmpty else { return }
+        let metadata = Self.mediaMetadata(fromFFmpegLog: text)
+        if hlsSourceDurationSeconds == nil {
+            hlsSourceDurationSeconds = metadata.durationSeconds
+        }
+        if hlsAudioTracks.isEmpty, !metadata.audioTracks.isEmpty {
+            hlsAudioTracks = metadata.audioTracks
+            selectedAudioTrackId = selectedAudioTrackId ?? metadata.audioTracks.first?.id
+        }
+        if hlsSubtitleTracks.isEmpty, !metadata.subtitleTracks.isEmpty {
+            hlsSubtitleTracks = metadata.subtitleTracks
+        }
+    }
+
+    private static func isExternalSubtitleTrackID(_ id: String) -> Bool {
+        id.hasPrefix("local:") || id.hasPrefix("cached:") || id.hasPrefix("opensubtitles:")
     }
 }
 
@@ -934,6 +1181,194 @@ private enum TranscodeStartupFailure: Error, Equatable {
     case timedOut
 }
 
+struct HLSMediaMetadata: Equatable, Sendable {
+    let durationSeconds: Double?
+    let audioTracks: [AudioTrack]
+    let subtitleTracks: [SubtitleTrack]
+
+    static let empty = HLSMediaMetadata(durationSeconds: nil, audioTracks: [], subtitleTracks: [])
+
+    static func parse(ffmpegLog text: String) -> HLSMediaMetadata {
+        var durationSeconds: Double?
+        var audioTracks: [AudioTrack] = []
+        var subtitleTracks: [SubtitleTrack] = []
+
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if durationSeconds == nil, let duration = parseDuration(from: line) {
+                durationSeconds = duration
+            }
+
+            guard let stream = parseStream(from: line) else { continue }
+            switch stream.kind {
+            case "Audio":
+                let ordinal = audioTracks.count
+                audioTracks.append(
+                    AudioTrack(
+                        id: "audio:\(ordinal)",
+                        languageCode: normalizeLanguage(stream.languageCode),
+                        displayName: streamDisplayName(prefix: "Audio", ordinal: ordinal, languageCode: stream.languageCode, codec: stream.codec),
+                        codec: stream.codec,
+                        channels: stream.channels
+                    )
+                )
+            case "Subtitle":
+                let ordinal = subtitleTracks.count
+                subtitleTracks.append(
+                    SubtitleTrack(
+                        id: "subtitle:\(ordinal)",
+                        languageCode: normalizeLanguage(stream.languageCode),
+                        displayName: streamDisplayName(prefix: "Subtitle", ordinal: ordinal, languageCode: stream.languageCode, codec: stream.codec),
+                        source: .embedded
+                    )
+                )
+            default:
+                continue
+            }
+        }
+
+        return HLSMediaMetadata(
+            durationSeconds: durationSeconds,
+            audioTracks: audioTracks,
+            subtitleTracks: subtitleTracks
+        )
+    }
+
+    private static func parseDuration(from line: String) -> Double? {
+        guard let range = line.range(of: "Duration:") else { return nil }
+        let tail = line[range.upperBound...].trimmingCharacters(in: .whitespaces)
+        let value = tail.split(separator: ",", maxSplits: 1).first.map(String.init) ?? ""
+        let parts = value.split(separator: ":").compactMap { Double($0) }
+        guard parts.count == 3 else { return nil }
+        return (parts[0] * 3_600) + (parts[1] * 60) + parts[2]
+    }
+
+    private static func parseStream(from line: String) -> FFmpegStreamInfo? {
+        guard line.contains("Stream #0:") else { return nil }
+        guard let colon = line.range(of: ": ") else { return nil }
+        let header = String(line[..<colon.lowerBound])
+        let detail = String(line[colon.upperBound...])
+        let kind: String
+        if detail.hasPrefix("Audio:") {
+            kind = "Audio"
+        } else if detail.hasPrefix("Subtitle:") {
+            kind = "Subtitle"
+        } else {
+            return nil
+        }
+
+        let languageCode: String? = {
+            guard let open = header.lastIndex(of: "("),
+                  let close = header.lastIndex(of: ")"),
+                  open < close
+            else { return nil }
+            return String(header[header.index(after: open)..<close])
+        }()
+
+        let codecTail = detail.dropFirst("\(kind):".count).trimmingCharacters(in: .whitespaces)
+        let codec = codecTail.split(separator: ",", maxSplits: 1).first.map { String($0).trimmingCharacters(in: .whitespaces) }
+        let channels = channelLabel(from: codecTail)
+        return FFmpegStreamInfo(kind: kind, languageCode: languageCode, codec: codec, channels: channels)
+    }
+
+    private static func channelLabel(from text: String) -> String? {
+        let lowercased = text.lowercased()
+        if lowercased.contains("7.1") || lowercased.contains("8ch") || lowercased.contains("8 ch") {
+            return "7.1"
+        }
+        if lowercased.contains("5.1") || lowercased.contains("6ch") || lowercased.contains("6 ch") {
+            return "5.1"
+        }
+        if lowercased.contains("stereo") || lowercased.contains("2.0") || lowercased.contains("2ch") || lowercased.contains("2 ch") {
+            return "Stereo"
+        }
+        if lowercased.contains("mono") || lowercased.contains("1ch") || lowercased.contains("1 ch") {
+            return "Mono"
+        }
+        return nil
+    }
+
+    private static func normalizeLanguage(_ code: String?) -> String {
+        switch code?.lowercased() {
+        case "rus", "ru":
+            "ru"
+        case "eng", "en":
+            "en"
+        case "aze", "az":
+            "az"
+        case "jpn", "ja":
+            "ja"
+        case "deu", "ger", "de":
+            "de"
+        case "fra", "fre", "fr":
+            "fr"
+        case "spa", "es":
+            "es"
+        case let code?:
+            code
+        case nil:
+            "und"
+        }
+    }
+
+    private static func streamDisplayName(prefix: String, ordinal: Int, languageCode: String?, codec: String?) -> String {
+        let language = normalizeLanguage(languageCode).uppercased()
+        let codecPart = codec.map { " · \($0)" } ?? ""
+        return "\(prefix) \(ordinal + 1) · \(language)\(codecPart)"
+    }
+}
+
+private struct FFmpegStreamInfo {
+    let kind: String
+    let languageCode: String?
+    let codec: String?
+    let channels: String?
+}
+
+private struct HLSBridgeStartup {
+    let playlistURL: URL
+    let metadata: HLSMediaMetadata
+}
+
+private final class FFmpegLogCapture: @unchecked Sendable {
+    private let pipe: Pipe
+    private let logURL: URL
+    private let lock = NSLock()
+    private var data = Data()
+
+    init(pipe: Pipe, logURL: URL) {
+        self.pipe = pipe
+        self.logURL = logURL
+    }
+
+    var text: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    func start() {
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            self?.append(chunk)
+        }
+    }
+
+    func stopAndFlush() -> String {
+        pipe.fileHandleForReading.readabilityHandler = nil
+        let capturedText = self.text
+        try? Data(capturedText.utf8).write(to: logURL)
+        return capturedText
+    }
+
+    private func append(_ chunk: Data) {
+        lock.lock()
+        data.append(chunk)
+        lock.unlock()
+    }
+}
+
 private enum FFmpegHLSVideoMode {
     case copy
     case hardwareH264
@@ -951,6 +1386,8 @@ private enum FFmpegHLSVideoMode {
                 "-b:v", "8000k",
                 "-maxrate", "10000k",
                 "-bufsize", "16000k",
+                "-g", "24",
+                "-force_key_frames", "expr:gte(t,n_forced*1)",
                 "-allow_sw", "1"
             ]
         case .softwareH264:
@@ -959,6 +1396,9 @@ private enum FFmpegHLSVideoMode {
                 "-preset", "veryfast",
                 "-tune", "zerolatency",
                 "-pix_fmt", "yuv420p",
+                "-g", "24",
+                "-sc_threshold", "0",
+                "-force_key_frames", "expr:gte(t,n_forced*1)",
                 "-b:v", "8000k",
                 "-maxrate", "10000k",
                 "-bufsize", "16000k"

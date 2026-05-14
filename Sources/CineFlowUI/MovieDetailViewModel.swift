@@ -65,6 +65,15 @@ public struct MovieCastMember: Identifiable, Equatable, Sendable {
     public let id: String
     public let name: String
     public let role: String
+
+    public let profileURL: URL?
+
+    public init(id: String, name: String, role: String, profileURL: URL? = nil) {
+        self.id = id
+        self.name = name
+        self.role = role
+        self.profileURL = profileURL
+    }
 }
 
 public struct MovieTrailer: Identifiable, Equatable, Sendable {
@@ -84,6 +93,16 @@ public struct MovieDetailResponse: Equatable, Sendable {
 
 public protocol MovieDetailProviderProtocol: Sendable {
     func movieDetail(id: String) async throws -> MovieDetailResponse?
+    func refreshMovieDetail(id: String) async throws -> MovieDetailResponse?
+    func clearMetadataCache(id: String) async throws
+}
+
+public extension MovieDetailProviderProtocol {
+    func refreshMovieDetail(id: String) async throws -> MovieDetailResponse? {
+        try await movieDetail(id: id)
+    }
+
+    func clearMetadataCache(id: String) async throws {}
 }
 
 public struct MockMovieDetailProvider: MovieDetailProviderProtocol {
@@ -211,6 +230,7 @@ public final class MovieDetailViewModel: ObservableObject {
     private let rankingEngine: ReleaseRankingEngine
     private let libraryRepository: (any LibraryRepositoryProtocol)?
     private let settingsRepository: (any SettingsRepositoryProtocol)?
+    private let recommendationService: (any RecommendationServiceProtocol)?
     private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
     private let diagnosticsService: (any DiagnosticsServiceProtocol)?
     private let releaseSelectionStore: ReleaseSelectionStoreProtocol
@@ -223,6 +243,7 @@ public final class MovieDetailViewModel: ObservableObject {
         rankingEngine: ReleaseRankingEngine = ReleaseRankingEngine(preferences: RankingPreferences(preferredAudioLanguages: ["ru"], preferredSubtitleLanguages: ["ru"], supportsHDR: true)),
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         settingsRepository: (any SettingsRepositoryProtocol)? = nil,
+        recommendationService: (any RecommendationServiceProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil,
         releaseSelectionStore: ReleaseSelectionStoreProtocol = UserDefaultsReleaseSelectionStore()
@@ -232,6 +253,7 @@ public final class MovieDetailViewModel: ObservableObject {
         self.rankingEngine = rankingEngine
         self.libraryRepository = libraryRepository
         self.settingsRepository = settingsRepository
+        self.recommendationService = recommendationService
         self.userMediaSourceRepository = userMediaSourceRepository
         self.diagnosticsService = diagnosticsService
         self.releaseSelectionStore = releaseSelectionStore
@@ -265,6 +287,56 @@ public final class MovieDetailViewModel: ObservableObject {
         return releases.first
     }
 
+    public var bestReleaseHighlight: DetailReleaseHighlight? {
+        guard let ranked = releases.first else { return nil }
+        return DetailReleaseHighlight(
+            releaseID: ranked.release.id,
+            title: ranked.release.title,
+            badge: "Best Release",
+            primaryMetadata: Self.primaryMetadataLine(for: ranked.release),
+            secondaryMetadata: Self.secondaryMetadataLine(for: ranked.release)
+        )
+    }
+
+    public var primaryWatchActionTitle: String {
+        if bestPlayableRelease != nil {
+            return "Смотреть лучший релиз"
+        }
+        if userSources.contains(where: \.isPlayableLocalFile) {
+            return "Смотреть локальный файл"
+        }
+        return "Выбрать локальный файл"
+    }
+
+    public var heroMetadataBadges: [DetailHeroBadge] {
+        guard let movie else { return [] }
+        var badges: [String] = [
+            movie.year > 0 ? String(movie.year) : "Год неизвестен",
+            movie.runtime.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Runtime n/a" : movie.runtime,
+            movie.imdbRating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "IMDb n/a" : "IMDb \(movie.imdbRating)"
+        ]
+        badges.append(contentsOf: movie.genres.prefix(3))
+        return badges.map(DetailHeroBadge.init(title:))
+    }
+
+    public var ratingSummary: RatingSummary {
+        guard let movie else { return .empty }
+        return RatingAggregator.summary(
+            tmdbRating: movie.tmdbRating,
+            imdbRating: movie.imdbRating,
+            userRating: userRating,
+            year: movie.year > 0 ? movie.year : nil
+        )
+    }
+
+    public var releaseFallbackTitle: String? {
+        releases.isEmpty ? "Релизы пока не найдены" : nil
+    }
+
+    public var castFallbackTitle: String? {
+        cast.isEmpty ? "Актёры пока не загружены" : nil
+    }
+
     public func load() async {
         loadGeneration += 1
         let generation = loadGeneration
@@ -291,7 +363,7 @@ public final class MovieDetailViewModel: ObservableObject {
             releases = currentRankingEngine.rank(response.releases)
             refreshManualOverride()
             trailers = response.trailers
-            similar = response.similar
+            similar = await resolvedSimilarItems(for: response)
             cast = response.cast
             progress = response.progress
             await refreshLibraryState()
@@ -303,6 +375,33 @@ public final class MovieDetailViewModel: ObservableObject {
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
             state = .failed(cineFlowError.userMessage)
             await diagnosticsService?.log(cineFlowError, operation: "movieDetail.load", metadata: ["mediaID": mediaID])
+        }
+    }
+
+    public func refreshMetadata() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        do {
+            guard let response = try await provider.refreshMovieDetail(id: mediaID) else {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
+                state = .empty
+                return
+            }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            await apply(response: response)
+            state = .loaded
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
+            await diagnosticsService?.log(cineFlowError, operation: "movieDetail.refreshMetadata", metadata: ["mediaID": mediaID])
+        }
+    }
+
+    public func clearMetadataCacheForItem() async {
+        do {
+            try await provider.clearMetadataCache(id: mediaID)
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .cache)
+            await diagnosticsService?.log(cineFlowError, operation: "movieDetail.clearMetadataCache", metadata: ["mediaID": mediaID])
         }
     }
 
@@ -349,6 +448,20 @@ public final class MovieDetailViewModel: ObservableObject {
         rankingPreferences.map(ReleaseRankingEngine.init(preferences:)) ?? rankingEngine
     }
 
+    private func apply(response: MovieDetailResponse) async {
+        await refreshRankingPreferences()
+        movie = response.movie
+        mediaItem = response.movie.mediaItem()
+        releases = currentRankingEngine.rank(response.releases)
+        refreshManualOverride()
+        trailers = response.trailers
+        similar = await resolvedSimilarItems(for: response)
+        cast = response.cast
+        progress = response.progress
+        await refreshLibraryState()
+        await refreshUserSources()
+    }
+
     private func refreshRankingPreferences() async {
         guard let settingsRepository else {
             rankingPreferences = nil
@@ -359,6 +472,45 @@ public final class MovieDetailViewModel: ObservableObject {
         rankingPreferences = settings.playback.rankingPreferences(
             preferredSubtitleLanguages: subtitleLanguages,
             supportsHDR: true
+        )
+    }
+
+    private func resolvedSimilarItems(for response: MovieDetailResponse) async -> [SearchMediaResult] {
+        guard await localRecommendationsEnabled else { return [] }
+        guard let recommendationService else { return response.similar }
+        let seedSimilar = response.similar.map(Self.mediaItem)
+        let recommendations = (try? await recommendationService.recommendations(
+            for: response.movie.mediaItem(),
+            seedSimilar: seedSimilar,
+            limit: 12
+        )) ?? []
+        return recommendations.map(SearchMediaResult.init(mediaItem:))
+    }
+
+    private var localRecommendationsEnabled: Bool {
+        get async {
+            guard let settingsRepository else { return true }
+            return await settingsRepository.appSettings.recommendations.localRecommendationsEnabled
+        }
+    }
+
+    private static func mediaItem(from result: SearchMediaResult) -> MediaItem {
+        MediaItem(
+            id: result.id,
+            title: result.title,
+            kind: result.kind == .series ? .series : .movie,
+            overview: result.overview,
+            releaseYear: result.year > 0 ? result.year : nil,
+            posterPath: result.artworkURL?.absoluteString,
+            metadata: MediaMetadata(
+                tmdbId: abs(result.id.hashValue % 10_000),
+                title: result.title,
+                originalTitle: result.title,
+                overview: result.overview,
+                year: result.year > 0 ? result.year : nil,
+                rating: result.ratingScore,
+                posterURL: result.artworkURL
+            )
         )
     }
 
@@ -389,6 +541,13 @@ public final class MovieDetailViewModel: ObservableObject {
         Task {
             try? await libraryRepository.markWatched(mediaItem, positionSeconds: 0)
         }
+    }
+
+    public func removeFromHistory() async {
+        progress = nil
+        isWatched = false
+        guard let libraryRepository else { return }
+        try? await libraryRepository.removeFromHistory(mediaID: mediaID)
     }
 
     public func toggleFavorite() {
@@ -432,6 +591,21 @@ public final class MovieDetailViewModel: ObservableObject {
 
     public func copyMagnet(_ release: TorrentRelease) {
         copiedMagnetURI = release.magnetURI
+    }
+
+    private static func primaryMetadataLine(for release: TorrentRelease) -> String {
+        var values = [release.qualityLabel]
+        if release.hdr != .none, release.hdr != .unknown {
+            values.append(release.hdr.displayLabel)
+        }
+        if release.codec != .unknown {
+            values.append(release.codec.rawValue)
+        }
+        return values.joined(separator: " · ")
+    }
+
+    private static func secondaryMetadataLine(for release: TorrentRelease) -> String {
+        "\(release.seeders) seeders · \(release.compactSizeLabel) · \(release.sourceName)"
     }
 
     private func refreshLibraryState() async {

@@ -52,6 +52,45 @@ public struct TMDBHomeContentProvider: Sendable {
     }
 }
 
+public struct TMDBPersonDetailProvider: PersonDetailProviderProtocol {
+    private let metadataService: any MetadataServiceProtocol
+
+    public init(metadataService: any MetadataServiceProtocol) {
+        self.metadataService = metadataService
+    }
+
+    public func personDetail(for person: PersonRoutePayload) async throws -> PersonDetailResponse? {
+        let searchedItems = try await metadataService.search(query: person.name)
+        var filmographyItems: [MediaItem] = []
+        if let sourceMedia = person.sourceMedia?.mediaItem {
+            filmographyItems.append(sourceMedia)
+        }
+        for item in searchedItems where !filmographyItems.contains(where: { $0.id == item.id }) {
+            filmographyItems.append(item)
+        }
+        let credits = filmographyItems.enumerated().map { index, item in
+            PersonFilmographyCredit(
+                mediaItem: item,
+                role: person.role ?? (person.id.hasPrefix("director:") ? "Director" : "Cast"),
+                popularityScore: Double(max(0, 100 - index)),
+                isAvailableInSources: !item.torrentReleases.isEmpty
+            )
+        }
+
+        let knownFor = Array(filmographyItems.prefix(4))
+        let detail = PersonDetail(
+            id: person.id,
+            name: person.name,
+            kind: person.id.hasPrefix("director:") ? .director : .actor,
+            role: person.role,
+            photoURL: person.profileURL,
+            shortBio: "",
+            knownFor: knownFor
+        )
+        return PersonDetailResponse(detail: detail, filmography: credits)
+    }
+}
+
 public struct TMDBMovieDetailProvider: MovieDetailProviderProtocol {
     private let metadataService: any MetadataServiceProtocol
     private let torrentAggregator: TorrentSearchAggregator?
@@ -92,10 +131,21 @@ public struct TMDBMovieDetailProvider: MovieDetailProviderProtocol {
             },
             similar: (await similarItems ?? []).map(SearchMediaResult.init(mediaItem:)),
             cast: (cast.isEmpty ? metadata.cast : cast).prefix(12).map { member in
-                MovieCastMember(id: member.id, name: member.name, role: member.characterName ?? "Cast")
+                MovieCastMember(id: member.id, name: member.name, role: member.characterName ?? "Cast", profileURL: member.profileURL)
             },
             progress: nil
         )
+    }
+
+    public func refreshMovieDetail(id: String) async throws -> MovieDetailResponse? {
+        if let cacheControl = metadataService as? MetadataCacheControlProtocol {
+            try await cacheControl.refreshMetadata(for: id)
+        }
+        return try await movieDetail(id: id)
+    }
+
+    public func clearMetadataCache(id: String) async throws {
+        try await (metadataService as? MetadataCacheControlProtocol)?.clearMetadataCache(for: id)
     }
 
     private func torrentReleases(for metadata: MediaMetadata) async -> [TorrentRelease] {
@@ -170,7 +220,7 @@ public struct TMDBSeriesDetailProvider: SeriesDetailProviderProtocol {
             },
             similar: (await similarItems ?? []).map(SearchMediaResult.init(mediaItem:)),
             cast: (cast.isEmpty ? metadata.cast : cast).prefix(12).map { member in
-                MovieCastMember(id: member.id, name: member.name, role: member.characterName ?? "Cast")
+                MovieCastMember(id: member.id, name: member.name, role: member.characterName ?? "Cast", profileURL: member.profileURL)
             },
             progressByEpisodeID: [:],
             lastWatchedEpisodeID: nil
@@ -179,6 +229,17 @@ public struct TMDBSeriesDetailProvider: SeriesDetailProviderProtocol {
 
     public func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
         await episodeScopedReleases(for: episodeID)
+    }
+
+    public func refreshSeriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        if let cacheControl = metadataService as? MetadataCacheControlProtocol {
+            try await cacheControl.refreshMetadata(for: id)
+        }
+        return try await seriesDetail(id: id)
+    }
+
+    public func clearMetadataCache(id: String) async throws {
+        try await (metadataService as? MetadataCacheControlProtocol)?.clearMetadataCache(for: id)
     }
 
     private func episodeScopedReleases(for episodeID: String?) async -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {

@@ -53,6 +53,8 @@ private extension SearchTorrentRelease {
             magnetURI: release.magnetURI,
             torrentFileURL: release.torrentFileURL,
             quality: release.quality,
+            codec: release.codec,
+            hdrFormat: release.hdr,
             isHDR: release.hdr != .none && release.hdr != .unknown,
             seeders: release.seeders,
             leechers: release.leechers,

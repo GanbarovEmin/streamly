@@ -2,10 +2,13 @@ import CineFlowCore
 import CineFlowSources
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 
 public enum SettingsSectionID: String, CaseIterable, Identifiable, Sendable {
     case general
     case appearance
+    case home
+    case tasteProfile
     case sources
     case playback
     case subtitles
@@ -21,6 +24,8 @@ public enum SettingsSectionID: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general: "General"
         case .appearance: "Appearance"
+        case .home: "Home"
+        case .tasteProfile: "Taste Profile"
         case .sources: "Sources"
         case .playback: "Playback"
         case .subtitles: "Subtitles"
@@ -36,6 +41,8 @@ public enum SettingsSectionID: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .general: "gearshape"
         case .appearance: "paintbrush"
+        case .home: "rectangle.stack"
+        case .tasteProfile: "slider.horizontal.3"
         case .sources: "antenna.radiowaves.left.and.right"
         case .playback: "play.rectangle"
         case .subtitles: "captions.bubble"
@@ -46,6 +53,11 @@ public enum SettingsSectionID: String, CaseIterable, Identifiable, Sendable {
         case .about: "info.circle"
         }
     }
+}
+
+public enum SettingsMoveDirection: Equatable, Sendable {
+    case up
+    case down
 }
 
 public struct SettingsSectionItem: Identifiable, Equatable, Sendable {
@@ -177,8 +189,10 @@ public final class SettingsViewModel: ObservableObject {
     @Published public private(set) var torrentioSettings = TorrentioSettings.defaults
     @Published public private(set) var lastUpdateCheckedAt: Date?
     @Published public private(set) var diagnosticsExport: String?
+    @Published public private(set) var libraryImportPreview: LibraryImportPreview?
     @Published public private(set) var operationMessage: String?
     @Published public private(set) var isBusy = false
+    @Published public var backupBeforeLibraryImport = true
 
     public let about: SettingsAboutInfo
 
@@ -188,6 +202,7 @@ public final class SettingsViewModel: ObservableObject {
     private let torrentioURLBuilder: TorrentioConfigurationURLBuilder
     private let fileManager: FileManager
     private let cacheBaseURL: URL
+    private var pendingLibraryImportData: Data?
 
     public init(
         environment: AppEnvironment,
@@ -209,6 +224,10 @@ public final class SettingsViewModel: ObservableObject {
 
     public var torrentioConfiguredManifestURL: URL? {
         try? torrentioURLBuilder.manifestURL(settings: torrentioSettings)
+    }
+
+    public var hiddenRecommendationItems: [HiddenRecommendationItem] {
+        settings.tasteProfile.hiddenItems
     }
 
     public func load() async {
@@ -243,6 +262,84 @@ public final class SettingsViewModel: ObservableObject {
     public func updateReduceMotion(_ enabled: Bool) async {
         settings.appearance.reduceMotion = enabled
         UserDefaults.standard.set(enabled, forKey: "streamly.reduceMotion")
+        await persistSettings()
+    }
+
+    public func updateHomeSection(_ sectionID: String, isEnabled: Bool) async {
+        settings.home.setSection(sectionID, isEnabled: isEnabled)
+        await persistSettings()
+    }
+
+    public func moveHomeSection(_ sectionID: String, direction: SettingsMoveDirection) async {
+        let orderedIDs = settings.home.orderedSections.map(\.sectionID)
+        guard let currentIndex = orderedIDs.firstIndex(of: sectionID) else { return }
+        let destinationIndex: Int
+        switch direction {
+        case .up:
+            destinationIndex = currentIndex - 1
+        case .down:
+            destinationIndex = currentIndex + 1
+        }
+        settings.home.moveSection(sectionID, to: destinationIndex)
+        await persistSettings()
+    }
+
+    public func updateHomeLayoutDensity(_ density: HomeLayoutDensity) async {
+        guard settings.home.layoutDensity != density else { return }
+        settings.home.layoutDensity = density
+        settings.home.touch()
+        await persistSettings()
+    }
+
+    public func updateHomePosterSize(_ posterSize: HomePosterSizePreference) async {
+        guard settings.home.posterSize != posterSize else { return }
+        settings.home.posterSize = posterSize
+        settings.home.touch()
+        await persistSettings()
+    }
+
+    public func updateLocalRecommendationsEnabled(_ enabled: Bool) async {
+        guard settings.recommendations.localRecommendationsEnabled != enabled else { return }
+        settings.recommendations.localRecommendationsEnabled = enabled
+        await persistSettings()
+    }
+
+    public func updateBetterReleaseNotificationsEnabled(_ enabled: Bool) async {
+        guard settings.notifications.betterReleaseNotificationsEnabled != enabled else { return }
+        settings.notifications.betterReleaseNotificationsEnabled = enabled
+        await persistSettings()
+    }
+
+    public func updateBetterReleaseDigestMode(_ enabled: Bool) async {
+        guard settings.notifications.betterReleaseDigestMode != enabled else { return }
+        settings.notifications.betterReleaseDigestMode = enabled
+        await persistSettings()
+    }
+
+    public func updateMacOSBetterReleaseNotificationsEnabled(_ enabled: Bool) async {
+        guard settings.notifications.macOSBetterReleaseNotificationsEnabled != enabled else { return }
+        settings.notifications.macOSBetterReleaseNotificationsEnabled = enabled
+        await persistSettings()
+    }
+
+    public func updateNotificationCategory(_ category: NotificationCategory, isEnabled: Bool) async {
+        guard settings.notifications.isCategoryEnabled(category) != isEnabled else { return }
+        settings.notifications.setCategory(category, isEnabled: isEnabled)
+        await persistSettings()
+    }
+
+    public func updateTasteGenre(_ genre: String, preference: TastePreferenceLevel?) async {
+        settings.tasteProfile.setGenre(genre, preference: preference)
+        await persistSettings()
+    }
+
+    public func restoreHiddenRecommendationItem(mediaID: String) async {
+        settings.tasteProfile.restoreHiddenTitle(mediaID: mediaID)
+        await persistSettings()
+    }
+
+    public func resetHomePreferences() async {
+        settings.home = HomePreferences()
         await persistSettings()
     }
 
@@ -810,6 +907,105 @@ public final class SettingsViewModel: ObservableObject {
         diagnosticsExport = await environment.diagnosticsService.exportDiagnostics()
     }
 
+    public func exportLibrary() async {
+        guard let portabilityService = environment.libraryPortabilityService else {
+            operationMessage = "Library export is unavailable without the local database."
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let data = try await portabilityService.exportLibraryJSON()
+            let panel = NSSavePanel()
+            panel.title = "Export Library"
+            panel.nameFieldStringValue = "streamly-library-\(portableTimestamp()).json"
+            panel.allowedContentTypes = [.json]
+            panel.canCreateDirectories = true
+
+            if panel.runModal() == .OK, let url = panel.url {
+                try data.write(to: url, options: .atomic)
+                operationMessage = "Library exported to \(url.lastPathComponent)."
+            } else {
+                operationMessage = "Library export cancelled."
+            }
+        } catch {
+            await handleSettingsError(error, operation: "library.export", category: .database, metadata: [:])
+        }
+    }
+
+    public func chooseLibraryImportFile() async {
+        guard let portabilityService = environment.libraryPortabilityService else {
+            operationMessage = "Library import is unavailable without the local database."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Import Library"
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+
+        guard panel.runModal() == .OK, let url = panel.url else {
+            operationMessage = "Library import cancelled."
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let data = try Data(contentsOf: url)
+            let preview = try await portabilityService.previewImport(data)
+            pendingLibraryImportData = data
+            libraryImportPreview = preview
+            operationMessage = preview.canImport
+                ? "Import preview ready: \(libraryImportSummaryText(preview.summary)); \(preview.duplicateCount) duplicate records will be merged."
+                : "Import file has validation issues. Review the preview before importing."
+        } catch {
+            pendingLibraryImportData = nil
+            libraryImportPreview = nil
+            await handleSettingsError(error, operation: "library.importPreview", category: .database, metadata: ["file": url.lastPathComponent])
+        }
+    }
+
+    public func confirmLibraryImport() async {
+        guard let portabilityService = environment.libraryPortabilityService, let data = pendingLibraryImportData else {
+            operationMessage = "Choose a library JSON file before importing."
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let result = try await portabilityService.importLibraryJSON(
+                data,
+                options: LibraryImportOptions(createBackupBeforeImport: backupBeforeLibraryImport)
+            )
+            let backupSuffix: String
+            if let backupData = result.backupData {
+                let backupURL = try writeLibraryImportBackup(backupData)
+                backupSuffix = " Backup saved as \(backupURL.lastPathComponent)."
+            } else {
+                backupSuffix = ""
+            }
+            operationMessage = "Library imported: \(libraryImportSummaryText(result.preview.summary)); \(result.preview.duplicateCount) duplicate records merged.\(backupSuffix)"
+            pendingLibraryImportData = nil
+            libraryImportPreview = nil
+        } catch {
+            await handleSettingsError(error, operation: "library.import", category: .database, metadata: [:])
+        }
+    }
+
+    public func cancelLibraryImport() {
+        pendingLibraryImportData = nil
+        libraryImportPreview = nil
+        operationMessage = "Library import cancelled."
+    }
+
     public func openLogsFolder() {
         operationMessage = "Logs folder: \(cacheBaseURL.appendingPathComponent("Logs", isDirectory: true).path)"
     }
@@ -1032,6 +1228,24 @@ public final class SettingsViewModel: ObservableObject {
         let cineFlowError = CineFlowError.from(error, fallbackCategory: category)
         await environment.diagnosticsService.log(cineFlowError, operation: operation, metadata: metadata)
         operationMessage = cineFlowError.userMessage
+    }
+
+    private func writeLibraryImportBackup(_ data: Data) throws -> URL {
+        let directory = cacheBaseURL.appendingPathComponent("LibraryBackups", isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("streamly-library-backup-\(portableTimestamp()).json")
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
+    private func libraryImportSummaryText(_ summary: LibraryImportSummary) -> String {
+        "\(summary.libraryItems) library, \(summary.lists) lists, \(summary.watchHistory) history, \(summary.ratings) ratings, \(summary.playbackProgress) progress"
+    }
+
+    private func portableTimestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ".", with: "-")
     }
 
     private static func defaultCacheBaseURL(fileManager: FileManager) -> URL {

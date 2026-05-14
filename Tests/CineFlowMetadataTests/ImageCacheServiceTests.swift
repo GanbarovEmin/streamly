@@ -153,11 +153,50 @@ final class ImageCacheServiceTests: XCTestCase {
         XCTAssertLessThanOrEqual(cacheSize, 8)
     }
 
+    func testBrokenImageIsNotDownloadedRepeatedlyAndCachedRecordIsRemoved() async throws {
+        let workspace = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: workspace) }
+
+        let repository = CacheRepository(databaseManager: try DatabaseManager.inMemory())
+        let brokenURL = URL(string: "https://image.tmdb.org/t/p/w500/broken.jpg")!
+        let requestCounter = LockedCounter()
+
+        ImageCacheURLProtocol.requestHandler = { _ in
+            requestCounter.increment()
+            return (404, Data())
+        }
+
+        let service = ImageCacheService(
+            cacheRepository: repository,
+            configuration: ImageCacheConfiguration(cacheDirectory: workspace.appendingPathComponent("ImageCache")),
+            session: Self.urlProtocolSession()
+        )
+
+        await XCTAssertThrowsErrorAsync(try await service.imageData(for: brokenURL, kind: .poster))
+        await XCTAssertThrowsErrorAsync(try await service.imageData(for: brokenURL, kind: .poster))
+
+        XCTAssertEqual(requestCounter.value, 1)
+        let cachedRecord = try await repository.cachedImageRecord(url: brokenURL.absoluteString)
+        XCTAssertNil(cachedRecord)
+    }
+
     private static func urlProtocolSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [ImageCacheURLProtocol.self]
         return URLSession(configuration: configuration)
     }
+}
+
+private func XCTAssertThrowsErrorAsync(
+    _ expression: @autoclosure () async throws -> some Sendable,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) async {
+    do {
+        _ = try await expression()
+        XCTFail("Expected async error", file: file, line: line)
+    } catch {}
 }
 
 private final class ImageCacheURLProtocol: URLProtocol, @unchecked Sendable {

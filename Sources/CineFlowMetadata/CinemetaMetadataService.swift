@@ -2,7 +2,7 @@ import CineFlowCore
 @preconcurrency import CineFlowDatabase
 import Foundation
 
-public final class CinemetaMetadataService: MetadataServiceProtocol {
+public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCacheControlProtocol {
     private let cacheRepository: CacheRepository?
     private let session: URLSession
     private let baseURL: URL
@@ -30,6 +30,27 @@ public final class CinemetaMetadataService: MetadataServiceProtocol {
         async let movies = searchMovies(query: query)
         async let series = searchSeries(query: query)
         return try await movies + series
+    }
+
+    public func matchCandidates(query: String, kind: MediaKind, year: Int? = nil) async throws -> [MetadataMatchCandidate] {
+        let items: [MediaItem]
+        switch kind {
+        case .movie:
+            items = try await searchMovies(query: query)
+        case .series:
+            items = try await searchSeries(query: query)
+        }
+
+        return items
+            .compactMap { item in
+                MetadataMatcher.candidate(for: item, query: query, kind: kind, year: year)
+            }
+            .sorted {
+                if $0.confidence != $1.confidence {
+                    return $0.confidence > $1.confidence
+                }
+                return $0.item.displayTitle < $1.item.displayTitle
+            }
     }
 
     public func searchMovies(query: String) async throws -> [MediaItem] {
@@ -72,6 +93,20 @@ public final class CinemetaMetadataService: MetadataServiceProtocol {
     public func credits(for mediaID: String) async throws -> [CastMember] {
         let meta = try await meta(for: mediaID)
         return meta.castMembers
+    }
+
+    public func refreshMetadata(for mediaID: String) async throws {
+        try await clearMetadataCache(for: mediaID)
+        _ = try await meta(for: mediaID)
+    }
+
+    public func clearMetadataCache(for mediaID: String) async throws {
+        guard let id = CinemetaMediaID(mediaID) else {
+            throw MetadataServiceError.unsupportedProvider
+        }
+        let path = "/meta/\(id.type.rawValue)/\(Self.pathEncoded(id.imdbID)).json"
+        let url = baseURL.appendingPathComponent(path.trimmedLeadingSlash)
+        try await cacheRepository?.removeMetadata(cacheKey: url.absoluteString)
     }
 
     private func catalog(type: CinemetaMediaType, id: String, extraPath: String? = nil) async throws -> [MediaItem] {
@@ -306,6 +341,9 @@ private struct CinemetaMetaDTO: Decodable {
     let trailers: [CinemetaTrailerDTO]?
     let cast: [String]?
     let videos: [CinemetaVideoDTO]?
+    let aliases: [String]?
+    let alias: [String]?
+    let alternativeTitles: [String]?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -325,6 +363,9 @@ private struct CinemetaMetaDTO: Decodable {
         case trailers
         case cast
         case videos
+        case aliases
+        case alias
+        case alternativeTitles
     }
 
     func mediaItem(typeHint: CinemetaMediaType? = nil) -> MediaItem? {
@@ -402,14 +443,22 @@ private struct CinemetaMetaDTO: Decodable {
             originalTitle: title,
             overview: description ?? "",
             year: year,
+            releaseDate: releaseDate,
             genres: genre ?? genres ?? [],
             runtime: runtime?.minutes,
             rating: imdbRating.flatMap(Double.init),
             posterURL: poster.flatMap(URL.init(string:)),
             backdropURL: background.flatMap(URL.init(string:)),
             trailerURLs: trailerObjects.map(\.url),
-            cast: castMembers
+            cast: castMembers,
+            alternativeTitles: resolvedAlternativeTitles,
+            posterCandidates: poster.flatMap { URL(string: $0) }.map { [MetadataArtworkCandidate(url: $0, score: 1)] } ?? [],
+            backdropCandidates: background.flatMap { URL(string: $0) }.map { [MetadataArtworkCandidate(url: $0, score: 1)] } ?? []
         )
+    }
+
+    private var resolvedAlternativeTitles: [String] {
+        Array(NSOrderedSet(array: (aliases ?? []) + (alias ?? []) + (alternativeTitles ?? []))) as? [String] ?? []
     }
 
     private func seasons(seriesID: String) -> [Season] {
@@ -430,16 +479,13 @@ private struct CinemetaMetaDTO: Decodable {
     }
 
     private func resolvedType(typeHint: CinemetaMediaType?) -> CinemetaMediaType? {
-        if let typeHint {
-            return typeHint
-        }
         switch type {
         case "movie":
             return .movie
         case "series":
             return .series
         default:
-            return nil
+            return typeHint
         }
     }
 
@@ -454,6 +500,22 @@ private struct CinemetaMetaDTO: Decodable {
             return year
         }
         return nil
+    }
+
+    private var releaseDate: Date? {
+        Self.date(from: released ?? releaseInfo)
+    }
+
+    private static func date(from value: String?) -> Date? {
+        guard let value else { return nil }
+        if let date = ISO8601DateFormatter().date(from: value) {
+            return date
+        }
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
     }
 
     private static func numericIMDbFallback(_ imdbID: String?) -> Int {
@@ -533,6 +595,66 @@ private enum CinemetaRuntime: Decodable {
         let stringValue = try container.decode(String.self)
         let match = stringValue.firstMatch(pattern: #"([0-9]+)"#)
         self = .minutes(match.flatMap(Int.init) ?? 0)
+    }
+}
+
+private enum MetadataMatcher {
+    static func candidate(
+        for item: MediaItem,
+        query: String,
+        kind: MediaKind,
+        year: Int?
+    ) -> MetadataMatchCandidate? {
+        guard item.kind == kind else { return nil }
+
+        let normalizedQuery = normalize(query)
+        let title = normalize(item.displayTitle)
+        let originalTitle = normalize(item.metadata?.originalTitle ?? "")
+        let alternativeTitles = item.metadata?.alternativeTitles.map(normalize) ?? []
+
+        var score = 0.15
+        var reasons: [MetadataMatchReason] = [.mediaTypeMatch]
+
+        if title == normalizedQuery || normalize(item.title) == normalizedQuery {
+            score += 0.58
+            reasons.append(.exactTitle)
+        } else if originalTitle == normalizedQuery {
+            score += 0.54
+            reasons.append(.originalTitle)
+        } else if alternativeTitles.contains(normalizedQuery) {
+            score += 0.52
+            reasons.append(.alternativeTitle)
+        } else if title.contains(normalizedQuery) || normalizedQuery.contains(title) {
+            score += 0.38
+            reasons.append(.fuzzyTitle)
+        } else if alternativeTitles.contains(where: { $0.contains(normalizedQuery) || normalizedQuery.contains($0) }) {
+            score += 0.34
+            reasons.append(.alternativeTitle)
+        } else {
+            return nil
+        }
+
+        if let expectedYear = year {
+            let actualYear = item.metadata?.year ?? item.releaseYear
+            if actualYear == expectedYear {
+                score += 0.22
+                reasons.append(.yearMatch)
+            } else {
+                score -= 0.14
+                reasons.append(.yearMismatch(expected: expectedYear, actual: actualYear))
+            }
+        }
+
+        return MetadataMatchCandidate(item: item, confidence: score, reasons: reasons)
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: #"^\s*the\s+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: "[^\\p{L}\\p{N}]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

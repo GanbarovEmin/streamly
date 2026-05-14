@@ -6,23 +6,16 @@ import XCTest
 
 final class PlaybackEngineTests: XCTestCase {
     @MainActor
-    func testTorrentHLSStartupRequiresFourSegmentsAndEightSeconds() {
+    func testTorrentHLSStartupCanBeginAfterFirstPlayableSegment() {
         let oneSegment = """
         #EXTM3U
         #EXT-X-TARGETDURATION:2
         #EXTINF:2.000000,
         segment_00000.ts
         """
-        let fourShortSegments = """
+        let noSegment = """
         #EXTM3U
-        #EXTINF:1.000000,
-        segment_00000.ts
-        #EXTINF:1.000000,
-        segment_00001.ts
-        #EXTINF:1.000000,
-        segment_00002.ts
-        #EXTINF:1.000000,
-        segment_00003.ts
+        #EXT-X-TARGETDURATION:2
         """
         let readyPlaylist = """
         #EXTM3U
@@ -36,17 +29,18 @@ final class PlaybackEngineTests: XCTestCase {
         segment_00003.ts
         """
 
-        XCTAssertFalse(TranscodingAVPlaybackService.playlistIsReadyForStartup(oneSegment))
-        XCTAssertFalse(TranscodingAVPlaybackService.playlistIsReadyForStartup(fourShortSegments))
+        XCTAssertTrue(TranscodingAVPlaybackService.playlistIsReadyForStartup(oneSegment))
+        XCTAssertFalse(TranscodingAVPlaybackService.playlistIsReadyForStartup(noSegment))
         XCTAssertTrue(TranscodingAVPlaybackService.playlistIsReadyForStartup(readyPlaylist))
     }
 
     @MainActor
-    func testLocalHLSBridgeDurationIsTreatedAsUnknownDuringEventPlayback() {
+    func testLocalHLSBridgeUsesMovieDurationOverrideInsteadOfEventPlaylistDuration() {
         let bridgeURL = URL(string: "http://127.0.0.1:49200/stream.m3u8")!
         let directURL = URL(fileURLWithPath: "/tmp/movie.mp4")
 
-        XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(72, mediaURL: bridgeURL))
+        XCTAssertEqual(AVFoundationPlaybackService.effectiveDuration(72, mediaURL: bridgeURL, durationOverride: 7_200), 7_200)
+        XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(72, mediaURL: bridgeURL, durationOverride: nil))
         XCTAssertEqual(AVFoundationPlaybackService.effectiveDuration(7_200, mediaURL: directURL), 7_200)
         XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(.nan, mediaURL: directURL))
         XCTAssertNil(AVFoundationPlaybackService.effectiveDuration(0, mediaURL: directURL))
@@ -67,6 +61,28 @@ final class PlaybackEngineTests: XCTestCase {
 
         XCTAssertEqual(TranscodingAVPlaybackService.initialHLSSeekTargetSeconds(from: ranges), 2)
         XCTAssertEqual(TranscodingAVPlaybackService.initialHLSSeekTargetSeconds(from: []), 0)
+    }
+
+    @MainActor
+    func testFFmpegMetadataParserExtractsMovieDurationAndSelectableTracks() {
+        let log = """
+        Input #0, matroska,webm, from 'http://127.0.0.1:49152/stream/session/0':
+          Duration: 01:41:45.50, start: 0.000000, bitrate: N/A
+          Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt2020nc), 3840x2160
+          Stream #0:1(rus): Audio: ac3, 48000 Hz, 5.1(side), fltp, 640 kb/s
+          Stream #0:2(eng): Audio: dts, 48000 Hz, 7.1, fltp
+          Stream #0:3(rus): Subtitle: subrip
+          Stream #0:4(eng): Subtitle: hdmv_pgs_subtitle
+        """
+
+        let metadata = TranscodingAVPlaybackService.mediaMetadata(fromFFmpegLog: log)
+
+        XCTAssertEqual(try XCTUnwrap(metadata.durationSeconds), 6_105.5, accuracy: 0.001)
+        XCTAssertEqual(metadata.audioTracks.map(\.id), ["audio:0", "audio:1"])
+        XCTAssertEqual(metadata.audioTracks.map(\.languageCode), ["ru", "en"])
+        XCTAssertEqual(metadata.audioTracks.map(\.qualityLabel), ["5.1 Dolby", "7.1 DTS"])
+        XCTAssertEqual(metadata.subtitleTracks.map(\.id), ["subtitle:0", "subtitle:1"])
+        XCTAssertEqual(metadata.subtitleTracks.map(\.languageCode), ["ru", "en"])
     }
 
     func testTimelinePreviewServiceGeneratesAndReusesLocalCacheWithoutRemoteGeneration() async throws {
@@ -240,6 +256,131 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(source.selectionContext?.episodeID, "tt0944947:1:1")
         XCTAssertEqual(source.selectionContext?.seasonNumber, 1)
         XCTAssertEqual(source.selectionContext?.episodeNumber, 1)
+    }
+
+    func testPlaybackPipelineAutoStartsMatchedEpisodeWithoutManualSelection() async throws {
+        let release = TorrentRelease(
+            id: "torrentio:tt0944947:1:1:abcdefabcdefabcdefabcdefabcdefabcdefabcd:auto",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "Game of Thrones Season 1 Pack",
+            magnetURI: "magnet:?xt=urn:btih:got",
+            quality: .ultraHD,
+            seeders: 12
+        )
+        let files = [
+            TorrentFile(
+                id: "8",
+                path: "Игра престолов.S01.WEB-DL.2160p",
+                name: "Игра престолов.S01E08.WEB-DL.2160p.mkv",
+                lengthBytes: 9_700_000_000,
+                isMediaFile: true
+            ),
+            TorrentFile(
+                id: "1",
+                path: "Игра престолов.S01.WEB-DL.2160p",
+                name: "Игра престолов.S01E01.WEB-DL.2160p.mkv",
+                lengthBytes: 9_500_000_000,
+                isMediaFile: true
+            )
+        ]
+        let engine = FallbackRecordingTorrentEngine(
+            preselectsFile: false,
+            filesByReleaseID: [release.id: files]
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: engine,
+            availabilityChecker: RecordingAvailabilityChecker(),
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tt0944947",
+                primaryRelease: release,
+                fallbackReleases: [],
+                bandwidthLimits: .unlimited
+            )
+        )
+
+        guard case .ready(let source, _, _) = result else {
+            return XCTFail("Expected automatic episode playback, got \(result)")
+        }
+
+        XCTAssertEqual(source.release?.id, release.id)
+        let selectedFileIDs = await engine.selectedFileIDs()
+        XCTAssertEqual(selectedFileIDs, ["1"])
+    }
+
+    func testPlaybackPipelineReappliesStreamingPrioritiesForPreselectedSession() async throws {
+        let release = TorrentRelease(
+            id: "preselected",
+            sourceId: "torrentio",
+            sourceName: "Torrentio",
+            title: "Preselected Movie",
+            magnetURI: "magnet:?xt=urn:btih:preselected",
+            quality: .fullHD,
+            seeders: 42
+        )
+        let files = [
+            TorrentFile(
+                id: "preselected.mkv",
+                path: "Preselected Movie/preselected.mkv",
+                name: "preselected.mkv",
+                lengthBytes: 4_000_000_000,
+                isMediaFile: true
+            ),
+            TorrentFile(
+                id: "sample.mkv",
+                path: "Preselected Movie/sample.mkv",
+                name: "sample.mkv",
+                lengthBytes: 40_000_000,
+                isMediaFile: true
+            ),
+            TorrentFile(
+                id: "poster.jpg",
+                path: "Preselected Movie/poster.jpg",
+                name: "poster.jpg",
+                lengthBytes: 500_000,
+                isMediaFile: false
+            )
+        ]
+        let engine = FallbackRecordingTorrentEngine(
+            preselectsFile: true,
+            filesByReleaseID: [release.id: files]
+        )
+        let pipeline = PlaybackPipeline(
+            torrentEngine: engine,
+            availabilityChecker: RecordingAvailabilityChecker(),
+            debugLogger: .disabled
+        )
+
+        let result = await pipeline.resolve(
+            PlaybackPipelineRequest(
+                mediaID: "tmdb:movie:preselected",
+                primaryRelease: release,
+                fallbackReleases: [],
+                bandwidthLimits: .unlimited
+            )
+        )
+
+        guard case .ready(_, _, _) = result else {
+            return XCTFail("Expected preselected playback source, got \(result)")
+        }
+
+        let selectedFileIDs = await engine.selectedFileIDs()
+        XCTAssertTrue(selectedFileIDs.isEmpty)
+        let sequentialCalls = await engine.sequentialDownloadCalls()
+        XCTAssertEqual(sequentialCalls, ["session-preselected:true"])
+        let priorityCalls = await engine.priorityCalls()
+        XCTAssertEqual(
+            priorityCalls,
+            [
+                "preselected.mkv:high",
+                "sample.mkv:low",
+                "poster.jpg:disabled"
+            ]
+        )
     }
 
     func testPlaybackPipelineReturnsFailedWhenEveryFallbackFails() async throws {
@@ -897,8 +1038,12 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
     private let startDelays: [String: UInt64]
     private let preselectsFile: Bool
     private let streamingURL: URL?
+    private let filesByReleaseID: [String: [TorrentFile]]
     private var startedIDs: [String] = []
     private var removedIDs: [String] = []
+    private var selectedIDs: [String] = []
+    private var sequentialCalls: [String] = []
+    private var priorityCallValues: [String] = []
     private var sessions: [String: TorrentSession] = [:]
     private var releaseIDsBySessionID: [String: String] = [:]
 
@@ -906,12 +1051,14 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
         failures: [String: Error] = [:],
         startDelays: [String: UInt64] = [:],
         preselectsFile: Bool = true,
-        streamingURL: URL? = nil
+        streamingURL: URL? = nil,
+        filesByReleaseID: [String: [TorrentFile]] = [:]
     ) {
         self.failures = failures
         self.startDelays = startDelays
         self.preselectsFile = preselectsFile
         self.streamingURL = streamingURL
+        self.filesByReleaseID = filesByReleaseID
     }
 
     func searchReleases(for item: MediaItem) async throws -> [TorrentRelease] {
@@ -954,6 +1101,9 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
             throw TorrentEngineError.sessionNotFound(sessionId)
         }
         let fileID = session.selectedFileId ?? "\(releaseID).mkv"
+        if let files = filesByReleaseID[releaseID] {
+            return files
+        }
         return [
             TorrentFile(
                 id: fileID,
@@ -971,6 +1121,7 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
             throw TorrentEngineError.sessionNotFound(sessionId)
         }
         session.selectedFileId = fileId
+        selectedIDs.append(fileId)
         session.streamingURL = streamingURL ?? URL(fileURLWithPath: "/tmp/\(fileId)")
         sessions[sessionId] = session
     }
@@ -980,12 +1131,20 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
         _ = limits
     }
 
+    func setSequentialDownload(sessionId: String, enabled: Bool) async throws {
+        guard var session = sessions[sessionId] else {
+            throw TorrentEngineError.sessionNotFound(sessionId)
+        }
+        session.isSequentialDownloadEnabled = enabled
+        sessions[sessionId] = session
+        sequentialCalls.append("\(sessionId):\(enabled)")
+    }
+
     func setDownloadPriority(sessionId: String, fileId: String, priority: TorrentFilePriority) async throws {
         guard sessions[sessionId] != nil else {
             throw TorrentEngineError.sessionNotFound(sessionId)
         }
-        _ = fileId
-        _ = priority
+        priorityCallValues.append("\(fileId):\(priority)")
     }
 
     func getStreamingURL(sessionId: String) async throws -> URL {
@@ -1019,6 +1178,18 @@ private actor FallbackRecordingTorrentEngine: TorrentEngineProtocol {
 
     func removedSessionIDs() -> [String] {
         removedIDs
+    }
+
+    func selectedFileIDs() -> [String] {
+        selectedIDs
+    }
+
+    func sequentialDownloadCalls() -> [String] {
+        sequentialCalls
+    }
+
+    func priorityCalls() -> [String] {
+        priorityCallValues
     }
 }
 

@@ -20,6 +20,10 @@ DerivedData/
 Configuration/*.local.json
 .env
 .env.*
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
 sparkle_keys/
 *.pem
 *.p8
@@ -32,3 +36,8 @@ sparkle_keys/
 *.sqlite
 *.sqlite-*
 qa_artifacts/
+backups/
+*.dump
+*.dump.gz
+backup_status.json
+restore_drill/

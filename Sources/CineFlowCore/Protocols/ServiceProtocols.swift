@@ -402,6 +402,7 @@ public extension SubtitleServiceProtocol {
 
 public protocol LibraryRepositoryProtocol {
     func items() async throws -> [MediaItem]
+    func libraryEntries() async throws -> [LibraryItem]
     func add(_ item: MediaItem) async throws
     func remove(mediaID: String) async throws
     func favorites() async throws -> [MediaItem]
@@ -409,6 +410,7 @@ public protocol LibraryRepositoryProtocol {
     func removeFavorite(mediaID: String) async throws
     func watchedItems() async throws -> [WatchedMediaItem]
     func markWatched(_ item: MediaItem, positionSeconds: Double) async throws
+    func removeFromHistory(mediaID: String) async throws
     func ratedItems() async throws -> [RatedMediaItem]
     func setRating(_ item: MediaItem, rating: Int) async throws
     func lists() async throws -> [UserList]
@@ -420,6 +422,31 @@ public protocol LibraryRepositoryProtocol {
     func add(_ item: MediaItem, to listID: String) async throws
     func remove(_ mediaID: String, from listID: String) async throws
     func items(in listID: String) async throws -> [MediaItem]
+    func watchlistItems(in listID: String) async throws -> [WatchlistItem]
+    func updateWatchlistItem(listID: String, mediaID: String, priority: WatchlistPriority, remindLaterAt: Date?) async throws
+}
+
+public extension LibraryRepositoryProtocol {
+    func libraryEntries() async throws -> [LibraryItem] {
+        []
+    }
+
+    func removeFromHistory(mediaID: String) async throws {}
+
+    func watchlistItems(in listID: String) async throws -> [WatchlistItem] {
+        try await items(in: listID).map { item in
+            let bestRelease = item.rankedReleases.first
+            return WatchlistItem(
+                listID: listID,
+                mediaID: item.id,
+                addedAt: .distantPast,
+                initialQuality: bestRelease?.quality ?? .unknown,
+                initialHDR: bestRelease?.hdr ?? .unknown
+            )
+        }
+    }
+
+    func updateWatchlistItem(listID: String, mediaID: String, priority: WatchlistPriority, remindLaterAt: Date?) async throws {}
 }
 
 public protocol SettingsRepositoryProtocol {

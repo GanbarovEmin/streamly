@@ -12,12 +12,15 @@ public struct ContentContainerView: View {
     @ObservedObject private var searchViewModel: SearchViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @StateObject private var homeViewModel: HomeViewModel
+    @StateObject private var moviesCatalogViewModel: MediaCatalogViewModel
+    @StateObject private var seriesCatalogViewModel: MediaCatalogViewModel
     @StateObject private var libraryViewModel: LibraryViewModel
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
     private let environment: AppEnvironment
     private let sourceManager: SourceManager?
     private let playbackProgressRecorder: PlaybackProgressRecorder?
     private let imagePipeline: CineFlowImagePipeline
+    private let notificationCenterViewModel: NotificationCenterViewModel?
 
     public init(
         route: AppRoute,
@@ -27,7 +30,8 @@ public struct ContentContainerView: View {
         navigationCoordinator: NavigationCoordinator,
         sourceManager: SourceManager? = nil,
         playbackProgressRecorder: PlaybackProgressRecorder? = nil,
-        imagePipeline: CineFlowImagePipeline
+        imagePipeline: CineFlowImagePipeline,
+        notificationCenterViewModel: NotificationCenterViewModel? = nil
     ) {
         self.route = route
         self.viewModel = viewModel
@@ -37,19 +41,82 @@ public struct ContentContainerView: View {
         self.sourceManager = sourceManager
         self.playbackProgressRecorder = playbackProgressRecorder
         self.imagePipeline = imagePipeline
+        self.notificationCenterViewModel = notificationCenterViewModel
+        let homeSeriesDetailProvider = TMDBSeriesDetailProvider(
+            metadataService: environment.metadataService,
+            torrentAggregator: sourceManager.map { TorrentSearchAggregator(sourceManager: $0) }
+        )
+        let recommendationService = environment.recommendationService ?? LocalRecommendationService(
+            libraryRepository: environment.libraryRepository,
+            progressRepository: environment.playbackProgressRepository,
+            metadataService: environment.metadataService
+        )
         _homeViewModel = StateObject(wrappedValue: HomeViewModel(
             metadataService: environment.metadataService,
+            settingsRepository: environment.settingsRepository,
+            recommendationService: recommendationService,
             progressRepository: environment.playbackProgressRepository,
-            libraryRepository: environment.libraryRepository
+            libraryRepository: environment.libraryRepository,
+            newEpisodesProvider: SeriesTrackingEpisodeProvider(
+                libraryRepository: environment.libraryRepository,
+                progressRepository: environment.playbackProgressRepository,
+                seriesDetailProvider: homeSeriesDetailProvider
+            ),
+            upcomingCalendarProvider: UpcomingCalendarProvider(
+                metadataService: environment.metadataService,
+                libraryRepository: environment.libraryRepository,
+                seriesDetailProvider: homeSeriesDetailProvider
+            )
         ))
-        _libraryViewModel = StateObject(wrappedValue: LibraryViewModel(repository: environment.libraryRepository))
+        _libraryViewModel = StateObject(wrappedValue: LibraryViewModel(
+            repository: environment.libraryRepository,
+            personalStatsService: environment.personalStatsService
+        ))
+        _moviesCatalogViewModel = StateObject(wrappedValue: MediaCatalogViewModel(
+            kind: .movies,
+            metadataService: environment.metadataService
+        ))
+        _seriesCatalogViewModel = StateObject(wrappedValue: MediaCatalogViewModel(
+            kind: .series,
+            metadataService: environment.metadataService
+        ))
     }
 
     public var body: some View {
+        routeContent
+            .onChange(of: navigationCoordinator.refreshRequestID) { _ in
+                Task { await refreshCurrentRoute() }
+            }
+    }
+
+    @ViewBuilder
+    private var routeContent: some View {
         if route == .home {
-            HomeView(viewModel: homeViewModel, navigationCoordinator: navigationCoordinator, imagePipeline: imagePipeline)
+            HomeView(
+                viewModel: homeViewModel,
+                navigationCoordinator: navigationCoordinator,
+                imagePipeline: imagePipeline,
+                onEpisodeNotificationDigest: { digest in
+                    guard let notificationCenterViewModel else { return }
+                    Task { await notificationCenterViewModel.ingest(digest) }
+                }
+            )
         } else if route == .search {
             SearchView(viewModel: searchViewModel, navigationCoordinator: navigationCoordinator)
+        } else if route == .movies {
+            MediaCatalogView(
+                kind: .movies,
+                viewModel: moviesCatalogViewModel,
+                navigationCoordinator: navigationCoordinator,
+                imagePipeline: imagePipeline
+            )
+        } else if route == .series {
+            MediaCatalogView(
+                kind: .series,
+                viewModel: seriesCatalogViewModel,
+                navigationCoordinator: navigationCoordinator,
+                imagePipeline: imagePipeline
+            )
         } else if route == .library {
             LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .favorites, imagePipeline: imagePipeline)
         } else if route == .lists {
@@ -95,6 +162,11 @@ public struct ContentContainerView: View {
                     ),
                     userMediaSourceRepository: environment.userMediaSourceRepository,
                     settingsRepository: environment.settingsRepository,
+                    recommendationService: environment.recommendationService ?? LocalRecommendationService(
+                        libraryRepository: environment.libraryRepository,
+                        progressRepository: environment.playbackProgressRepository,
+                        metadataService: environment.metadataService
+                    ),
                     diagnosticsService: environment.diagnosticsService
                 )
             } else {
@@ -108,9 +180,34 @@ public struct ContentContainerView: View {
                     ),
                     userMediaSourceRepository: environment.userMediaSourceRepository,
                     settingsRepository: environment.settingsRepository,
+                    recommendationService: environment.recommendationService ?? LocalRecommendationService(
+                        libraryRepository: environment.libraryRepository,
+                        progressRepository: environment.playbackProgressRepository,
+                        metadataService: environment.metadataService
+                    ),
                     diagnosticsService: environment.diagnosticsService
                 )
             }
+        } else if case .personDetail(let person) = route {
+            PersonDetailView(
+                person: person,
+                navigationCoordinator: navigationCoordinator,
+                provider: TMDBPersonDetailProvider(metadataService: environment.metadataService),
+                libraryRepository: environment.libraryRepository,
+                imageDataLoader: { url in try await imagePipeline.data(for: url) }
+            )
+        } else if case .collectionDetail(let id) = route {
+            CollectionDetailView(
+                collectionID: id,
+                provider: LocalCollectionDiscoveryProvider(
+                    metadataService: environment.metadataService,
+                    libraryRepository: environment.libraryRepository
+                ),
+                navigationCoordinator: navigationCoordinator,
+                libraryRepository: environment.libraryRepository,
+                progressRepository: environment.playbackProgressRepository,
+                imageDataLoader: { url in try await imagePipeline.data(for: url) }
+            )
         } else if case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt) = route {
             playerRouteView(
                 mediaID: mediaID,
@@ -122,6 +219,23 @@ public struct ContentContainerView: View {
             )
         } else {
             legacyBody
+        }
+    }
+
+    private func refreshCurrentRoute() async {
+        switch route {
+        case .home:
+            await homeViewModel.load()
+        case .search:
+            await searchViewModel.retryLastSearch()
+        case .movies:
+            await moviesCatalogViewModel.refresh()
+        case .series:
+            await seriesCatalogViewModel.refresh()
+        case .library, .history, .continueWatching:
+            await libraryViewModel.load()
+        default:
+            await viewModel.load()
         }
     }
 
@@ -248,6 +362,18 @@ public struct ContentContainerView: View {
             ) {
                 navigationCoordinator.navigate(to: .player(mediaID: id))
             }
+        case .collectionDetail(let id):
+            CollectionDetailView(
+                collectionID: id,
+                provider: LocalCollectionDiscoveryProvider(
+                    metadataService: environment.metadataService,
+                    libraryRepository: environment.libraryRepository
+                ),
+                navigationCoordinator: navigationCoordinator,
+                libraryRepository: environment.libraryRepository,
+                progressRepository: environment.playbackProgressRepository,
+                imageDataLoader: { url in try await imagePipeline.data(for: url) }
+            )
         case .player(let mediaID, let sourceID, let release, let fallbackReleases, let selectionContext, let nextEpisodePrompt):
             playerRouteView(
                 mediaID: mediaID,
@@ -334,6 +460,10 @@ public struct ContentContainerView: View {
         case .settings:
             .sectionSettings
         case .mediaDetail:
+            .navigationMediaDetail
+        case .collectionDetail:
+            .navigationMediaDetail
+        case .personDetail:
             .navigationMediaDetail
         case .player:
             .navigationPlayer

@@ -204,7 +204,7 @@ public actor PlaybackPipeline {
             let startDate = Date()
             do {
                 let resolved = try await resolveRelease(release, request: request)
-                if let mediaSelection = resolved.mediaSelection, mediaSelection.manualOptions.count > 1 {
+                if let mediaSelection = resolved.mediaSelection, mediaSelection.requiresManualConfirmation {
                     attempts.append(PlaybackPipelineAttempt(release: release, state: .ready))
                     return .needsMediaFileSelection(
                         resolved.session,
@@ -314,6 +314,7 @@ public actor PlaybackPipeline {
             session: session,
             release: release,
             files: files,
+            selectionContext: request.selectionContext,
             operationTimeoutSeconds: request.fileSelectionTimeoutSeconds
         )
 
@@ -393,14 +394,31 @@ public actor PlaybackPipeline {
         session: TorrentSession,
         release: TorrentRelease,
         files: [TorrentFile],
+        selectionContext: PlaybackSelectionContext?,
         operationTimeoutSeconds: TimeInterval
     ) async throws -> TorrentMediaFileSelection? {
-        guard session.selectedFileId == nil else { return nil }
-        guard let selection = TorrentMediaFileSelector.selection(for: release, files: files) else {
+        if let selectedFileID = session.selectedFileId {
+            if let selectedFile = files.first(where: { $0.id == selectedFileID }) {
+                await logSelectedFile(session: session, release: release, file: selectedFile)
+            }
+            try await prioritize(
+                files: files,
+                selectedFileID: selectedFileID,
+                sessionID: session.id,
+                timeout: operationTimeoutSeconds
+            )
+            return nil
+        }
+
+        guard let selection = TorrentMediaFileSelector.selection(
+            for: release,
+            files: files,
+            selectionContext: selectionContext
+        ) else {
             throw PlaybackServiceError.unsupported(operation: ReleaseFallbackReason.missingMediaFile.userFacingSummary)
         }
 
-        if selection.manualOptions.count > 1 {
+        if selection.requiresManualConfirmation {
             if release.preferredFileIndex == nil {
                 return selection
             }
@@ -437,6 +455,10 @@ public actor PlaybackPipeline {
         timeout: TimeInterval
     ) async throws {
         let engine = torrentEngine
+        try await withTimeout(seconds: timeout, operationName: "setSequentialDownload") {
+            try await engine.setSequentialDownload(sessionId: sessionID, enabled: true)
+        }
+
         let priorityOrder = files.sorted { lhs, rhs in
             if lhs.id == selectedFileID { return true }
             if rhs.id == selectedFileID { return false }

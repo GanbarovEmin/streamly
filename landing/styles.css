@@ -29,15 +29,13 @@ html {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at 82% 8%, rgba(123, 61, 255, 0.3), transparent 34rem),
-    radial-gradient(circle at 8% 38%, rgba(37, 99, 255, 0.16), transparent 28rem),
-    linear-gradient(180deg, var(--obsidian), #080910 46%, #0d1020 100%);
+  background: linear-gradient(180deg, var(--obsidian), #080910 46%, #0d1020 100%);
   color: var(--text);
   font-family: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   line-height: 1.5;
   letter-spacing: 0;
   min-width: 320px;
+  overflow-x: hidden;
 }
 
 body::before {
@@ -133,8 +131,8 @@ img {
 }
 
 .hero {
-  min-height: calc(100svh - 92px);
-  padding: 88px 0 74px;
+  min-height: min(760px, calc(100svh - 92px));
+  padding: 68px 0 42px;
   display: grid;
   grid-template-columns: minmax(0, 0.92fr) minmax(420px, 1.08fr);
   align-items: center;
@@ -256,13 +254,7 @@ h1 {
 }
 
 .hero-media::before {
-  content: "";
-  position: absolute;
-  inset: 8% -8% 2% 12%;
-  border-radius: 40px;
-  background: var(--gradient);
-  filter: blur(58px);
-  opacity: 0.34;
+  content: none;
 }
 
 .mockup-frame,
@@ -277,7 +269,7 @@ h1 {
 
 .mockup-frame {
   border-radius: 34px;
-  transform: perspective(1100px) rotateY(-7deg) rotateX(2deg);
+  transform: perspective(1100px) rotateY(-4deg) rotateX(1deg);
 }
 
 .mockup-frame img {

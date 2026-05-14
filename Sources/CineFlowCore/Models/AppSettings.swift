@@ -8,9 +8,561 @@ public enum AppLanguageSetting: String, Codable, CaseIterable, Identifiable, Equ
     public var id: String { rawValue }
 }
 
+public enum HomeLayoutDensity: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case compact
+    case comfortable
+
+    public var id: String { rawValue }
+}
+
+public enum HomePosterSizePreference: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case small
+    case medium
+    case large
+
+    public var id: String { rawValue }
+}
+
+public struct HomeSectionPreference: Codable, Equatable, Identifiable, Sendable {
+    public let sectionID: String
+    public var isEnabled: Bool
+    public var order: Int
+
+    public var id: String { sectionID }
+
+    public init(sectionID: String, isEnabled: Bool = true, order: Int) {
+        self.sectionID = sectionID
+        self.isEnabled = isEnabled
+        self.order = max(0, order)
+    }
+}
+
+public struct HomePreferences: Codable, Equatable, Sendable {
+    public static let defaultSectionIDs: [String] = [
+        "continueWatching",
+        "watchNext",
+        "newEpisodes",
+        "recommendedTonight",
+        "recommended",
+        "moreLikeThis",
+        "fromFavoriteGenres",
+        "continueSeries",
+        "hiddenGems",
+        "popularInFavoriteGenres",
+        "notFinishedYet",
+        "recentlyAdded",
+        "trendingMovies",
+        "trendingSeries",
+        "topQuality",
+        "ultraHDR",
+        "favoriteGenres",
+        "unfinishedMovies",
+        "forgottenInLibrary",
+        "collections",
+        "moodDiscovery",
+        "upcomingCalendar"
+    ]
+
+    public var sections: [HomeSectionPreference]
+    public var layoutDensity: HomeLayoutDensity
+    public var posterSize: HomePosterSizePreference
+    public var schemaVersion: Int
+    public var syncRevision: Int
+    public var updatedAt: Date
+
+    public init(
+        sections: [HomeSectionPreference] = Self.defaultSections(),
+        layoutDensity: HomeLayoutDensity = .comfortable,
+        posterSize: HomePosterSizePreference = .medium,
+        schemaVersion: Int = 1,
+        syncRevision: Int = 0,
+        updatedAt: Date = Date(timeIntervalSince1970: 0)
+    ) {
+        self.sections = Self.normalizedSections(sections)
+        self.layoutDensity = layoutDensity
+        self.posterSize = posterSize
+        self.schemaVersion = schemaVersion
+        self.syncRevision = max(0, syncRevision)
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sections
+        case layoutDensity
+        case posterSize
+        case schemaVersion
+        case syncRevision
+        case updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            sections: try container.decodeIfPresent([HomeSectionPreference].self, forKey: .sections) ?? Self.defaultSections(),
+            layoutDensity: try container.decodeIfPresent(HomeLayoutDensity.self, forKey: .layoutDensity) ?? .comfortable,
+            posterSize: try container.decodeIfPresent(HomePosterSizePreference.self, forKey: .posterSize) ?? .medium,
+            schemaVersion: try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1,
+            syncRevision: try container.decodeIfPresent(Int.self, forKey: .syncRevision) ?? 0,
+            updatedAt: try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    public var orderedSections: [HomeSectionPreference] {
+        sections.sorted { lhs, rhs in
+            if lhs.order == rhs.order {
+                return lhs.sectionID < rhs.sectionID
+            }
+            return lhs.order < rhs.order
+        }
+    }
+
+    public func isSectionEnabled(_ sectionID: String) -> Bool {
+        sections.first { $0.sectionID == sectionID }?.isEnabled ?? true
+    }
+
+    public func order(for sectionID: String) -> Int {
+        sections.first { $0.sectionID == sectionID }?.order ?? Int.max
+    }
+
+    public mutating func setSection(
+        _ sectionID: String,
+        isEnabled: Bool,
+        updatedAt: Date = Date()
+    ) {
+        ensureSectionExists(sectionID)
+        guard let index = sections.firstIndex(where: { $0.sectionID == sectionID }) else { return }
+        guard sections[index].isEnabled != isEnabled else { return }
+        sections[index].isEnabled = isEnabled
+        touch(updatedAt: updatedAt)
+    }
+
+    public mutating func moveSection(
+        _ sectionID: String,
+        to destinationIndex: Int,
+        updatedAt: Date = Date()
+    ) {
+        ensureSectionExists(sectionID)
+        var ordered = orderedSections
+        guard let currentIndex = ordered.firstIndex(where: { $0.sectionID == sectionID }) else { return }
+        let boundedDestination = min(max(destinationIndex, 0), max(ordered.count - 1, 0))
+        guard currentIndex != boundedDestination else { return }
+        let moved = ordered.remove(at: currentIndex)
+        ordered.insert(moved, at: boundedDestination)
+        sections = ordered.enumerated().map { index, preference in
+            HomeSectionPreference(sectionID: preference.sectionID, isEnabled: preference.isEnabled, order: index)
+        }
+        touch(updatedAt: updatedAt)
+    }
+
+    public mutating func touch(updatedAt: Date = Date()) {
+        syncRevision += 1
+        self.updatedAt = updatedAt
+    }
+
+    private mutating func ensureSectionExists(_ sectionID: String) {
+        guard !sectionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if sections.contains(where: { $0.sectionID == sectionID }) {
+            return
+        }
+        sections.append(HomeSectionPreference(sectionID: sectionID, order: sections.count))
+    }
+
+    public static func defaultSections() -> [HomeSectionPreference] {
+        defaultSectionIDs.enumerated().map { index, sectionID in
+            HomeSectionPreference(sectionID: sectionID, isEnabled: true, order: index)
+        }
+    }
+
+    private static func normalizedSections(_ sections: [HomeSectionPreference]) -> [HomeSectionPreference] {
+        var firstByID: [String: HomeSectionPreference] = [:]
+        for section in sections where !section.sectionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if firstByID[section.sectionID] == nil {
+                firstByID[section.sectionID] = section
+            }
+        }
+
+        var normalized = defaultSectionIDs.enumerated().map { index, sectionID in
+            firstByID.removeValue(forKey: sectionID) ?? HomeSectionPreference(sectionID: sectionID, isEnabled: true, order: index)
+        }
+        let unknownSections = firstByID.values.sorted { lhs, rhs in
+            if lhs.order == rhs.order {
+                return lhs.sectionID < rhs.sectionID
+            }
+            return lhs.order < rhs.order
+        }
+        normalized.append(contentsOf: unknownSections)
+        normalized.sort { lhs, rhs in
+            if lhs.order == rhs.order {
+                let lhsDefaultIndex = defaultSectionIDs.firstIndex(of: lhs.sectionID) ?? Int.max
+                let rhsDefaultIndex = defaultSectionIDs.firstIndex(of: rhs.sectionID) ?? Int.max
+                if lhsDefaultIndex == rhsDefaultIndex {
+                    return lhs.sectionID < rhs.sectionID
+                }
+                return lhsDefaultIndex < rhsDefaultIndex
+            }
+            return lhs.order < rhs.order
+        }
+        return normalized.enumerated().map { index, preference in
+            HomeSectionPreference(sectionID: preference.sectionID, isEnabled: preference.isEnabled, order: index)
+        }
+    }
+}
+
+public struct RecommendationSettings: Codable, Equatable, Sendable {
+    public var localRecommendationsEnabled: Bool
+
+    public init(localRecommendationsEnabled: Bool = true) {
+        self.localRecommendationsEnabled = localRecommendationsEnabled
+    }
+}
+
+public enum NotificationCategory: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case betterRelease
+    case newEpisode
+    case sync
+    case update
+    case sourceAuth
+    case cache
+    case announcement
+
+    public var id: String { rawValue }
+}
+
+public struct NotificationCategoryPreference: Codable, Equatable, Identifiable, Sendable {
+    public let category: NotificationCategory
+    public var isEnabled: Bool
+
+    public var id: NotificationCategory { category }
+
+    public init(category: NotificationCategory, isEnabled: Bool = true) {
+        self.category = category
+        self.isEnabled = isEnabled
+    }
+}
+
+public struct NotificationSettings: Codable, Equatable, Sendable {
+    public var betterReleaseNotificationsEnabled: Bool
+    public var betterReleaseDigestMode: Bool
+    public var macOSBetterReleaseNotificationsEnabled: Bool
+    public var categoryPreferences: [NotificationCategoryPreference]
+
+    public init(
+        betterReleaseNotificationsEnabled: Bool = true,
+        betterReleaseDigestMode: Bool = true,
+        macOSBetterReleaseNotificationsEnabled: Bool = false,
+        categoryPreferences: [NotificationCategoryPreference] = NotificationSettings.defaultCategoryPreferences()
+    ) {
+        self.betterReleaseNotificationsEnabled = betterReleaseNotificationsEnabled
+        self.betterReleaseDigestMode = betterReleaseDigestMode
+        self.macOSBetterReleaseNotificationsEnabled = macOSBetterReleaseNotificationsEnabled
+        self.categoryPreferences = Self.normalizedCategoryPreferences(categoryPreferences)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case betterReleaseNotificationsEnabled
+        case betterReleaseDigestMode
+        case macOSBetterReleaseNotificationsEnabled
+        case categoryPreferences
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            betterReleaseNotificationsEnabled: try container.decodeIfPresent(Bool.self, forKey: .betterReleaseNotificationsEnabled) ?? true,
+            betterReleaseDigestMode: try container.decodeIfPresent(Bool.self, forKey: .betterReleaseDigestMode) ?? true,
+            macOSBetterReleaseNotificationsEnabled: try container.decodeIfPresent(Bool.self, forKey: .macOSBetterReleaseNotificationsEnabled) ?? false,
+            categoryPreferences: try container.decodeIfPresent([NotificationCategoryPreference].self, forKey: .categoryPreferences) ?? Self.defaultCategoryPreferences()
+        )
+    }
+
+    public func isCategoryEnabled(_ category: NotificationCategory) -> Bool {
+        categoryPreferences.first { $0.category == category }?.isEnabled ?? true
+    }
+
+    public mutating func setCategory(_ category: NotificationCategory, isEnabled: Bool) {
+        if let index = categoryPreferences.firstIndex(where: { $0.category == category }) {
+            categoryPreferences[index].isEnabled = isEnabled
+        } else {
+            categoryPreferences.append(NotificationCategoryPreference(category: category, isEnabled: isEnabled))
+            categoryPreferences = Self.normalizedCategoryPreferences(categoryPreferences)
+        }
+        if category == .betterRelease {
+            betterReleaseNotificationsEnabled = isEnabled
+        }
+    }
+
+    public static func defaultCategoryPreferences() -> [NotificationCategoryPreference] {
+        NotificationCategory.allCases.map { NotificationCategoryPreference(category: $0, isEnabled: true) }
+    }
+
+    private static func normalizedCategoryPreferences(_ preferences: [NotificationCategoryPreference]) -> [NotificationCategoryPreference] {
+        var valuesByCategory: [NotificationCategory: NotificationCategoryPreference] = [:]
+        for preference in preferences {
+            valuesByCategory[preference.category] = preference
+        }
+        return NotificationCategory.allCases.map { category in
+            valuesByCategory[category] ?? NotificationCategoryPreference(category: category)
+        }
+    }
+}
+
+public enum TastePreferenceLevel: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case more
+    case less
+    case hidden
+
+    public var id: String { rawValue }
+}
+
+public struct TasteGenrePreference: Codable, Equatable, Identifiable, Sendable {
+    public var genre: String
+    public var preference: TastePreferenceLevel
+
+    public var id: String { normalizedGenre }
+
+    public init(genre: String, preference: TastePreferenceLevel) {
+        self.genre = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.preference = preference
+    }
+
+    public var normalizedGenre: String {
+        genre.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
+public enum TasteDurationPreference: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case any
+    case short
+    case featureLength
+    case long
+
+    public var id: String { rawValue }
+}
+
+public enum HiddenRecommendationReason: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case hiddenTitle
+    case notInterested
+    case removedFromRecommendations
+
+    public var id: String { rawValue }
+
+    public var displayTitle: String {
+        switch self {
+        case .hiddenTitle:
+            "Hidden title"
+        case .notInterested:
+            "Not interested"
+        case .removedFromRecommendations:
+            "Removed from recommendations"
+        }
+    }
+}
+
+public struct HiddenRecommendationItem: Codable, Equatable, Identifiable, Sendable {
+    public var mediaID: String
+    public var title: String
+    public var genres: [String]
+    public var reason: HiddenRecommendationReason
+    public var createdAt: Date
+
+    public var id: String { mediaID }
+
+    public init(
+        mediaID: String,
+        title: String,
+        genres: [String] = [],
+        reason: HiddenRecommendationReason,
+        createdAt: Date = Date()
+    ) {
+        self.mediaID = mediaID.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.genres = Self.normalizedGenres(genres)
+        self.reason = reason
+        self.createdAt = createdAt
+    }
+
+    private static func normalizedGenres(_ genres: [String]) -> [String] {
+        var seen = Set<String>()
+        return genres
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    }
+}
+
+public struct TasteProfileSettings: Codable, Equatable, Sendable {
+    public var genrePreferences: [TasteGenrePreference]
+    public var hiddenItems: [HiddenRecommendationItem]
+    public var preferredActorIDs: [String]
+    public var preferredDirectorIDs: [String]
+    public var preferredMediaKinds: Set<MediaKind>
+    public var preferredDuration: TasteDurationPreference
+    public var preferredLanguages: [String]
+    public var schemaVersion: Int
+    public var syncRevision: Int
+    public var updatedAt: Date
+
+    public init(
+        genrePreferences: [TasteGenrePreference] = [],
+        hiddenItems: [HiddenRecommendationItem] = [],
+        preferredActorIDs: [String] = [],
+        preferredDirectorIDs: [String] = [],
+        preferredMediaKinds: Set<MediaKind> = [],
+        preferredDuration: TasteDurationPreference = .any,
+        preferredLanguages: [String] = [],
+        schemaVersion: Int = 1,
+        syncRevision: Int = 0,
+        updatedAt: Date = Date(timeIntervalSince1970: 0)
+    ) {
+        self.genrePreferences = Self.normalizedGenrePreferences(genrePreferences)
+        self.hiddenItems = Self.normalizedHiddenItems(hiddenItems)
+        self.preferredActorIDs = Self.normalizedUnique(preferredActorIDs)
+        self.preferredDirectorIDs = Self.normalizedUnique(preferredDirectorIDs)
+        self.preferredMediaKinds = preferredMediaKinds
+        self.preferredDuration = preferredDuration
+        self.preferredLanguages = Self.normalizedUnique(preferredLanguages)
+        self.schemaVersion = schemaVersion
+        self.syncRevision = max(0, syncRevision)
+        self.updatedAt = updatedAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case genrePreferences
+        case hiddenItems
+        case preferredActorIDs
+        case preferredDirectorIDs
+        case preferredMediaKinds
+        case preferredDuration
+        case preferredLanguages
+        case schemaVersion
+        case syncRevision
+        case updatedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            genrePreferences: try container.decodeIfPresent([TasteGenrePreference].self, forKey: .genrePreferences) ?? [],
+            hiddenItems: try container.decodeIfPresent([HiddenRecommendationItem].self, forKey: .hiddenItems) ?? [],
+            preferredActorIDs: try container.decodeIfPresent([String].self, forKey: .preferredActorIDs) ?? [],
+            preferredDirectorIDs: try container.decodeIfPresent([String].self, forKey: .preferredDirectorIDs) ?? [],
+            preferredMediaKinds: try container.decodeIfPresent(Set<MediaKind>.self, forKey: .preferredMediaKinds) ?? [],
+            preferredDuration: try container.decodeIfPresent(TasteDurationPreference.self, forKey: .preferredDuration) ?? .any,
+            preferredLanguages: try container.decodeIfPresent([String].self, forKey: .preferredLanguages) ?? [],
+            schemaVersion: try container.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1,
+            syncRevision: try container.decodeIfPresent(Int.self, forKey: .syncRevision) ?? 0,
+            updatedAt: try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date(timeIntervalSince1970: 0)
+        )
+    }
+
+    public func preference(forGenre genre: String) -> TastePreferenceLevel? {
+        let normalized = Self.normalizedKey(genre)
+        return genrePreferences.first { $0.normalizedGenre == normalized }?.preference
+    }
+
+    public mutating func setGenre(
+        _ genre: String,
+        preference: TastePreferenceLevel?,
+        updatedAt: Date = Date()
+    ) {
+        let trimmed = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let normalized = Self.normalizedKey(trimmed)
+        genrePreferences.removeAll { $0.normalizedGenre == normalized }
+        if let preference {
+            genrePreferences.append(TasteGenrePreference(genre: trimmed, preference: preference))
+        }
+        genrePreferences = Self.normalizedGenrePreferences(genrePreferences)
+        touch(updatedAt: updatedAt)
+    }
+
+    public func hiddenItem(for mediaID: String) -> HiddenRecommendationItem? {
+        let normalized = Self.normalizedKey(mediaID)
+        return hiddenItems.first { Self.normalizedKey($0.mediaID) == normalized }
+    }
+
+    public func isHidden(mediaID: String) -> Bool {
+        hiddenItem(for: mediaID) != nil
+    }
+
+    public var hiddenMediaIDs: Set<String> {
+        Set(hiddenItems.map(\.mediaID))
+    }
+
+    public mutating func hideTitle(
+        mediaID: String,
+        title: String,
+        genres: [String] = [],
+        reason: HiddenRecommendationReason,
+        updatedAt: Date = Date()
+    ) {
+        let trimmedID = mediaID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return }
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        hiddenItems.removeAll { Self.normalizedKey($0.mediaID) == Self.normalizedKey(trimmedID) }
+        hiddenItems.append(HiddenRecommendationItem(
+            mediaID: trimmedID,
+            title: title.isEmpty ? trimmedID : title,
+            genres: genres,
+            reason: reason,
+            createdAt: updatedAt
+        ))
+        hiddenItems = Self.normalizedHiddenItems(hiddenItems)
+        touch(updatedAt: updatedAt)
+    }
+
+    public mutating func restoreHiddenTitle(mediaID: String, updatedAt: Date = Date()) {
+        let normalized = Self.normalizedKey(mediaID)
+        let previousCount = hiddenItems.count
+        hiddenItems.removeAll { Self.normalizedKey($0.mediaID) == normalized }
+        guard hiddenItems.count != previousCount else { return }
+        touch(updatedAt: updatedAt)
+    }
+
+    public mutating func touch(updatedAt: Date = Date()) {
+        syncRevision += 1
+        self.updatedAt = updatedAt
+    }
+
+    private static func normalizedGenrePreferences(_ preferences: [TasteGenrePreference]) -> [TasteGenrePreference] {
+        var byGenre: [String: TasteGenrePreference] = [:]
+        for preference in preferences where !preference.normalizedGenre.isEmpty {
+            byGenre[preference.normalizedGenre] = preference
+        }
+        return byGenre.values.sorted { $0.genre.localizedCaseInsensitiveCompare($1.genre) == .orderedAscending }
+    }
+
+    private static func normalizedHiddenItems(_ items: [HiddenRecommendationItem]) -> [HiddenRecommendationItem] {
+        var byID: [String: HiddenRecommendationItem] = [:]
+        for item in items where !item.mediaID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            byID[normalizedKey(item.mediaID)] = item
+        }
+        return byID.values.sorted {
+            if $0.createdAt == $1.createdAt {
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+            return $0.createdAt > $1.createdAt
+        }
+    }
+
+    private static func normalizedUnique(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    private static func normalizedKey(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 public struct AppSettings: Codable, Equatable, Sendable {
     public var general: GeneralSettings
     public var appearance: AppearanceSettings
+    public var home: HomePreferences
+    public var recommendations: RecommendationSettings
+    public var notifications: NotificationSettings
+    public var tasteProfile: TasteProfileSettings
     public var playback: PlaybackSettings
     public var updates: UpdateSettings
     public var privacy: PrivacySettings
@@ -19,6 +571,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public init(
         general: GeneralSettings = GeneralSettings(),
         appearance: AppearanceSettings = AppearanceSettings(),
+        home: HomePreferences = HomePreferences(),
+        recommendations: RecommendationSettings = RecommendationSettings(),
+        notifications: NotificationSettings = NotificationSettings(),
+        tasteProfile: TasteProfileSettings = TasteProfileSettings(),
         playback: PlaybackSettings = PlaybackSettings(),
         updates: UpdateSettings = UpdateSettings(),
         privacy: PrivacySettings = PrivacySettings(),
@@ -26,6 +582,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     ) {
         self.general = general
         self.appearance = appearance
+        self.home = home
+        self.recommendations = recommendations
+        self.notifications = notifications
+        self.tasteProfile = tasteProfile
         self.playback = playback
         self.updates = updates
         self.privacy = privacy
@@ -35,6 +595,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case general
         case appearance
+        case home
+        case recommendations
+        case notifications
+        case tasteProfile
         case playback
         case updates
         case privacy
@@ -45,6 +609,10 @@ public struct AppSettings: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         general = try container.decodeIfPresent(GeneralSettings.self, forKey: .general) ?? GeneralSettings()
         appearance = try container.decodeIfPresent(AppearanceSettings.self, forKey: .appearance) ?? AppearanceSettings()
+        home = try container.decodeIfPresent(HomePreferences.self, forKey: .home) ?? HomePreferences()
+        recommendations = try container.decodeIfPresent(RecommendationSettings.self, forKey: .recommendations) ?? RecommendationSettings()
+        notifications = try container.decodeIfPresent(NotificationSettings.self, forKey: .notifications) ?? NotificationSettings()
+        tasteProfile = try container.decodeIfPresent(TasteProfileSettings.self, forKey: .tasteProfile) ?? TasteProfileSettings()
         playback = try container.decodeIfPresent(PlaybackSettings.self, forKey: .playback) ?? PlaybackSettings()
         updates = try container.decodeIfPresent(UpdateSettings.self, forKey: .updates) ?? UpdateSettings()
         privacy = try container.decodeIfPresent(PrivacySettings.self, forKey: .privacy) ?? PrivacySettings()
@@ -379,7 +947,7 @@ public struct PlaybackSettings: Codable, Equatable, Sendable {
             hdrPreference: hdrPreference,
             codecPreference: codecPreference,
             maxFileSizeBytes: maxFileSizeBytes,
-            preferHighSeedersOverHighestQuality: preferHighSeedersOverHighestQuality
+            preferHighSeedersOverHighestQuality: preferHighSeedersOverHighestQuality || preferredQuality == .auto
         )
     }
 

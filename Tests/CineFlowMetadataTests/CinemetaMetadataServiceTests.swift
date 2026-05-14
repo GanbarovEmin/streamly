@@ -104,6 +104,52 @@ final class CinemetaMetadataServiceTests: XCTestCase {
         XCTAssertEqual(results.map(\.id), ["tmdb:movie:603"])
     }
 
+    func testCinemetaMatchCandidatesScoreExactAlternativeYearAndType() async throws {
+        let service = makeService { request in
+            switch request.url?.path {
+            case "/catalog/movie/top/search=Matrix.json":
+                return (200, Self.multipleMovieMatchesFixture)
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (404, "{}")
+            }
+        }
+
+        let candidates = try await service.matchCandidates(
+            query: "Matrix",
+            kind: .movie,
+            year: 1999
+        )
+
+        XCTAssertEqual(candidates.map(\.item.id), ["imdb:movie:tt0133093", "imdb:movie:tt9990001"])
+        XCTAssertGreaterThan(candidates[0].confidence, candidates[1].confidence)
+        XCTAssertTrue(candidates[0].reasons.contains(.exactTitle))
+        XCTAssertTrue(candidates[0].reasons.contains(.yearMatch))
+        XCTAssertTrue(candidates[0].reasons.contains(.mediaTypeMatch))
+        XCTAssertTrue(candidates[1].reasons.contains(.yearMismatch(expected: 1999, actual: 2003)))
+    }
+
+    func testArtworkSelectorPrefersLanguageAndFallsBackGracefully() {
+        let selected = MetadataArtworkSelector.select(
+            posters: [
+                MetadataArtworkCandidate(url: URL(string: "https://images.example.com/en.jpg")!, languageCode: "en", score: 0.9),
+                MetadataArtworkCandidate(url: URL(string: "https://images.example.com/ru.jpg")!, languageCode: "ru", score: 0.7)
+            ],
+            backdrops: [],
+            preferredLanguageCodes: ["ru", "en"]
+        )
+
+        XCTAssertEqual(selected.posterURL?.absoluteString, "https://images.example.com/ru.jpg")
+        XCTAssertEqual(selected.backdropURL?.absoluteString, "https://images.example.com/ru.jpg")
+        XCTAssertTrue(selected.usesBackdropFallback)
+        XCTAssertFalse(selected.usesNoImagePlaceholder)
+
+        let empty = MetadataArtworkSelector.select(posters: [], backdrops: [], preferredLanguageCodes: ["ru"])
+        XCTAssertNil(empty.posterURL)
+        XCTAssertNil(empty.backdropURL)
+        XCTAssertTrue(empty.usesNoImagePlaceholder)
+    }
+
     private func makeService(
         database: DatabaseManager? = nil,
         handler: @escaping @Sendable (URLRequest) throws -> (Int, String)
@@ -213,6 +259,47 @@ final class CinemetaMetadataServiceTests: XCTestCase {
           }
         ]
       }
+    }
+    """
+
+    private static let multipleMovieMatchesFixture = """
+    {
+      "metas": [
+        {
+          "id": "tt9990001",
+          "imdb_id": "tt9990001",
+          "type": "movie",
+          "name": "Matrix Reloaded",
+          "description": "Wrong year fixture.",
+          "genre": ["Action"],
+          "moviedb_id": 604,
+          "poster": "https://images.metahub.space/poster/small/tt9990001/img",
+          "releaseInfo": "2003",
+          "aliases": ["The Matrix 2"]
+        },
+        {
+          "id": "tt0133093",
+          "imdb_id": "tt0133093",
+          "type": "movie",
+          "name": "The Matrix",
+          "description": "A hacker discovers the truth.",
+          "genre": ["Action", "Sci-Fi"],
+          "moviedb_id": 603,
+          "poster": "https://images.metahub.space/poster/small/tt0133093/img",
+          "background": "https://images.metahub.space/background/medium/tt0133093/img",
+          "releaseInfo": "1999",
+          "aliases": ["Matrix"]
+        },
+        {
+          "id": "tt0106062",
+          "imdb_id": "tt0106062",
+          "type": "series",
+          "name": "Matrix",
+          "description": "Series fixture.",
+          "genre": ["Drama"],
+          "releaseInfo": "1993-"
+        }
+      ]
     }
     """
 }

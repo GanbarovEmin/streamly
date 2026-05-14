@@ -7,6 +7,7 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
     private var storedWatchedItems: [WatchedMediaItem]
     private var storedRatedItems: [RatedMediaItem]
     private var storedLists: [UserList]
+    private var storedWatchlistItems: [String: WatchlistItem]
 
     public init(storedItems: [MediaItem] = [
         MediaItem(
@@ -23,6 +24,7 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
         storedWatchedItems = []
         storedRatedItems = []
         storedLists = []
+        storedWatchlistItems = [:]
     }
 
     public func items() async throws -> [MediaItem] {
@@ -38,13 +40,16 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
         storedFavorites.removeAll { $0.id == mediaID }
         storedWatchedItems.removeAll { $0.item.id == mediaID }
         storedRatedItems.removeAll { $0.item.id == mediaID }
+        storedWatchlistItems = storedWatchlistItems.filter { $0.value.mediaID != mediaID }
         storedLists = storedLists.map { list in
             UserList(
                 id: list.id,
                 name: list.name,
+                description: list.description,
                 itemIDs: list.itemIDs.filter { $0 != mediaID },
                 createdAt: list.createdAt,
-                updatedAt: Date()
+                updatedAt: Date(),
+                isDefault: list.isDefault
             )
         }
     }
@@ -72,6 +77,10 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
         upsert(item)
         storedWatchedItems.removeAll { $0.item.id == item.id }
         storedWatchedItems.insert(WatchedMediaItem(item: item, positionSeconds: positionSeconds), at: 0)
+    }
+
+    public func removeFromHistory(mediaID: String) async throws {
+        storedWatchedItems.removeAll { $0.item.id == mediaID }
     }
 
     public func ratedItems() async throws -> [RatedMediaItem] {
@@ -145,9 +154,20 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
                 isDefault: list.isDefault
             )
         }
+        let key = watchlistKey(listID: listID, mediaID: item.id)
+        if storedWatchlistItems[key] == nil {
+            let snapshot = item.bestWatchlistReleaseSnapshot
+            storedWatchlistItems[key] = WatchlistItem(
+                listID: listID,
+                mediaID: item.id,
+                initialQuality: snapshot.quality,
+                initialHDR: snapshot.hdr
+            )
+        }
     }
 
     public func remove(_ mediaID: String, from listID: String) async throws {
+        storedWatchlistItems.removeValue(forKey: watchlistKey(listID: listID, mediaID: mediaID))
         storedLists = storedLists.map { list in
             guard list.id == listID else { return list }
             return UserList(
@@ -167,8 +187,42 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
         return storedItems.filter { list.itemIDs.contains($0.id) }
     }
 
+    public func watchlistItems(in listID: String) async throws -> [WatchlistItem] {
+        guard let list = storedLists.first(where: { $0.id == listID }) else { return [] }
+        return list.itemIDs.compactMap { mediaID in
+            storedWatchlistItems[watchlistKey(listID: listID, mediaID: mediaID)]
+        }
+    }
+
+    public func updateWatchlistItem(listID: String, mediaID: String, priority: WatchlistPriority, remindLaterAt: Date?) async throws {
+        let key = watchlistKey(listID: listID, mediaID: mediaID)
+        let existing = storedWatchlistItems[key] ?? WatchlistItem(listID: listID, mediaID: mediaID)
+        storedWatchlistItems[key] = WatchlistItem(
+            listID: listID,
+            mediaID: mediaID,
+            priority: priority,
+            remindLaterAt: remindLaterAt,
+            addedAt: existing.addedAt,
+            initialQuality: existing.initialQuality,
+            initialHDR: existing.initialHDR
+        )
+    }
+
     private func upsert(_ item: MediaItem) {
         storedItems.removeAll { $0.id == item.id }
         storedItems.insert(item, at: 0)
+    }
+
+    private func watchlistKey(listID: String, mediaID: String) -> String {
+        "\(listID):\(mediaID)"
+    }
+}
+
+private extension MediaItem {
+    var bestWatchlistReleaseSnapshot: (quality: ReleaseQuality, hdr: HDRFormat) {
+        guard let release = rankedReleases.first else {
+            return (.unknown, .unknown)
+        }
+        return (release.quality, release.hdr)
     }
 }

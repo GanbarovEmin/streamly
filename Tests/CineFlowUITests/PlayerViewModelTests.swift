@@ -196,6 +196,42 @@ final class PlayerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalSubtitleSelectionPublishesActiveCueForCustomPlayerOverlay() async throws {
+        let subtitleURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("streamly-subtitle-\(UUID().uuidString).srt")
+        try """
+        1
+        00:00:01,000 --> 00:00:03,500
+        First line
+        Second line
+
+        2
+        00:00:05,000 --> 00:00:06,000
+        Later cue
+        """.write(to: subtitleURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: subtitleURL) }
+
+        let viewModel = PlayerViewModel(
+            service: ConfigurableSubtitlePlaybackService(audioTracks: [], subtitleTracks: [], duration: 120),
+            mediaSource: PlaybackMediaSource(
+                id: "tmdb:movie:subtitle-overlay",
+                title: "Subtitle Overlay",
+                url: URL(fileURLWithPath: "/tmp/subtitle-overlay.mkv")
+            )
+        )
+
+        await viewModel.start()
+        await viewModel.loadLocalSubtitle(url: subtitleURL)
+        await viewModel.seek(to: 2)
+
+        XCTAssertEqual(viewModel.activeSubtitleText, "First line\nSecond line")
+
+        await viewModel.seek(to: 4)
+
+        XCTAssertNil(viewModel.activeSubtitleText)
+    }
+
+    @MainActor
     func testSmartAudioSelectsPreferredLanguageAndBestAvailableQuality() async throws {
         let settingsRepository = CoreMockSettingsRepository(
             settings: AppSettings(
@@ -717,6 +753,32 @@ final class PlayerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testResumePromptDismissesImmediatelyEvenWhenSeekFails() async throws {
+        let service = SeekFailingPlaybackService()
+        let source = PlaybackMediaSource(
+            id: "tmdb:movie:603",
+            title: "The Matrix",
+            url: URL(fileURLWithPath: "/tmp/matrix.mkv")
+        )
+        let repository = InMemoryPlayerProgressRepository(records: [
+            PlaybackProgress(mediaID: source.id, positionSeconds: 42, durationSeconds: 120)
+        ])
+        let viewModel = PlayerViewModel(
+            service: service,
+            mediaSource: source,
+            progressRepository: repository
+        )
+
+        await viewModel.start()
+        XCTAssertTrue(viewModel.shouldOfferResume)
+
+        await viewModel.continueFromResume()
+
+        XCTAssertFalse(viewModel.shouldOfferResume)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
+    @MainActor
     func testPlayerViewModelCanStartOverFromResumePrompt() async throws {
         let service = MockPlaybackService()
         let source = PlaybackMediaSource(
@@ -1157,6 +1219,67 @@ private actor InMemoryPlayerProgressRepository: PlaybackProgressRepositoryProtoc
 
     func clearProgress(mediaID: String, episodeID: String?) async throws {
         records.removeAll { $0.mediaID == mediaID && $0.episodeID == episodeID }
+    }
+}
+
+private actor SeekFailingPlaybackService: PlaybackServiceProtocol {
+    private var legacyState: PlaybackState = .idle
+    private var status = PlaybackStatus()
+
+    var currentState: PlaybackState {
+        get async { legacyState }
+    }
+
+    var currentStatus: PlaybackStatus {
+        get async { status }
+    }
+
+    func play(_ source: PlaybackMediaSource) async throws {
+        status = PlaybackStatus(media: source, state: .playing, currentTime: 0, duration: 120)
+        legacyState = source.release.map { .playing($0) } ?? .preparing
+    }
+
+    func play(_ release: TorrentRelease) async throws {
+        try await play(PlaybackMediaSource(release: release))
+    }
+
+    func pause() async throws {
+        status = PlaybackStatus(media: status.media, state: .paused, currentTime: status.currentTime, duration: status.duration)
+    }
+
+    func resume() async throws {
+        status = PlaybackStatus(media: status.media, state: .playing, currentTime: status.currentTime, duration: status.duration)
+    }
+
+    func stop() async throws {
+        status = PlaybackStatus()
+        legacyState = .idle
+    }
+
+    func seek(to time: Double) async throws {
+        throw PlaybackServiceError.unsupported(operation: "seek")
+    }
+
+    func setVolume(_ volume: Double) async throws {}
+    func setMuted(_ isMuted: Bool) async throws {}
+    func setPlaybackSpeed(_ speed: Double) async throws {}
+    func setAudioBoost(_ boost: Double) async throws {}
+    func selectAudioTrack(id: String?) async throws {}
+    func selectSubtitleTrack(id: String?) async throws {}
+    func setSubtitleDelay(_ seconds: Double) async throws {}
+    func setSubtitleFontSize(_ fontSize: Double) async throws {}
+    func setSubtitleStyle(_ style: SubtitleVisualStyle) async throws {}
+    func setFullscreen(_ isFullscreen: Bool) async throws {}
+    func setPictureInPicture(_ isActive: Bool) async throws {}
+
+    nonisolated func statusUpdates() -> AsyncThrowingStream<PlaybackStatus, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                let status = await self.currentStatus
+                continuation.yield(status)
+                continuation.finish()
+            }
+        }
     }
 }
 

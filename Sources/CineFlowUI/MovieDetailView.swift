@@ -9,6 +9,7 @@ public struct MovieDetailView: View {
     @StateObject private var viewModel: MovieDetailViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
+    @Environment(\.cfReduceMotion) private var reduceMotion
 
     public init(
         mediaID: String,
@@ -17,6 +18,7 @@ public struct MovieDetailView: View {
         detailProvider: (any MovieDetailProviderProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
         settingsRepository: (any SettingsRepositoryProtocol)? = nil,
+        recommendationService: (any RecommendationServiceProtocol)? = nil,
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil
     ) {
         _viewModel = StateObject(wrappedValue: MovieDetailViewModel(
@@ -24,6 +26,7 @@ public struct MovieDetailView: View {
             provider: detailProvider ?? MockMovieDetailProvider(),
             libraryRepository: libraryRepository,
             settingsRepository: settingsRepository,
+            recommendationService: recommendationService,
             userMediaSourceRepository: userMediaSourceRepository,
             diagnosticsService: diagnosticsService
         ))
@@ -67,9 +70,25 @@ public struct MovieDetailView: View {
             }
         case .loaded:
             if let movie = viewModel.movie {
-                cinematicMovie(movie)
+                movieDetailLayout(movie)
             }
         }
+    }
+
+    private func movieDetailLayout(_ movie: MovieDetail) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: CFSpacing.xl) {
+                cinematicMovie(movie)
+
+                VStack(alignment: .leading, spacing: CFSpacing.lg) {
+                    tabs
+                    tabContent
+                }
+                .padding(.horizontal, CFSpacing.xxl)
+                .padding(.bottom, CFSpacing.xxl)
+            }
+        }
+        .scrollIndicators(.visible)
     }
 
     private func cinematicMovie(_ movie: MovieDetail) -> some View {
@@ -79,10 +98,13 @@ public struct MovieDetailView: View {
                 MovieBackdrop(accentIndex: movie.backdropAccentIndex, title: movie.title, backdropURL: movie.backdropURL)
                     .ignoresSafeArea()
 
+                CinematicAmbientGlow(reduceMotion: reduceMotion)
+                    .ignoresSafeArea()
+
                 LinearGradient(
                     colors: [
-                        CFColors.backgroundPrimary.opacity(0.86),
-                        CFColors.backgroundPrimary.opacity(0.50),
+                        CFColors.backgroundPrimary.opacity(0.90),
+                        CFColors.backgroundPrimary.opacity(0.52),
                         CFColors.backgroundPrimary.opacity(0.18)
                     ],
                     startPoint: .leading,
@@ -98,10 +120,15 @@ public struct MovieDetailView: View {
                 .ignoresSafeArea()
 
                 HStack(alignment: .top, spacing: CFSpacing.lg) {
-                    movieMetadataPanel(movie, compact: proxy.size.width < 1180)
-                        .padding(.leading, CFSpacing.xxl)
-                        .padding(.top, CFSpacing.xxl + CFSpacing.md)
-                        .padding(.bottom, 116)
+                    HStack(alignment: .top, spacing: CFSpacing.xl) {
+                        poster(movie)
+                            .padding(.top, CFSpacing.xs)
+                            .shadow(color: .black.opacity(0.42), radius: 32, x: 0, y: 24)
+                        movieMetadataPanel(movie, compact: proxy.size.width < 1180)
+                    }
+                    .padding(.leading, CFSpacing.xxl)
+                    .padding(.top, CFSpacing.xxl + CFSpacing.md)
+                    .padding(.bottom, 116)
 
                     Spacer(minLength: CFSpacing.lg)
 
@@ -134,8 +161,10 @@ public struct MovieDetailView: View {
                     .padding(.leading, CFSpacing.xxl)
                     .padding(.bottom, CFSpacing.xl)
             }
+            .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 1.006, anchor: .center)))
         }
-        .frame(minHeight: 720)
+        .frame(minHeight: CFCinematicStyle.detailHeroMinHeight)
+        .cfAnimation(CFCinematicStyle.transitionAnimation(reduceMotion: reduceMotion), value: movie.id, reduceMotion: reduceMotion)
     }
 
     private func movieMetadataPanel(_ movie: MovieDetail, compact: Bool) -> some View {
@@ -150,7 +179,7 @@ public struct MovieDetailView: View {
                 HStack(spacing: 26) {
                     Text(movie.runtime)
                     Text(String(movie.year))
-                    Text(movie.imdbRating)
+                    Text(viewModel.ratingSummary.sources.first?.label ?? "Rating n/a")
                     IMDbBadge()
                 }
                 .font(.system(size: 20, weight: .bold, design: .rounded))
@@ -159,6 +188,18 @@ public struct MovieDetailView: View {
 
             metadataSection(title: "ЖАНРЫ", values: movie.genres)
             metadataSection(title: "АКТЁРЫ", values: viewModel.cast.prefix(3).map(\.name))
+
+            if let highlight = viewModel.bestReleaseHighlight {
+                DetailReleaseHighlightView(
+                    highlight: highlight,
+                    actionTitle: viewModel.primaryWatchActionTitle
+                ) {
+                    playBestMovie(movie)
+                }
+            } else if let fallbackTitle = viewModel.releaseFallbackTitle {
+                DetailFallbackBlock(title: fallbackTitle, systemImage: "antenna.radiowaves.left.and.right.slash")
+                    .frame(maxWidth: 420)
+            }
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("ОПИСАНИЕ")
@@ -217,6 +258,15 @@ public struct MovieDetailView: View {
                 DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(movie.title, forType: .string)
+                }
+                DockIconButton(systemImage: "arrow.clockwise", title: "Обновить metadata") {
+                    Task { await viewModel.refreshMetadata() }
+                }
+                DockIconButton(systemImage: "clock.badge.xmark", title: "Убрать из истории") {
+                    Task { await viewModel.removeFromHistory() }
+                }
+                DockIconButton(systemImage: "trash", title: "Очистить cache metadata") {
+                    Task { await viewModel.clearMetadataCacheForItem() }
                 }
             }
         }
@@ -292,7 +342,7 @@ public struct MovieDetailView: View {
                 RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
                     .stroke(CFColors.separator, lineWidth: CFSeparators.width)
             )
-            .frame(width: 190, height: 286)
+            .frame(width: CFCinematicStyle.detailPosterWidth, height: CFCinematicStyle.detailPosterHeight)
     }
 
     private func heroCopy(_ movie: MovieDetail, compact: Bool) -> some View {
@@ -325,8 +375,12 @@ public struct MovieDetailView: View {
                 ForEach(movie.genres, id: \.self) { genre in
                     CFBadge(genre, tone: .source)
                 }
-                RatingBadge("\(t(.detailRatingTMDB)) \(movie.tmdbRating)")
-                RatingBadge("\(t(.detailRatingIMDB)) \(movie.imdbRating)")
+                ForEach(viewModel.ratingSummary.sources) { source in
+                    RatingBadge(source.label)
+                }
+                ForEach(viewModel.ratingSummary.badges) { badge in
+                    CFBadge(badge.title, tone: .quality)
+                }
             }
 
             Text(movie.overview)
@@ -460,7 +514,7 @@ public struct MovieDetailView: View {
                 navigationCoordinator.navigate(to: .mediaDetail(id: item.id))
             }
         case .cast:
-            simpleList(title: t(.detailTabCast), items: viewModel.cast.map { "\($0.name) · \($0.role)" })
+            castList(title: t(.detailTabCast), cast: viewModel.cast)
         case .details:
             if let movie = viewModel.movie {
                 simpleList(title: t(.detailTabDetails), items: [
@@ -480,30 +534,34 @@ public struct MovieDetailView: View {
                 .foregroundStyle(CFColors.textPrimary)
 
             LazyVStack(spacing: CFSpacing.md) {
-                ForEach(viewModel.releases, id: \.release.id) { ranked in
-                    MovieReleaseRow(
-                        ranked: ranked,
-                        languagesText: L10n.format(
-                            .detailReleaseLanguagesFormat,
+                if let fallbackTitle = viewModel.releaseFallbackTitle {
+                    DetailFallbackBlock(title: fallbackTitle, systemImage: "antenna.radiowaves.left.and.right.slash")
+                } else {
+                    ForEach(viewModel.releases, id: \.release.id) { ranked in
+                        MovieReleaseRow(
+                            ranked: ranked,
+                            languagesText: L10n.format(
+                                .detailReleaseLanguagesFormat,
+                                language: selectedLanguage,
+                                ranked.release.audioLanguages.joined(separator: ", "),
+                                ranked.release.subtitleLanguages.joined(separator: ", ")
+                            ),
+                            copyTitle: t(.detailCopyMagnet),
+                            playTitle: t(.detailWatch),
+                            seedersHelp: t(.tooltipSeeders),
+                            rankingHelp: t(.tooltipRankingScore),
+                            advancedTitle: t(.releaseExplanationAdvanced),
                             language: selectedLanguage,
-                            ranked.release.audioLanguages.joined(separator: ", "),
-                            ranked.release.subtitleLanguages.joined(separator: ", ")
-                        ),
-                        copyTitle: t(.detailCopyMagnet),
-                        playTitle: t(.detailWatch),
-                        seedersHelp: t(.tooltipSeeders),
-                        rankingHelp: t(.tooltipRankingScore),
-                        advancedTitle: t(.releaseExplanationAdvanced),
-                        language: selectedLanguage,
-                        onPlay: {
-                            if let movieID = viewModel.movie?.id {
-                                playManualMovieRelease(ranked.release, movieID: movieID)
+                            onPlay: {
+                                if let movieID = viewModel.movie?.id {
+                                    playManualMovieRelease(ranked.release, movieID: movieID)
+                                }
+                            },
+                            onCopy: {
+                                viewModel.copyMagnet(ranked.release)
                             }
-                        },
-                        onCopy: {
-                            viewModel.copyMagnet(ranked.release)
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -515,20 +573,75 @@ public struct MovieDetailView: View {
                 .font(CFTypography.sectionTitle)
                 .foregroundStyle(CFColors.textPrimary)
 
-            ForEach(items, id: \.self) { item in
-                Text(item)
-                    .font(CFTypography.body)
-                    .foregroundStyle(CFColors.textSecondary)
-                    .padding(CFSpacing.lg)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                            .fill(CFColors.panelFill)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                                    .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                            )
-                    )
+            if items.isEmpty {
+                DetailFallbackBlock(title: "\(title): нет данных", systemImage: "info.circle")
+            } else {
+                ForEach(items, id: \.self) { item in
+                    Text(item)
+                        .font(CFTypography.body)
+                        .foregroundStyle(CFColors.textSecondary)
+                        .padding(CFSpacing.lg)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                .fill(CFColors.panelFill)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                                )
+                        )
+                }
+            }
+        }
+    }
+
+    private func castList(title: String, cast: [MovieCastMember]) -> some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            Text(title)
+                .font(CFTypography.sectionTitle)
+                .foregroundStyle(CFColors.textPrimary)
+
+            if cast.isEmpty {
+                DetailFallbackBlock(title: "\(title): нет данных", systemImage: "info.circle")
+            } else {
+                ForEach(cast) { member in
+                    Button {
+                        navigationCoordinator.navigate(to: .personDetail(PersonRoutePayload(
+                            id: member.id,
+                            name: member.name,
+                            role: member.role,
+                            profileURL: member.profileURL,
+                            sourceMedia: viewModel.mediaItem.map(PersonSourceMedia.init(mediaItem:))
+                        )))
+                    } label: {
+                        HStack(spacing: CFSpacing.md) {
+                            Image(systemName: "person.crop.circle")
+                                .foregroundStyle(CFColors.textSecondary)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(member.name)
+                                    .font(CFTypography.body)
+                                    .foregroundStyle(CFColors.textPrimary)
+                                Text(member.role)
+                                    .font(CFTypography.caption)
+                                    .foregroundStyle(CFColors.textSecondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(CFColors.textMuted)
+                        }
+                        .padding(CFSpacing.lg)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                .fill(CFColors.panelFill)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                                        .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                                )
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -599,6 +712,7 @@ struct MovieBackdrop: View {
     let accentIndex: Int
     let title: String
     let backdropURL: URL?
+    @Environment(\.cfReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -627,8 +741,9 @@ struct MovieBackdrop: View {
         .overlay {
             if let backdropURL {
                 CFCachedAsyncImage(url: backdropURL, contentMode: .fill)
-                    .opacity(0.36)
-                    .overlay(CFColors.backgroundPrimary.opacity(0.30))
+                    .opacity(0.48)
+                    .blur(radius: reduceMotion ? 0 : 3)
+                    .overlay(CFColors.backgroundPrimary.opacity(0.24))
             }
         }
     }

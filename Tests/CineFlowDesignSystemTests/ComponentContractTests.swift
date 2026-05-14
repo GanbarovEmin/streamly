@@ -25,4 +25,27 @@ final class ComponentContractTests: XCTestCase {
         XCTAssertEqual(model.badge, "2160p")
         XCTAssertEqual(model.artworkURL, artworkURL)
     }
+
+    func testMediaCardMenuAvailabilityCoversPowerUserActions() {
+        let availability = CFMediaCardMenuAvailability(
+            canWatch: true,
+            canOpenDetails: true,
+            canAddToLibrary: false,
+            canAddToWatchlist: true,
+            canAddToList: true,
+            canRate: true,
+            canHide: false,
+            canFixMetadata: true,
+            canFindBestRelease: true,
+            canClearProgress: false,
+            canTuneRecommendations: true
+        )
+
+        XCTAssertTrue(availability.canWatch)
+        XCTAssertTrue(availability.canAddToWatchlist)
+        XCTAssertTrue(availability.canFindBestRelease)
+        XCTAssertFalse(availability.canAddToLibrary)
+        XCTAssertFalse(availability.canHide)
+        XCTAssertFalse(availability.canClearProgress)
+    }
 }

@@ -8,6 +8,7 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
     public let originalTitle: String
     public let overview: String
     public let year: Int?
+    public let releaseDate: Date?
     public let genres: [String]
     public let runtime: Int?
     public let rating: Double?
@@ -15,6 +16,9 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
     public let backdropURL: URL?
     public let trailerURLs: [URL]
     public let cast: [CastMember]
+    public let alternativeTitles: [String]
+    public let posterCandidates: [MetadataArtworkCandidate]
+    public let backdropCandidates: [MetadataArtworkCandidate]
 
     public init(
         tmdbId: Int,
@@ -24,13 +28,17 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
         originalTitle: String,
         overview: String,
         year: Int?,
+        releaseDate: Date? = nil,
         genres: [String] = [],
         runtime: Int? = nil,
         rating: Double? = nil,
         posterURL: URL? = nil,
         backdropURL: URL? = nil,
         trailerURLs: [URL] = [],
-        cast: [CastMember] = []
+        cast: [CastMember] = [],
+        alternativeTitles: [String] = [],
+        posterCandidates: [MetadataArtworkCandidate] = [],
+        backdropCandidates: [MetadataArtworkCandidate] = []
     ) {
         self.tmdbId = tmdbId
         self.imdbId = imdbId
@@ -39,6 +47,7 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
         self.originalTitle = originalTitle
         self.overview = overview
         self.year = year
+        self.releaseDate = releaseDate
         self.genres = genres
         self.runtime = runtime
         self.rating = rating
@@ -46,6 +55,9 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
         self.backdropURL = backdropURL
         self.trailerURLs = trailerURLs
         self.cast = cast
+        self.alternativeTitles = alternativeTitles
+        self.posterCandidates = posterCandidates
+        self.backdropCandidates = backdropCandidates
     }
 
     public var displayTitle: String {

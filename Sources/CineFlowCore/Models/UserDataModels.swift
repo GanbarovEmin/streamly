@@ -153,6 +153,74 @@ public struct UserList: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+public enum WatchlistPriority: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case high
+    case normal
+    case later
+
+    public var id: String { rawValue }
+
+    public var rank: Int {
+        switch self {
+        case .high:
+            0
+        case .normal:
+            1
+        case .later:
+            2
+        }
+    }
+}
+
+public enum WatchlistSortOrder: String, Codable, CaseIterable, Identifiable, Equatable, Sendable {
+    case priority
+    case addedDate
+    case rating
+    case runtime
+    case quality
+    case mood
+
+    public var id: String { rawValue }
+}
+
+public enum WatchlistBadge: String, Codable, CaseIterable, Equatable, Sendable {
+    case availableIn4KHDR
+    case betterReleaseAvailable
+    case russianAudioAvailable
+}
+
+public struct WatchlistItem: Identifiable, Codable, Equatable, Sendable {
+    public let listID: String
+    public let mediaID: String
+    public let priority: WatchlistPriority
+    public let remindLaterAt: Date?
+    public let addedAt: Date
+    public let initialQuality: ReleaseQuality
+    public let initialHDR: HDRFormat
+
+    public var id: String {
+        "\(listID):\(mediaID)"
+    }
+
+    public init(
+        listID: String,
+        mediaID: String,
+        priority: WatchlistPriority = .normal,
+        remindLaterAt: Date? = nil,
+        addedAt: Date = Date(),
+        initialQuality: ReleaseQuality = .unknown,
+        initialHDR: HDRFormat = .unknown
+    ) {
+        self.listID = listID
+        self.mediaID = mediaID
+        self.priority = priority
+        self.remindLaterAt = remindLaterAt
+        self.addedAt = addedAt
+        self.initialQuality = initialQuality
+        self.initialHDR = initialHDR
+    }
+}
+
 public struct UserRating: Codable, Equatable, Sendable {
     public let mediaID: String
     public let rating: Int
@@ -303,7 +371,7 @@ public struct AudioTrack: Identifiable, Codable, Equatable, Sendable {
         if value.contains("dts") {
             return "DTS"
         }
-        if value.contains("dolby") || value.contains("truehd") || value.contains("atmos") || value.contains("ac-3") || value.contains("e-ac-3") {
+        if value.contains("dolby") || value.contains("truehd") || value.contains("atmos") || value.contains("ac-3") || value.contains("ac3") || value.contains("e-ac-3") || value.contains("eac3") {
             return "Dolby"
         }
         return nil

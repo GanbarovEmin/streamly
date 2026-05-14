@@ -6,8 +6,12 @@ public struct TopSearchBarView: View {
     public let controls: [ShellTopControl]
     public let focusRequestID: Int
     public let queryText: String
+    public let isLoading: Bool
+    public let controlBadges: [String: Int]
     public let onQueryChange: (String) -> Void
+    public let onClear: () -> Void
     public let onSearchFocus: () -> Void
+    public let onControlAction: (ShellTopControl) -> Void
 
     @FocusState private var isSearchFocused: Bool
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
@@ -16,14 +20,22 @@ public struct TopSearchBarView: View {
         controls: [ShellTopControl],
         focusRequestID: Int,
         queryText: String = "",
+        isLoading: Bool = false,
+        controlBadges: [String: Int] = [:],
         onQueryChange: @escaping (String) -> Void = { _ in },
-        onSearchFocus: @escaping () -> Void = {}
+        onClear: @escaping () -> Void = {},
+        onSearchFocus: @escaping () -> Void = {},
+        onControlAction: @escaping (ShellTopControl) -> Void = { _ in }
     ) {
         self.controls = controls
         self.focusRequestID = focusRequestID
         self.queryText = queryText
+        self.isLoading = isLoading
+        self.controlBadges = controlBadges
         self.onQueryChange = onQueryChange
+        self.onClear = onClear
         self.onSearchFocus = onSearchFocus
+        self.onControlAction = onControlAction
     }
 
     public var body: some View {
@@ -34,10 +46,24 @@ public struct TopSearchBarView: View {
 
             HStack(spacing: CFSpacing.sm) {
                 ForEach(controls) { control in
-                    IconButton(
-                        systemImage: control.systemImage,
-                        accessibilityLabel: L10n.string(control.titleKey, language: languageSettingsStore.selectedLanguage)
-                    ) {}
+                    ZStack(alignment: .topTrailing) {
+                        IconButton(
+                            systemImage: control.systemImage,
+                            accessibilityLabel: L10n.string(control.titleKey, language: languageSettingsStore.selectedLanguage)
+                        ) {
+                            onControlAction(control)
+                        }
+
+                        if let badge = controlBadges[control.id], badge > 0 {
+                            Text("\(min(badge, 99))")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(CFColors.textPrimary)
+                                .frame(minWidth: 15, minHeight: 15)
+                                .background(Capsule().fill(CFColors.accentPrimary))
+                                .offset(x: 5, y: -5)
+                                .accessibilityHidden(true)
+                        }
+                    }
                 }
             }
         }
@@ -75,6 +101,22 @@ public struct TopSearchBarView: View {
                 .onSubmit(onSearchFocus)
                 .accessibilityLabel(L10n.string(.commandSearch, language: languageSettingsStore.selectedLanguage))
                 .accessibilityHint(L10n.string(.commandFocusSearch, language: languageSettingsStore.selectedLanguage))
+
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.72)
+                    .accessibilityLabel(L10n.string(.searchStateLoading, language: languageSettingsStore.selectedLanguage))
+            } else if !queryText.isEmpty {
+                Button(action: onClear) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(CFColors.textMuted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.string(.searchClear, language: languageSettingsStore.selectedLanguage))
+                .help(L10n.string(.searchClear, language: languageSettingsStore.selectedLanguage))
+            }
         }
         .padding(.horizontal, 15)
         .frame(width: 440, height: 42)

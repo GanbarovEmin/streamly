@@ -134,10 +134,18 @@ public struct SeriesDetailResponse: Sendable {
 
 public protocol SeriesDetailProviderProtocol: Sendable {
     func seriesDetail(id: String) async throws -> SeriesDetailResponse?
+    func refreshSeriesDetail(id: String) async throws -> SeriesDetailResponse?
+    func clearMetadataCache(id: String) async throws
     func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)]
 }
 
 public extension SeriesDetailProviderProtocol {
+    func refreshSeriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        try await seriesDetail(id: id)
+    }
+
+    func clearMetadataCache(id: String) async throws {}
+
     func episodeReleases(seriesID: String, episodeID: String) async throws -> [(release: TorrentRelease, scope: SeriesReleaseScope)] {
         []
     }
@@ -329,8 +337,10 @@ public final class SeriesDetailViewModel: ObservableObject {
     @Published public private(set) var selectedEpisodeID: String?
     @Published public private(set) var mediaItem: MediaItem?
     @Published public private(set) var isInLibrary = false
+    @Published public private(set) var isSeriesTracked = false
     @Published public private(set) var episodeNotificationsEnabled = false
     @Published public private(set) var selectedListName: String?
+    @Published public private(set) var userRating: Int?
     @Published public private(set) var lastPlayedEpisodeID: String?
     @Published public private(set) var userSources: [UserMediaSource] = []
     @Published public private(set) var selectedUserSourceID: String?
@@ -345,8 +355,10 @@ public final class SeriesDetailViewModel: ObservableObject {
     private let libraryRepository: (any LibraryRepositoryProtocol)?
     private let userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)?
     private let settingsRepository: (any SettingsRepositoryProtocol)?
+    private let recommendationService: (any RecommendationServiceProtocol)?
     private let diagnosticsService: (any DiagnosticsServiceProtocol)?
     private let notificationStore: any SeriesNotificationStoreProtocol
+    private let trackingStore: any SeriesTrackingStoreProtocol
     private let releaseSelectionStore: ReleaseSelectionStoreProtocol
     private var loadGeneration = 0
     private var episodeReleaseGeneration = 0
@@ -359,8 +371,10 @@ public final class SeriesDetailViewModel: ObservableObject {
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         userMediaSourceRepository: (any UserMediaSourceRepositoryProtocol)? = nil,
         settingsRepository: (any SettingsRepositoryProtocol)? = nil,
+        recommendationService: (any RecommendationServiceProtocol)? = nil,
         diagnosticsService: (any DiagnosticsServiceProtocol)? = nil,
         notificationStore: any SeriesNotificationStoreProtocol = UserDefaultsSeriesNotificationStore(),
+        trackingStore: any SeriesTrackingStoreProtocol = UserDefaultsSeriesTrackingStore(),
         releaseSelectionStore: ReleaseSelectionStoreProtocol = UserDefaultsReleaseSelectionStore()
     ) {
         self.seriesID = seriesID
@@ -369,8 +383,10 @@ public final class SeriesDetailViewModel: ObservableObject {
         self.libraryRepository = libraryRepository
         self.userMediaSourceRepository = userMediaSourceRepository
         self.settingsRepository = settingsRepository
+        self.recommendationService = recommendationService
         self.diagnosticsService = diagnosticsService
         self.notificationStore = notificationStore
+        self.trackingStore = trackingStore
         self.releaseSelectionStore = releaseSelectionStore
     }
 
@@ -405,6 +421,16 @@ public final class SeriesDetailViewModel: ObservableObject {
 
     public var continueWatchingTitle: String {
         watchNextEpisode?.ctaTitle ?? "Continue"
+    }
+
+    public var newEpisodeBadgeText: String? {
+        guard isSeriesTracked,
+              let next = watchNextEpisode,
+              !progressByEpisodeID.isEmpty,
+              next.episode.isReleased else {
+            return nil
+        }
+        return "New Episode Available"
     }
 
     public var seasonProgressSummaries: [WatchNextSeasonProgress] {
@@ -445,6 +471,78 @@ public final class SeriesDetailViewModel: ObservableObject {
             return manual
         }
         return releases.first
+    }
+
+    public var bestReleaseHighlight: DetailReleaseHighlight? {
+        guard let scoped = bestPlayableRelease else { return nil }
+        return DetailReleaseHighlight(
+            releaseID: scoped.release.id,
+            title: scoped.release.title,
+            badge: "Best Release",
+            primaryMetadata: Self.primaryMetadataLine(for: scoped.release),
+            secondaryMetadata: Self.secondaryMetadataLine(for: scoped.release),
+            scopeLabel: Self.scopeLabel(for: scoped.scope)
+        )
+    }
+
+    public var selectedEpisodePresentation: SeriesEpisodePresentation? {
+        guard let episode = selectedEpisode else { return nil }
+        let progress = progressByEpisodeID[episode.id] == nil ? nil : progressValue(for: episode.id)
+        return SeriesEpisodePresentation(
+            label: Self.episodeLabel(for: episode),
+            title: episode.title,
+            progressFraction: progress
+        )
+    }
+
+    public var continueEpisodeLabel: String? {
+        guard let episode = watchNextEpisode?.episode else { return nil }
+        return "\(Self.episodeLabel(for: episode)) \(episode.title)"
+    }
+
+    public var primaryWatchActionTitle: String {
+        if let episode = watchNextEpisode?.episode {
+            return "Продолжить \(Self.episodeLabel(for: episode))"
+        }
+        if bestPlayableRelease != nil {
+            return "Смотреть лучший релиз"
+        }
+        if userSources.contains(where: \.isPlayableLocalFile) {
+            return "Смотреть локальный файл"
+        }
+        return "Выбрать локальный файл"
+    }
+
+    public var heroMetadataBadges: [DetailHeroBadge] {
+        guard let series else { return [] }
+        var badges = [
+            series.yearRange.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Years n/a" : series.yearRange,
+            series.seasonsCount == 1 ? "1 season" : "\(series.seasonsCount) seasons",
+            series.rating.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "IMDb n/a" : "IMDb \(series.rating)"
+        ]
+        badges.append(contentsOf: series.genres.prefix(3))
+        return badges.map(DetailHeroBadge.init(title:))
+    }
+
+    public var ratingSummary: RatingSummary {
+        guard let series else { return .empty }
+        return RatingAggregator.summary(
+            tmdbRating: series.rating,
+            userRating: userRating,
+            year: Self.firstYear(from: series.yearRange)
+        )
+    }
+
+    public var releaseFallbackTitle: String? {
+        releases.isEmpty ? "Релизы для серии пока не найдены" : nil
+    }
+
+    public var castFallbackTitle: String? {
+        cast.isEmpty ? "Актёры пока не загружены" : nil
+    }
+
+    public var episodeFallbackTitle: String? {
+        allEpisodes.isEmpty ? "Список серий пока пуст" : nil
     }
 
     public func nextReleasedEpisode(after episode: SeriesEpisode) -> SeriesEpisode? {
@@ -508,7 +606,7 @@ public final class SeriesDetailViewModel: ObservableObject {
             episodeNotificationsEnabled = await notificationStore.notificationsEnabled(seriesID: seriesID)
             seasons = response.seasons
             trailers = response.trailers
-            similar = response.similar
+            similar = await resolvedSimilarItems(for: response)
             cast = response.cast
             progressByEpisodeID = response.progressByEpisodeID
             lastWatchedEpisodeID = response.lastWatchedEpisodeID
@@ -517,6 +615,7 @@ public final class SeriesDetailViewModel: ObservableObject {
             releases = rankScopedReleases(response.releases)
             refreshManualOverride()
             await refreshLibraryState()
+            await refreshTrackingState()
             await refreshUserSources()
             guard generation == loadGeneration, !Task.isCancelled else { return }
             state = .loaded
@@ -525,6 +624,33 @@ public final class SeriesDetailViewModel: ObservableObject {
             let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
             state = .failed(cineFlowError.userMessage)
             await diagnosticsService?.log(cineFlowError, operation: "seriesDetail.load", metadata: ["seriesID": seriesID])
+        }
+    }
+
+    public func refreshMetadata() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        do {
+            guard let response = try await provider.refreshSeriesDetail(id: seriesID) else {
+                guard generation == loadGeneration, !Task.isCancelled else { return }
+                state = .empty
+                return
+            }
+            guard generation == loadGeneration, !Task.isCancelled else { return }
+            await apply(response: response)
+            state = .loaded
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .metadata)
+            await diagnosticsService?.log(cineFlowError, operation: "seriesDetail.refreshMetadata", metadata: ["seriesID": seriesID])
+        }
+    }
+
+    public func clearMetadataCacheForItem() async {
+        do {
+            try await provider.clearMetadataCache(id: seriesID)
+        } catch {
+            let cineFlowError = CineFlowError.from(error, fallbackCategory: .cache)
+            await diagnosticsService?.log(cineFlowError, operation: "seriesDetail.clearMetadataCache", metadata: ["seriesID": seriesID])
         }
     }
 
@@ -624,6 +750,14 @@ public final class SeriesDetailViewModel: ObservableObject {
         lastWatchedEpisodeID = episodeID
     }
 
+    public func removeFromHistory() async {
+        progressByEpisodeID = [:]
+        lastWatchedEpisodeID = nil
+        lastPlayedEpisodeID = nil
+        guard let libraryRepository else { return }
+        try? await libraryRepository.removeFromHistory(mediaID: seriesID)
+    }
+
     public func progressValue(for episodeID: String) -> Double {
         guard
             let progress = progressByEpisodeID[episodeID],
@@ -638,21 +772,33 @@ public final class SeriesDetailViewModel: ObservableObject {
 
     public func addToLibrary() {
         isInLibrary = true
+        isSeriesTracked = true
         guard let mediaItem, let libraryRepository else { return }
         Task {
+            await trackingStore.setTracked(true, seriesID: seriesID)
             try? await libraryRepository.add(mediaItem)
         }
     }
 
     public func setEpisodeNotificationsEnabled(_ enabled: Bool) async {
         episodeNotificationsEnabled = enabled
+        if enabled {
+            await setSeriesTracked(true)
+        }
         await notificationStore.setNotificationsEnabled(enabled, seriesID: seriesID)
+    }
+
+    public func setSeriesTracked(_ tracked: Bool) async {
+        isSeriesTracked = tracked
+        await trackingStore.setTracked(tracked, seriesID: seriesID)
     }
 
     public func addToList(_ name: String) {
         selectedListName = name
+        isSeriesTracked = true
         guard let mediaItem, let libraryRepository else { return }
         Task {
+            await trackingStore.setTracked(true, seriesID: seriesID)
             let lists = try await libraryRepository.lists()
             let list: UserList
             if name == "Хочу посмотреть" {
@@ -666,6 +812,15 @@ public final class SeriesDetailViewModel: ObservableObject {
         }
     }
 
+    public func setUserRating(_ rating: Int) {
+        let boundedRating = min(max(rating, 1), 10)
+        userRating = boundedRating
+        guard let mediaItem, let libraryRepository else { return }
+        Task {
+            try? await libraryRepository.setRating(mediaItem, rating: boundedRating)
+        }
+    }
+
     private func rankScopedReleases(_ releases: [(release: TorrentRelease, scope: SeriesReleaseScope)]) -> [ScopedSeriesRelease] {
         let scopeByReleaseID = Dictionary(uniqueKeysWithValues: releases.map { ($0.release.id, $0.scope) })
 
@@ -675,8 +830,61 @@ public final class SeriesDetailViewModel: ObservableObject {
         }
     }
 
+    private static func primaryMetadataLine(for release: TorrentRelease) -> String {
+        var values = [release.qualityLabel]
+        if release.hdr != .none, release.hdr != .unknown {
+            values.append(release.hdr.displayLabel)
+        }
+        if release.codec != .unknown {
+            values.append(release.codec.rawValue)
+        }
+        return values.joined(separator: " · ")
+    }
+
+    private static func secondaryMetadataLine(for release: TorrentRelease) -> String {
+        "\(release.seeders) seeders · \(release.compactSizeLabel) · \(release.sourceName)"
+    }
+
+    private static func firstYear(from yearRange: String) -> Int? {
+        yearRange
+            .split(separator: "-")
+            .first
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    private static func scopeLabel(for scope: SeriesReleaseScope) -> String {
+        switch scope {
+        case .series:
+            "Whole series"
+        case .season:
+            "Season"
+        case .episode:
+            "Episode"
+        }
+    }
+
     private var currentRankingEngine: ReleaseRankingEngine {
         rankingPreferences.map(ReleaseRankingEngine.init(preferences:)) ?? rankingEngine
+    }
+
+    private func apply(response: SeriesDetailResponse) async {
+        await refreshRankingPreferences()
+        series = response.series
+        mediaItem = response.series.mediaItem()
+        episodeNotificationsEnabled = await notificationStore.notificationsEnabled(seriesID: seriesID)
+        seasons = response.seasons
+        trailers = response.trailers
+        similar = await resolvedSimilarItems(for: response)
+        cast = response.cast
+        progressByEpisodeID = response.progressByEpisodeID
+        lastWatchedEpisodeID = response.lastWatchedEpisodeID
+        selectedSeasonID = response.seasons.first?.id
+        selectedEpisodeID = response.seasons.first?.episodes.first?.id
+        releases = rankScopedReleases(response.releases)
+        refreshManualOverride()
+        await refreshLibraryState()
+        await refreshTrackingState()
+        await refreshUserSources()
     }
 
     private var releaseSelectionKey: String {
@@ -694,6 +902,45 @@ public final class SeriesDetailViewModel: ObservableObject {
         rankingPreferences = settings.playback.rankingPreferences(
             preferredSubtitleLanguages: subtitleLanguages,
             supportsHDR: true
+        )
+    }
+
+    private func resolvedSimilarItems(for response: SeriesDetailResponse) async -> [SearchMediaResult] {
+        guard await localRecommendationsEnabled else { return [] }
+        guard let recommendationService else { return response.similar }
+        let seedSimilar = response.similar.map(Self.mediaItem)
+        let recommendations = (try? await recommendationService.recommendations(
+            for: response.series.mediaItem(),
+            seedSimilar: seedSimilar,
+            limit: 12
+        )) ?? []
+        return recommendations.map(SearchMediaResult.init(mediaItem:))
+    }
+
+    private var localRecommendationsEnabled: Bool {
+        get async {
+            guard let settingsRepository else { return true }
+            return await settingsRepository.appSettings.recommendations.localRecommendationsEnabled
+        }
+    }
+
+    private static func mediaItem(from result: SearchMediaResult) -> MediaItem {
+        MediaItem(
+            id: result.id,
+            title: result.title,
+            kind: result.kind == .series ? .series : .movie,
+            overview: result.overview,
+            releaseYear: result.year > 0 ? result.year : nil,
+            posterPath: result.artworkURL?.absoluteString,
+            metadata: MediaMetadata(
+                tmdbId: abs(result.id.hashValue % 10_000),
+                title: result.title,
+                originalTitle: result.title,
+                overview: result.overview,
+                year: result.year > 0 ? result.year : nil,
+                rating: result.ratingScore,
+                posterURL: result.artworkURL
+            )
         )
     }
 
@@ -730,10 +977,25 @@ public final class SeriesDetailViewModel: ObservableObject {
     private func refreshLibraryState() async {
         guard let libraryRepository, let mediaItem else { return }
         do {
-            let items = try await libraryRepository.items()
-            isInLibrary = items.contains { $0.id == mediaItem.id }
+            async let items = libraryRepository.items()
+            async let ratedItems = libraryRepository.ratedItems()
+            isInLibrary = try await items.contains { $0.id == mediaItem.id }
+            userRating = try await ratedItems.first { $0.item.id == mediaItem.id }?.rating
         } catch {
             isInLibrary = false
+            userRating = nil
+        }
+    }
+
+    private func refreshTrackingState() async {
+        let stored = await trackingStore.isTracked(seriesID: seriesID)
+        if stored || isInLibrary {
+            isSeriesTracked = true
+            if isInLibrary && !stored {
+                await trackingStore.setTracked(true, seriesID: seriesID)
+            }
+        } else {
+            isSeriesTracked = false
         }
     }
 
