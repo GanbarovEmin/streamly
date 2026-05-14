@@ -973,17 +973,21 @@ public struct MockSearchProvider: SearchProviderProtocol {
 
     private static func searchableText(for item: HomeSeedItem) -> [String] {
         let catalogItem = SearchSuggestionCatalog.defaultItems.first { $0.id == item.id }
-        return [
+        var tokens: [String] = [
             item.title,
             item.genre,
             item.overview,
-            String(item.year),
-            catalogItem?.originalTitle
+            String(item.year)
         ]
-        .compactMap { $0 } +
-            (catalogItem?.localizedTitles ?? []) +
-            (catalogItem?.actors ?? []) +
-            (catalogItem?.directors ?? [])
+
+        if let originalTitle = catalogItem?.originalTitle {
+            tokens.append(originalTitle)
+        }
+        tokens.append(contentsOf: catalogItem?.localizedTitles ?? [])
+        tokens.append(contentsOf: catalogItem?.actors ?? [])
+        tokens.append(contentsOf: catalogItem?.directors ?? [])
+
+        return tokens
     }
 
     private static func release(
