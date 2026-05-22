@@ -86,6 +86,9 @@ jobs:
       - name: Build DMG
         run: script/create_dmg.sh --version "${{ steps.version.outputs.version }}" --build "${{ steps.version.outputs.build }}" --sign -
 
+      - name: Launch smoke
+        run: script/build_and_run.sh --skip-build --verify --verify-seconds 8 --quit-after-verify
+
       - name: Generate SHA-256
         shell: bash
         run: |

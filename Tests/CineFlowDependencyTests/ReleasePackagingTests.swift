@@ -55,6 +55,22 @@ final class ReleasePackagingTests: XCTestCase {
         XCTAssertTrue(script.contains("Streamly.icns"))
         XCTAssertTrue(script.contains(#"PRODUCT_NAME="Streamly""#))
         XCTAssertTrue(script.contains("Contents/Resources"))
+        XCTAssertTrue(script.contains("com.apple.fileprovider.fpfs#P"))
+        XCTAssertTrue(script.contains("xattr -lrs"))
+    }
+
+    func testLaunchScriptVerifiesStableAppStartupInsteadOfTransientProcess() throws {
+        let scriptURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("script/build_and_run.sh")
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        XCTAssertTrue(script.contains("--verify-seconds"))
+        XCTAssertTrue(script.contains("started but exited before"))
+        XCTAssertTrue(script.contains("DiagnosticReports"))
+        XCTAssertTrue(script.contains("--skip-build"))
     }
 
     func testReleaseScriptRequiresNativeLibtorrentUnlessDevelopmentOverrideIsExplicit() throws {
@@ -145,6 +161,7 @@ final class ReleasePackagingTests: XCTestCase {
         XCTAssertTrue(workflow.contains("SPARKLE_PRIVATE_KEY"))
         XCTAssertTrue(workflow.contains("--ed-key-file"))
         XCTAssertTrue(workflow.contains("--sign -"))
+        XCTAssertTrue(workflow.contains("script/build_and_run.sh --skip-build --verify --verify-seconds 8 --quit-after-verify"))
         XCTAssertTrue(workflow.contains("releases/download/${{ steps.version.outputs.tag }}/"))
         XCTAssertFalse(workflow.contains("env.SPARKLE_PRIVATE_KEY != ''"))
     }

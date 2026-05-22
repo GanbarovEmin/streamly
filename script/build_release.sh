@@ -170,6 +170,18 @@ cleanup_extended_attributes() {
     find "$target" -depth -exec xattr -d -s com.apple.ResourceFork {} \; 2>/dev/null || true
     find "$target" -depth -exec xattr -d -s com.apple.provenance {} \; 2>/dev/null || true
     find "$target" -depth -exec xattr -d -s 'com.apple.fileprovider.fpfs#P' {} \; 2>/dev/null || true
+    while IFS= read -r entry_path; do
+        xattr -d com.apple.FinderInfo "$entry_path" 2>/dev/null || true
+        xattr -d -s com.apple.FinderInfo "$entry_path" 2>/dev/null || true
+        xattr -d com.apple.ResourceFork "$entry_path" 2>/dev/null || true
+        xattr -d -s com.apple.ResourceFork "$entry_path" 2>/dev/null || true
+        xattr -d 'com.apple.fileprovider.fpfs#P' "$entry_path" 2>/dev/null || true
+        xattr -d -s 'com.apple.fileprovider.fpfs#P' "$entry_path" 2>/dev/null || true
+    done < <(
+        xattr -lrs "$target" 2>/dev/null \
+            | awk -F: '/com.apple.FinderInfo|com.apple.ResourceFork|com.apple.fileprovider.fpfs#P/ { print $1 }' \
+            | sort -u
+    )
 }
 
 echo "Building $APP_NAME $VERSION ($BUILD_NUMBER) with SwiftPM product $PRODUCT_NAME..."
