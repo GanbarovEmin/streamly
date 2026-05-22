@@ -69,7 +69,19 @@ jobs:
         run: swift test
 
       - name: Install ffmpeg runtime
-        run: brew install ffmpeg
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/streamly-ffmpeg"
+          "$RUNNER_TEMP/streamly-ffmpeg/bin/python" -m pip install --upgrade pip imageio-ffmpeg
+          FFMPEG_EXECUTABLE="$("$RUNNER_TEMP/streamly-ffmpeg/bin/python" - <<'PY'
+          import imageio_ffmpeg
+          print(imageio_ffmpeg.get_ffmpeg_exe())
+          PY
+          )"
+          chmod 755 "$FFMPEG_EXECUTABLE"
+          "$FFMPEG_EXECUTABLE" -version
+          otool -L "$FFMPEG_EXECUTABLE"
+          echo "STREAMLY_FFMPEG_EXECUTABLE=$FFMPEG_EXECUTABLE" >> "$GITHUB_ENV"
 
       - name: Build DMG
         run: script/create_dmg.sh --version "${{ steps.version.outputs.version }}" --build "${{ steps.version.outputs.build }}" --sign -
