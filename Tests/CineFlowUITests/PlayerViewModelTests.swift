@@ -873,10 +873,10 @@ final class PlayerViewModelTests: XCTestCase {
             )
         )
 
-        viewModel.showControlsTemporarily(autoHideAfter: 0.08)
-        try await Task.sleep(nanoseconds: 30_000_000)
-        viewModel.showControlsTemporarily(autoHideAfter: 0.08)
-        try await Task.sleep(nanoseconds: 30_000_000)
+        viewModel.showControlsTemporarily(autoHideAfter: 0.5)
+        try await Task.sleep(nanoseconds: 50_000_000)
+        viewModel.showControlsTemporarily(autoHideAfter: 0.5)
+        try await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertTrue(viewModel.controlsAreVisible)
 
