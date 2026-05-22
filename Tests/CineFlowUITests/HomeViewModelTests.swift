@@ -20,21 +20,25 @@ final class HomeViewModelTests: XCTestCase {
             viewModel.sections.map(\.kind),
             [
                 .continueWatching,
-                .watchNext,
                 .recommendedTonight,
+                .recommended,
+                .collections,
                 .trendingNow
             ]
         )
         XCTAssertEqual(viewModel.sections.map(\.title), [
             "Continue Watching",
-            "Watch Next",
             "Recommended Tonight",
+            "Because You Watched",
+            "Collections",
             "Trending Now"
         ])
         XCTAssertEqual(viewModel.sections[0].cardStyle, .landscape)
         XCTAssertEqual(viewModel.sections[1].cardStyle, .landscape)
-        XCTAssertEqual(viewModel.sections[2].cardStyle, .landscape)
+        XCTAssertEqual(viewModel.sections[2].cardStyle, .poster)
+        XCTAssertEqual(viewModel.sections[3].cardStyle, .landscape)
         XCTAssertTrue(viewModel.sections[0].items.allSatisfy { $0.progress != nil })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .watchNext })
         XCTAssertEqual(viewModel.sections.map(\.personalizationID), viewModel.sections.map { $0.kind.personalizationID })
     }
 
@@ -55,7 +59,8 @@ final class HomeViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.sections.map(\.title).contains("Recently Added"))
         XCTAssertFalse(viewModel.sections.map(\.title).contains("Trending Movies"))
         XCTAssertTrue(viewModel.sections.map(\.title).contains("Trending Now"))
-        XCTAssertFalse(viewModel.sections.map(\.title).contains("Because You Watched"))
+        XCTAssertTrue(viewModel.sections.map(\.title).contains("Because You Watched"))
+        XCTAssertTrue(viewModel.sections.map(\.title).contains("Collections"))
         XCTAssertFalse(viewModel.sections.map(\.title).contains("Best Quality Available"))
 
         let trendingNow = try XCTUnwrap(viewModel.sections.first { $0.kind == .trendingNow })
@@ -92,6 +97,7 @@ final class HomeViewModelTests: XCTestCase {
         XCTAssertFalse(viewModel.sections.contains { $0.items.isEmpty })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .continueWatching })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .watchNext })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .collections })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .favoriteGenres })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .unfinishedMovies })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .forgottenInLibrary })
@@ -123,7 +129,7 @@ final class HomeViewModelTests: XCTestCase {
 
         XCTAssertTrue(viewModel.sections.contains { $0.kind == .continueWatching })
         XCTAssertTrue(viewModel.sections.contains { $0.kind == .trendingNow })
-        XCTAssertFalse(viewModel.sections.contains { $0.kind == .recommended })
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .recommended })
     }
 
     @MainActor
@@ -143,7 +149,9 @@ final class HomeViewModelTests: XCTestCase {
         await viewModel.load()
 
         XCTAssertTrue(viewModel.sections.contains { $0.kind == .trendingNow })
-        XCTAssertFalse(viewModel.sections.contains { $0.kind == .recommended })
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .recommended })
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .collections })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .watchNext })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .recentlyAdded })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .trendingMovies })
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .trendingSeries })
@@ -429,7 +437,7 @@ final class HomeViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testWatchNextSectionUsesEpisodeLevelSeriesProgressAndHidesCompletedSeries() async throws {
+    func testWatchNextSectionIsHiddenByDefaultBecauseContinueWatchingOwnsNextEpisodeContext() async throws {
         let backdropURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w780/got-backdrop.jpg"))
         let series = MediaItem(
             id: "tmdb:tv:1399",
@@ -467,6 +475,59 @@ final class HomeViewModelTests: XCTestCase {
         ])
         let viewModel = HomeViewModel(
             seedItems: [seedItem],
+            progressRepository: progressRepository,
+            libraryRepository: CoreMockLibraryRepository(storedItems: [series]),
+            watchNextProvider: provider
+        )
+
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.sections.first { $0.kind == .watchNext })
+        XCTAssertNil(viewModel.sections.first { $0.kind == .continueWatching })
+    }
+
+    @MainActor
+    func testWatchNextSectionCanStillBeEnabledForEpisodeLevelSeriesProgress() async throws {
+        let backdropURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w780/got-backdrop.jpg"))
+        let series = MediaItem(
+            id: "tmdb:tv:1399",
+            title: "Game of Thrones",
+            kind: .series,
+            overview: "Noble families fight for control.",
+            releaseYear: 2011,
+            posterPath: nil
+        )
+        let seedItem = HomeSeedItem(
+            id: series.id,
+            title: series.title,
+            kind: .series,
+            year: 2011,
+            rating: "TV-MA",
+            runtime: "8 seasons",
+            genre: "Drama",
+            overview: "Noble families fight for control.",
+            quality: "1080p",
+            popularityRank: 1,
+            backdropURL: backdropURL
+        )
+        let provider = InMemoryWatchNextProvider(items: [
+            WatchNextEpisode(
+                seriesID: series.id,
+                seriesTitle: series.title,
+                episode: SeriesEpisode(id: "got-s2-e1", seasonID: "got-s2", seasonNumber: 2, episodeNumber: 1, title: "The North Remembers", runtime: "53m", overview: ""),
+                reason: .nextEpisode,
+                progress: 0,
+                seasonProgress: WatchNextSeasonProgress(seasonID: "got-s2", seasonNumber: 2, completedEpisodes: 0, totalEpisodes: 2)
+            )
+        ])
+        let progressRepository = InMemoryHomeProgressRepository(records: [
+            PlaybackProgress(mediaID: series.id, episodeID: "got-s1-e2", positionSeconds: 3_500, durationSeconds: 3_600)
+        ])
+        var settings = AppSettings()
+        settings.home.setSection("watchNext", isEnabled: true)
+        let viewModel = HomeViewModel(
+            seedItems: [seedItem],
+            settingsRepository: CoreMockSettingsRepository(settings: settings),
             progressRepository: progressRepository,
             libraryRepository: CoreMockLibraryRepository(storedItems: [series]),
             watchNextProvider: provider

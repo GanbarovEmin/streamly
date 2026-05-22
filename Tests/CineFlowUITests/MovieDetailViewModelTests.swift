@@ -16,7 +16,8 @@ final class MovieDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.movie?.runtime, "2h 16m")
         XCTAssertEqual(viewModel.movie?.genres, ["Sci-Fi", "Action"])
         XCTAssertEqual(viewModel.movie?.tmdbRating, "8.2")
-        XCTAssertEqual(viewModel.tabs, [.releases, .trailers, .similar, .cast, .details])
+        XCTAssertEqual(viewModel.tabs, [.trailers, .similar, .cast, .details])
+        XCTAssertEqual(viewModel.selectedTab, .details)
     }
 
     @MainActor

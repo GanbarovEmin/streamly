@@ -24,8 +24,7 @@ public struct MediaCatalogView: View {
 
     public var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: CFSpacing.xl) {
-                header
+            VStack(alignment: .leading, spacing: CFSpacing.lg) {
                 controls
                 content
             }
@@ -88,6 +87,18 @@ public struct MediaCatalogView: View {
                             RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
                                 .stroke(CFColors.separator, lineWidth: CFSeparators.width)
                         )
+                )
+
+            Text(countLabel)
+                .font(CFTypography.caption.weight(.semibold))
+                .foregroundStyle(CFColors.textMuted)
+                .lineLimit(1)
+                .padding(.horizontal, CFSpacing.md)
+                .frame(height: 42)
+                .background(
+                    Capsule()
+                        .fill(CFColors.panelFill.opacity(0.72))
+                        .overlay(Capsule().stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width))
                 )
 
             SecondaryButton(refreshTitle, systemImage: "arrow.clockwise") {
@@ -192,6 +203,15 @@ public struct MediaCatalogView: View {
             "В каталоге"
         case .system, .en:
             "In Catalog"
+        }
+    }
+
+    private var countLabel: String {
+        switch selectedLanguage {
+        case .ru:
+            kind == .movies ? "\(viewModel.visibleItems.count) фильмов" : "\(viewModel.visibleItems.count) сериалов"
+        case .system, .en:
+            kind == .movies ? "\(viewModel.visibleItems.count) movies" : "\(viewModel.visibleItems.count) series"
         }
     }
 }

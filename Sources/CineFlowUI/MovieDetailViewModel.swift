@@ -221,9 +221,9 @@ public final class MovieDetailViewModel: ObservableObject {
     @Published public private(set) var userSources: [UserMediaSource] = []
     @Published public private(set) var selectedUserSourceID: String?
     @Published public private(set) var manualOverrideReleaseID: String?
-    @Published public var selectedTab: MovieDetailTab = .releases
+    @Published public var selectedTab: MovieDetailTab = .details
 
-    public let tabs: [MovieDetailTab] = MovieDetailTab.allCases
+    public let tabs: [MovieDetailTab] = [.trailers, .similar, .cast, .details]
 
     private let mediaID: String
     private let provider: any MovieDetailProviderProtocol

@@ -38,16 +38,17 @@ public struct HomeSectionPreference: Codable, Equatable, Identifiable, Sendable 
 }
 
 public struct HomePreferences: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 3
+    public static let currentSchemaVersion = 4
 
     public static let defaultSectionIDs: [String] = [
         "continueWatching",
-        "watchNext",
         "newEpisodes",
         "recommendedTonight",
-        "trendingNow",
         "recommended",
         "moreLikeThis",
+        "collections",
+        "trendingNow",
+        "watchNext",
         "fromFavoriteGenres",
         "continueSeries",
         "hiddenGems",
@@ -61,14 +62,12 @@ public struct HomePreferences: Codable, Equatable, Sendable {
         "favoriteGenres",
         "unfinishedMovies",
         "forgottenInLibrary",
-        "collections",
         "moodDiscovery",
         "upcomingCalendar"
     ]
 
     public static let defaultCollapsedSectionIDs: Set<String> = [
-        "recommended",
-        "moreLikeThis",
+        "watchNext",
         "fromFavoriteGenres",
         "continueSeries",
         "hiddenGems",
@@ -82,7 +81,6 @@ public struct HomePreferences: Codable, Equatable, Sendable {
         "favoriteGenres",
         "unfinishedMovies",
         "forgottenInLibrary",
-        "collections",
         "moodDiscovery",
         "upcomingCalendar"
     ]
@@ -248,7 +246,7 @@ public struct HomePreferences: Codable, Equatable, Sendable {
         sections.map { section in
             HomeSectionPreference(
                 sectionID: section.sectionID,
-                isEnabled: defaultCollapsedSectionIDs.contains(section.sectionID) ? false : section.isEnabled,
+                isEnabled: !defaultCollapsedSectionIDs.contains(section.sectionID),
                 order: section.order
             )
         }

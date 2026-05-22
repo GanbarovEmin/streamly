@@ -40,12 +40,13 @@ public enum HomeSectionKind: String, CaseIterable, Equatable, Sendable {
 public extension HomeSectionKind {
     static let defaultHomeOrder: [HomeSectionKind] = [
         .continueWatching,
-        .watchNext,
         .newEpisodes,
         .recommendedTonight,
-        .trendingNow,
         .recommended,
         .moreLikeThis,
+        .collections,
+        .trendingNow,
+        .watchNext,
         .fromFavoriteGenres,
         .continueSeries,
         .hiddenGems,
@@ -59,7 +60,6 @@ public extension HomeSectionKind {
         .favoriteGenres,
         .unfinishedMovies,
         .forgottenInLibrary,
-        .collections,
         .moodDiscovery,
         .upcomingCalendar
     ]
@@ -909,16 +909,17 @@ private enum HomeContentBuilder {
         )
 
         var sections: [HomeSection] = []
-        let collectionCards = cards(from: collections)
+        let collectionCards = cards(from: collections.filter { !$0.items.isEmpty })
         appendSection(&sections, kind: .continueWatching, title: "Continue Watching", cardStyle: .landscape, items: Array(continueItems.prefix(6)))
         appendSection(&sections, kind: .watchNext, title: "Watch Next", cardStyle: .landscape, items: Array(watchNextCards.prefix(6)))
         appendSection(&sections, kind: .newEpisodes, title: "New Episodes", cardStyle: .landscape, items: Array(newEpisodeCards.prefix(6)))
         appendSection(&sections, kind: .recommendedTonight, title: "Recommended Tonight", cardStyle: .landscape, items: Array(recommendedTonightCards.prefix(6)))
-        appendSection(&sections, kind: .trendingNow, title: "Trending Now", cardStyle: .poster, items: trendingNowCards)
         appendRecommendationSections(recommendationSections, to: &sections)
         if !recommendationSections.contains(where: { $0.kind == .becauseYouWatched }) {
             appendSection(&sections, kind: .recommended, title: "Because You Watched", cardStyle: .poster, items: becauseYouWatchedCards)
         }
+        appendSection(&sections, kind: .collections, title: "Collections", cardStyle: .landscape, items: Array(collectionCards.prefix(8)))
+        appendSection(&sections, kind: .trendingNow, title: "Trending Now", cardStyle: .poster, items: trendingNowCards)
         appendSection(&sections, kind: .recentlyAdded, title: "Recently Added", cardStyle: .poster, items: recentlyAddedCards)
         appendSection(&sections, kind: .trendingMovies, title: "Trending Movies", cardStyle: .poster, items: trendingMovieCards)
         appendSection(&sections, kind: .trendingSeries, title: "Trending Series", cardStyle: .poster, items: trendingSeriesCards)
@@ -929,7 +930,6 @@ private enum HomeContentBuilder {
         }
         appendSection(&sections, kind: .unfinishedMovies, title: "Unfinished Movies", cardStyle: .landscape, items: unfinishedMovieCards)
         appendSection(&sections, kind: .forgottenInLibrary, title: "Forgotten in Library", cardStyle: .poster, items: forgottenLibraryCards)
-        appendSection(&sections, kind: .collections, title: "Collections", cardStyle: .landscape, items: Array(collectionCards.prefix(8)))
         if !moodItems.isEmpty {
             sections.append(section(from: moodItems))
         }

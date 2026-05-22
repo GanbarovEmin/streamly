@@ -430,7 +430,7 @@ public struct LandscapeCard: View {
                             .padding(.bottom, CFSpacing.sm)
                     }
                 }
-                .frame(width: 180, height: 104)
+                .frame(width: 210, height: 122)
 
                 VStack(alignment: .leading, spacing: CFSpacing.xs) {
                     Text(model.title)
@@ -454,7 +454,7 @@ public struct LandscapeCard: View {
                             .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
                     )
             )
-            .frame(height: 136)
+            .frame(height: 154)
             .scaleEffect(reduceMotion ? 1 : (isHovering ? 1.008 : 1))
             .cfAnimation(CFMotion.quick, value: isHovering, reduceMotion: reduceMotion)
         }
@@ -607,7 +607,7 @@ public struct MediaCarousel: View {
         case .poster:
             302
         case .landscape:
-            148
+            170
         }
     }
 

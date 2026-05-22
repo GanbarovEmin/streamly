@@ -345,9 +345,9 @@ public final class SeriesDetailViewModel: ObservableObject {
     @Published public private(set) var userSources: [UserMediaSource] = []
     @Published public private(set) var selectedUserSourceID: String?
     @Published public private(set) var manualOverrideReleaseID: String?
-    @Published public var selectedTab: SeriesDetailTab = .releases
+    @Published public var selectedTab: SeriesDetailTab = .details
 
-    public let tabs: [SeriesDetailTab] = [.releases, .trailers, .similar, .cast, .details]
+    public let tabs: [SeriesDetailTab] = [.trailers, .similar, .cast, .details]
 
     private let seriesID: String
     private let provider: any SeriesDetailProviderProtocol

@@ -405,7 +405,7 @@ public struct MovieDetailView: View {
                     playBestMovie(movie)
                 }
                 SecondaryButton(t(.detailChooseRelease), systemImage: "list.bullet.rectangle") {
-                    viewModel.selectedTab = .releases
+                    viewModel.selectedTab = .details
                 }
                 SecondaryButton(t(.detailLibrary), systemImage: "plus") {
                     viewModel.addToLibrary()
@@ -501,7 +501,7 @@ public struct MovieDetailView: View {
     private var tabContent: some View {
         switch viewModel.selectedTab {
         case .releases:
-            releasesTab
+            movieDetailsTab
         case .trailers:
             simpleList(title: t(.detailTabTrailers), items: viewModel.trailers.map { "\($0.title) · \($0.source)" })
         case .similar:
@@ -516,54 +516,19 @@ public struct MovieDetailView: View {
         case .cast:
             castList(title: t(.detailTabCast), cast: viewModel.cast)
         case .details:
-            if let movie = viewModel.movie {
-                simpleList(title: t(.detailTabDetails), items: [
-                    "\(t(.detailRatingTMDB)): \(movie.tmdbRating)",
-                    "\(t(.detailRatingIMDB)): \(movie.imdbRating)",
-                    "\(movie.year) · \(movie.runtime)",
-                    movie.genres.joined(separator: ", ")
-                ])
-            }
+            movieDetailsTab
         }
     }
 
-    private var releasesTab: some View {
-        VStack(alignment: .leading, spacing: CFSpacing.md) {
-            Text(t(.detailTabReleases))
-                .font(CFTypography.sectionTitle)
-                .foregroundStyle(CFColors.textPrimary)
-
-            LazyVStack(spacing: CFSpacing.md) {
-                if let fallbackTitle = viewModel.releaseFallbackTitle {
-                    DetailFallbackBlock(title: fallbackTitle, systemImage: "antenna.radiowaves.left.and.right.slash")
-                } else {
-                    ForEach(viewModel.releases, id: \.release.id) { ranked in
-                        MovieReleaseRow(
-                            ranked: ranked,
-                            languagesText: L10n.format(
-                                .detailReleaseLanguagesFormat,
-                                language: selectedLanguage,
-                                ranked.release.audioLanguages.joined(separator: ", "),
-                                ranked.release.subtitleLanguages.joined(separator: ", ")
-                            ),
-                            copyTitle: t(.detailCopyMagnet),
-                            playTitle: t(.detailWatch),
-                            seedersHelp: t(.tooltipSeeders),
-                            rankingHelp: t(.tooltipRankingScore),
-                            advancedTitle: t(.releaseExplanationAdvanced),
-                            language: selectedLanguage,
-                            onPlay: {
-                                if let movieID = viewModel.movie?.id {
-                                    playManualMovieRelease(ranked.release, movieID: movieID)
-                                }
-                            },
-                            onCopy: {
-                                viewModel.copyMagnet(ranked.release)
-                            }
-                        )
-                    }
-                }
-            }
+    @ViewBuilder
+    private var movieDetailsTab: some View {
+        if let movie = viewModel.movie {
+            simpleList(title: t(.detailTabDetails), items: [
+                "\(t(.detailRatingTMDB)): \(movie.tmdbRating)",
+                "\(t(.detailRatingIMDB)): \(movie.imdbRating)",
+                "\(movie.year) · \(movie.runtime)",
+                movie.genres.joined(separator: ", ")
+            ])
         }
     }
 
@@ -1023,89 +988,6 @@ private struct SourceRailRow: View {
         let audio = ranked.release.audioLanguages.isEmpty ? "audio n/a" : ranked.release.audioLanguages.joined(separator: "/")
         let subtitles = ranked.release.subtitleLanguages.isEmpty ? "subs n/a" : ranked.release.subtitleLanguages.joined(separator: "/")
         return "\(audio) · \(subtitles)"
-    }
-}
-
-private struct MovieReleaseRow: View {
-    let ranked: RankedRelease
-    let languagesText: String
-    let copyTitle: String
-    let playTitle: String
-    let seedersHelp: String
-    let rankingHelp: String
-    let advancedTitle: String
-    let language: AppLanguage
-    let onPlay: () -> Void
-    let onCopy: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        HStack(spacing: CFSpacing.lg) {
-            VStack(alignment: .leading, spacing: CFSpacing.sm) {
-                Text(ranked.release.title)
-                    .font(CFTypography.bodyEmphasis)
-                    .foregroundStyle(CFColors.textPrimary)
-                    .lineLimit(1)
-
-                HStack(spacing: CFSpacing.sm) {
-                    ReleaseExplanationBadges(ranked: ranked, language: language)
-                    QualityBadge(ranked.release.qualityLabel)
-                    if ranked.release.hdr != .none, ranked.release.hdr != .unknown {
-                        CFBadge(ranked.release.hdr.rawValue, tone: .quality)
-                    }
-                    CFBadge(ranked.release.codec.rawValue, tone: .source)
-                    SeedersBadge(ranked.release.seeders)
-                        .help(seedersHelp)
-                SourceBadge(ranked.release.sourceName)
-                    CFBadge(ranked.release.humanReadableSize, tone: .source)
-                }
-
-                Text(languagesText)
-                    .font(CFTypography.caption)
-                    .foregroundStyle(CFColors.textSecondary)
-                    .lineLimit(1)
-
-                ReleaseExplanationSummary(ranked: ranked, language: language)
-                ReleaseAdvancedDetails(ranked: ranked, title: advancedTitle, language: language)
-            }
-
-            Spacer()
-
-            IconButton(systemImage: "play.fill", accessibilityLabel: playTitle, action: onPlay)
-
-            if ranked.release.magnetURI != nil {
-                IconButton(systemImage: "doc.on.doc", accessibilityLabel: copyTitle, action: onCopy)
-            }
-        }
-        .padding(CFSpacing.lg)
-        .background(
-                RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                    .fill(isHovering ? CFColors.hoverFill : CFColors.panelFill)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
-                            .stroke(isHovering ? CFColors.focusRing.opacity(0.40) : CFColors.separator, lineWidth: CFSeparators.width)
-                    )
-        )
-        .overlay(alignment: .bottomLeading) {
-            if isHovering {
-                Capsule()
-                    .fill(CFColors.horizontalGradient)
-                    .frame(width: 96, height: 2)
-                    .padding(.leading, CFSpacing.lg)
-                    .padding(.bottom, CFSpacing.sm)
-            }
-        }
-        .onHover { isHovering = $0 }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint(playTitle)
-        .help(localizedReleaseTooltip(for: ranked, language: language, rankingHelp: rankingHelp))
-        .cfFocusRing(cornerRadius: CFRadius.panel)
-    }
-
-    private var accessibilityLabel: String {
-        "\(ranked.release.title), \(ranked.release.sourceName), \(ranked.release.qualityLabel), \(ranked.release.humanReadableSize), \(ranked.release.seeders) seeders"
     }
 }
 

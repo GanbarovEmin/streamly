@@ -315,20 +315,20 @@ public struct HomeView: View {
     private var preferredPosterWidth: CGFloat {
         switch viewModel.homePreferences.posterSize {
         case .small:
-            return viewModel.homePreferences.layoutDensity == .compact ? 146 : 158
+            return viewModel.homePreferences.layoutDensity == .compact ? 150 : 164
         case .medium:
-            return viewModel.homePreferences.layoutDensity == .compact ? 164 : 178
+            return viewModel.homePreferences.layoutDensity == .compact ? 176 : 192
         case .large:
-            return viewModel.homePreferences.layoutDensity == .compact ? 190 : 206
+            return viewModel.homePreferences.layoutDensity == .compact ? 204 : 224
         }
     }
 
     private var preferredLandscapeWidth: CGFloat {
         switch viewModel.homePreferences.layoutDensity {
         case .compact:
-            320
-        case .comfortable:
             360
+        case .comfortable:
+            420
         }
     }
 }
