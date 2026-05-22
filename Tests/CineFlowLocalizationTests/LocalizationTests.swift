@@ -37,6 +37,32 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.format(.bestReleaseFormat, language: .ru, "Matrix 4K", 88), "Matrix 4K · 88 сидов")
     }
 
+    func testReleaseResourceBundleResolverUsesStreamlyBundleName() throws {
+        XCTAssertEqual(L10n.releaseResourceBundleNames.first, "Streamly_CineFlowLocalization.bundle")
+
+        let resourceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StreamlyLocalizationReleaseBundleTests-\(UUID().uuidString)", isDirectory: true)
+        let bundleURL = resourceURL.appendingPathComponent("Streamly_CineFlowLocalization.bundle", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundleURL, withIntermediateDirectories: true)
+        try """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>CFBundleIdentifier</key>
+            <string>com.streamly.localization-test</string>
+            <key>CFBundleName</key>
+            <string>Streamly_CineFlowLocalization</string>
+            <key>CFBundlePackageType</key>
+            <string>BNDL</string>
+        </dict>
+        </plist>
+        """.write(to: bundleURL.appendingPathComponent("Info.plist"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: resourceURL) }
+
+        XCTAssertNotNil(L10n.releaseResourceBundle(in: resourceURL))
+    }
+
     func testUXWritingKeysResolveInRussianAndEnglish() {
         let keys: [L10nKey] = [
             .commonRetry,
