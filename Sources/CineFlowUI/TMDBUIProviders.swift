@@ -192,7 +192,7 @@ public struct TMDBSeriesDetailProvider: SeriesDetailProviderProtocol {
         let seasonSummaries = series.seasons.filter { $0.seasonNumber > 0 }
         var seasons: [SeriesSeason] = []
 
-        for summary in seasonSummaries.prefix(3) {
+        for summary in seasonSummaries {
             if let tmdbSeriesID,
                let detail = try? await metadataService.seasonDetail(seriesTMDBID: tmdbSeriesID, seasonNumber: summary.seasonNumber) {
                 seasons.append(SeriesSeason(season: detail))

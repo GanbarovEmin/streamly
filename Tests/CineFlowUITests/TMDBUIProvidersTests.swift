@@ -206,6 +206,18 @@ final class TMDBUIProvidersTests: XCTestCase {
         XCTAssertEqual(response?.seasons.first?.episodes.first?.id, "tt0944947:1:1")
     }
 
+    func testTMDBSeriesDetailProviderKeepsAllKnownSeasonsInsteadOfTruncatingToThree() async throws {
+        let series = Self.series(id: "imdb:series:tt0944947", imdbID: "tt0944947", seasonCount: 8)
+        let metadataService = StubMetadataService(seriesDetailsByIMDbID: ["tt0944947": series])
+        let provider = TMDBSeriesDetailProvider(metadataService: metadataService)
+
+        let response = try await provider.seriesDetail(id: "imdb:series:tt0944947")
+
+        XCTAssertEqual(response?.series.seasonsCount, 8)
+        XCTAssertEqual(response?.seasons.map(\.seasonNumber), Array(1...8))
+        XCTAssertEqual(response?.seasons.last?.episodes.first?.id, "tt0944947:8:1")
+    }
+
     func testTMDBSeriesDetailProviderFetchesEpisodeTorrentReleasesByStremioVideoID() async throws {
         let series = Self.series(id: "imdb:series:tt0944947", imdbID: "tt0944947")
         let metadataService = StubMetadataService(seriesDetailsByIMDbID: ["tt0944947": series])
@@ -366,7 +378,7 @@ final class TMDBUIProvidersTests: XCTestCase {
         return Movie(id: item.id, mediaItem: item, metadata: metadata)
     }
 
-    private static func series(id: String, imdbID: String?) -> Series {
+    private static func series(id: String, imdbID: String?, seasonCount: Int = 1) -> Series {
         let metadata = MediaMetadata(
             tmdbId: 1399,
             imdbId: imdbID,
@@ -387,23 +399,25 @@ final class TMDBUIProvidersTests: XCTestCase {
             posterPath: nil,
             metadata: metadata
         )
-        let episode = Episode(
-            id: "tt0944947:1:1",
-            seriesID: id,
-            seasonID: "\(id):season:1",
-            episodeNumber: 1,
-            title: "Winter Is Coming",
-            overview: "Pilot.",
-            runtimeMinutes: 62
-        )
-        let season = Season(
-            id: "\(id):season:1",
-            seriesID: id,
-            seasonNumber: 1,
-            title: "Season 1",
-            episodes: [episode]
-        )
-        return Series(id: item.id, mediaItem: item, metadata: metadata, seasons: [season])
+        let seasons = (1...max(1, seasonCount)).map { seasonNumber in
+            let episode = Episode(
+                id: "tt0944947:\(seasonNumber):1",
+                seriesID: id,
+                seasonID: "\(id):season:\(seasonNumber)",
+                episodeNumber: 1,
+                title: seasonNumber == 1 ? "Winter Is Coming" : "Season \(seasonNumber) Premiere",
+                overview: "Episode.",
+                runtimeMinutes: 62
+            )
+            return Season(
+                id: "\(id):season:\(seasonNumber)",
+                seriesID: id,
+                seasonNumber: seasonNumber,
+                title: "Season \(seasonNumber)",
+                episodes: [episode]
+            )
+        }
+        return Series(id: item.id, mediaItem: item, metadata: metadata, seasons: seasons)
     }
 }
 

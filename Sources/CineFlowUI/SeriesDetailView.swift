@@ -78,24 +78,37 @@ public struct SeriesDetailView: View {
     }
 
     private func seriesDetailLayout(_ series: SeriesDetail) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: CFSpacing.xl) {
-                cinematicSeries(series)
-
-                VStack(alignment: .leading, spacing: CFSpacing.lg) {
-                    tabs
-                    tabContent
-                }
-                .padding(.horizontal, CFSpacing.xxl)
-                .padding(.bottom, CFSpacing.xxl)
-            }
-        }
-        .scrollIndicators(.visible)
-    }
-
-    private func cinematicSeries(_ series: SeriesDetail) -> some View {
         GeometryReader { proxy in
             let railWidth = max(380, min(460, proxy.size.width * 0.29))
+            let railHeight = max(560, proxy.size.height - CFSpacing.xl * 2)
+
+            ZStack(alignment: .topTrailing) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: CFSpacing.xl) {
+                        cinematicSeries(series, reservedRailWidth: railWidth, showsRightRail: false)
+
+                        VStack(alignment: .leading, spacing: CFSpacing.lg) {
+                            tabs
+                            tabContent
+                        }
+                        .padding(.leading, CFSpacing.xxl)
+                        .padding(.trailing, railWidth + CFSpacing.xxl + CFSpacing.xl)
+                        .padding(.bottom, CFSpacing.xxl)
+                    }
+                }
+                .scrollIndicators(.visible)
+
+                seriesRightRail
+                    .frame(width: railWidth, height: railHeight)
+                    .padding(.top, CFSpacing.xl)
+                    .padding(.trailing, CFSpacing.xl)
+            }
+        }
+    }
+
+    private func cinematicSeries(_ series: SeriesDetail, reservedRailWidth: CGFloat? = nil, showsRightRail: Bool = true) -> some View {
+        GeometryReader { proxy in
+            let railWidth = reservedRailWidth ?? max(380, min(460, proxy.size.width * 0.29))
             ZStack(alignment: .bottomLeading) {
                 MovieBackdrop(accentIndex: series.backdropAccentIndex, title: series.title, backdropURL: series.backdropURL)
                     .ignoresSafeArea()
@@ -134,11 +147,15 @@ public struct SeriesDetailView: View {
 
                     Spacer(minLength: CFSpacing.lg)
 
-                    seriesRightRail
-                        .frame(width: railWidth, height: max(600, proxy.size.height - 112))
-                        .padding(.trailing, CFSpacing.xl)
-                        .padding(.top, CFSpacing.xxl + CFSpacing.xs)
-                        .padding(.bottom, CFSpacing.xl)
+                    if showsRightRail {
+                        seriesRightRail
+                            .frame(width: railWidth, height: max(600, proxy.size.height - 112))
+                            .padding(.trailing, CFSpacing.xl)
+                            .padding(.top, CFSpacing.xxl + CFSpacing.xs)
+                            .padding(.bottom, CFSpacing.xl)
+                    } else {
+                        Spacer(minLength: railWidth + CFSpacing.xl)
+                    }
                 }
 
                 seriesActionDock(series)
@@ -364,7 +381,7 @@ public struct SeriesDetailView: View {
                                 onSelect: {
                                     Task {
                                         await viewModel.selectEpisodeAndLoadReleases(id: episode.id)
-                                        showingEpisodeReleases = false
+                                        showingEpisodeReleases = episode.isReleased
                                     }
                                 }
                             )
