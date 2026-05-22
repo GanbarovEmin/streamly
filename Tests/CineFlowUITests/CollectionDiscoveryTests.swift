@@ -80,7 +80,12 @@ final class CollectionDiscoveryTests: XCTestCase {
 
     @MainActor
     func testHomeViewModelShowsCollectionsRowAndCollectionRouteIsDeepLink() async throws {
-        let viewModel = HomeViewModel(seedItems: HomeSeedLibrary.developmentItems)
+        var settings = AppSettings()
+        settings.home.setSection("collections", isEnabled: true)
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            settingsRepository: CoreMockSettingsRepository(settings: settings)
+        )
 
         await viewModel.load()
 

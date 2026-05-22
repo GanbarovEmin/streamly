@@ -55,7 +55,12 @@ final class MoodDiscoveryTests: XCTestCase {
 
     @MainActor
     func testHomeViewModelLoadsWhatToWatchTodaySection() async throws {
-        let viewModel = HomeViewModel(seedItems: HomeSeedLibrary.developmentItems)
+        var settings = AppSettings()
+        settings.home.setSection("moodDiscovery", isEnabled: true)
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            settingsRepository: CoreMockSettingsRepository(settings: settings)
+        )
 
         await viewModel.load()
 

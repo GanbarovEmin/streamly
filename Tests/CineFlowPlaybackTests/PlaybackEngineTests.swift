@@ -35,6 +35,18 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     @MainActor
+    func testLocalTorrentHLSUsesFastStartupProbeSettings() {
+        XCTAssertEqual(
+            TranscodingAVPlaybackService.hlsInputProbeArguments(isLocalTorrentStream: true),
+            ["-probesize", "4194304", "-analyzeduration", "3000000"]
+        )
+        XCTAssertEqual(
+            TranscodingAVPlaybackService.hlsInputProbeArguments(isLocalTorrentStream: false),
+            ["-probesize", "5000000", "-analyzeduration", "5000000"]
+        )
+    }
+
+    @MainActor
     func testLocalHLSBridgeUsesMovieDurationOverrideInsteadOfEventPlaylistDuration() {
         let bridgeURL = URL(string: "http://127.0.0.1:49200/stream.m3u8")!
         let directURL = URL(fileURLWithPath: "/tmp/movie.mp4")

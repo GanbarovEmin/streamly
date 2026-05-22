@@ -128,8 +128,13 @@ public struct ContentContainerView: View {
         } else if route == .history {
             if let historyRepository = environment.watchHistoryRepository {
                 WatchHistoryView(
-                    viewModel: WatchHistoryViewModel(repository: historyRepository),
-                    navigationCoordinator: navigationCoordinator
+                    viewModel: WatchHistoryViewModel(
+                        repository: historyRepository,
+                        libraryRepository: environment.libraryRepository,
+                        metadataService: environment.metadataService
+                    ),
+                    navigationCoordinator: navigationCoordinator,
+                    imagePipeline: imagePipeline
                 )
             } else {
                 LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .watched, imagePipeline: imagePipeline)
@@ -137,8 +142,13 @@ public struct ContentContainerView: View {
         } else if route == .continueWatching {
             if let progressRepository = environment.playbackProgressRepository {
                 ContinueWatchingView(
-                    viewModel: ContinueWatchingViewModel(repository: progressRepository),
-                    navigationCoordinator: navigationCoordinator
+                    viewModel: ContinueWatchingViewModel(
+                        repository: progressRepository,
+                        libraryRepository: environment.libraryRepository,
+                        metadataService: environment.metadataService
+                    ),
+                    navigationCoordinator: navigationCoordinator,
+                    imagePipeline: imagePipeline
                 )
             } else {
                 LibraryView(viewModel: libraryViewModel, navigationCoordinator: navigationCoordinator, initialSection: .watched, imagePipeline: imagePipeline)

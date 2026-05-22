@@ -113,6 +113,10 @@ public final class CoreMockLibraryRepository: LibraryRepositoryProtocol {
         storedItems
     }
 
+    public func mediaItem(id: String) async throws -> MediaItem? {
+        storedItems.first { $0.id == id }
+    }
+
     public func add(_ item: MediaItem) async throws {
         upsert(item)
     }

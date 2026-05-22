@@ -392,7 +392,8 @@ private extension SeriesEpisode {
             title: episode.title,
             runtime: runtimeLabel(minutes: episode.runtimeMinutes, kind: .series),
             overview: episode.overview ?? "",
-            airDate: episode.airDate
+            airDate: episode.airDate,
+            thumbnailURL: episode.thumbnailURL
         )
     }
 }

@@ -38,11 +38,35 @@ public struct HomeSectionPreference: Codable, Equatable, Identifiable, Sendable 
 }
 
 public struct HomePreferences: Codable, Equatable, Sendable {
+    public static let currentSchemaVersion = 3
+
     public static let defaultSectionIDs: [String] = [
         "continueWatching",
         "watchNext",
         "newEpisodes",
         "recommendedTonight",
+        "trendingNow",
+        "recommended",
+        "moreLikeThis",
+        "fromFavoriteGenres",
+        "continueSeries",
+        "hiddenGems",
+        "popularInFavoriteGenres",
+        "notFinishedYet",
+        "recentlyAdded",
+        "trendingMovies",
+        "trendingSeries",
+        "topQuality",
+        "ultraHDR",
+        "favoriteGenres",
+        "unfinishedMovies",
+        "forgottenInLibrary",
+        "collections",
+        "moodDiscovery",
+        "upcomingCalendar"
+    ]
+
+    public static let defaultCollapsedSectionIDs: Set<String> = [
         "recommended",
         "moreLikeThis",
         "fromFavoriteGenres",
@@ -74,14 +98,20 @@ public struct HomePreferences: Codable, Equatable, Sendable {
         sections: [HomeSectionPreference] = Self.defaultSections(),
         layoutDensity: HomeLayoutDensity = .comfortable,
         posterSize: HomePosterSizePreference = .medium,
-        schemaVersion: Int = 1,
+        schemaVersion: Int = Self.currentSchemaVersion,
         syncRevision: Int = 0,
         updatedAt: Date = Date(timeIntervalSince1970: 0)
     ) {
-        self.sections = Self.normalizedSections(sections)
+        let normalizedSections = Self.normalizedSections(sections)
+        if schemaVersion < Self.currentSchemaVersion {
+            self.sections = Self.netflixFocusMigratedSections(normalizedSections)
+            self.schemaVersion = Self.currentSchemaVersion
+        } else {
+            self.sections = normalizedSections
+            self.schemaVersion = schemaVersion
+        }
         self.layoutDensity = layoutDensity
         self.posterSize = posterSize
-        self.schemaVersion = schemaVersion
         self.syncRevision = max(0, syncRevision)
         self.updatedAt = updatedAt
     }
@@ -169,7 +199,11 @@ public struct HomePreferences: Codable, Equatable, Sendable {
 
     public static func defaultSections() -> [HomeSectionPreference] {
         defaultSectionIDs.enumerated().map { index, sectionID in
-            HomeSectionPreference(sectionID: sectionID, isEnabled: true, order: index)
+            HomeSectionPreference(
+                sectionID: sectionID,
+                isEnabled: !defaultCollapsedSectionIDs.contains(sectionID),
+                order: index
+            )
         }
     }
 
@@ -181,8 +215,11 @@ public struct HomePreferences: Codable, Equatable, Sendable {
             }
         }
 
+        let defaultByID = Dictionary(uniqueKeysWithValues: defaultSections().map { ($0.sectionID, $0) })
         var normalized = defaultSectionIDs.enumerated().map { index, sectionID in
-            firstByID.removeValue(forKey: sectionID) ?? HomeSectionPreference(sectionID: sectionID, isEnabled: true, order: index)
+            firstByID.removeValue(forKey: sectionID)
+                ?? defaultByID[sectionID]
+                ?? HomeSectionPreference(sectionID: sectionID, isEnabled: true, order: index)
         }
         let unknownSections = firstByID.values.sorted { lhs, rhs in
             if lhs.order == rhs.order {
@@ -204,6 +241,16 @@ public struct HomePreferences: Codable, Equatable, Sendable {
         }
         return normalized.enumerated().map { index, preference in
             HomeSectionPreference(sectionID: preference.sectionID, isEnabled: preference.isEnabled, order: index)
+        }
+    }
+
+    private static func netflixFocusMigratedSections(_ sections: [HomeSectionPreference]) -> [HomeSectionPreference] {
+        sections.map { section in
+            HomeSectionPreference(
+                sectionID: section.sectionID,
+                isEnabled: defaultCollapsedSectionIDs.contains(section.sectionID) ? false : section.isEnabled,
+                order: section.order
+            )
         }
     }
 }

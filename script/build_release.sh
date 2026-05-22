@@ -110,6 +110,7 @@ fi
 
 resolve_ffmpeg_executable() {
     if [[ -n "$FFMPEG_EXECUTABLE" && -x "$FFMPEG_EXECUTABLE" ]]; then
+        assert_portable_ffmpeg_runtime "$FFMPEG_EXECUTABLE" "STREAMLY_FFMPEG_EXECUTABLE"
         printf '%s\n' "$FFMPEG_EXECUTABLE"
         return 0
     fi
@@ -122,12 +123,39 @@ resolve_ffmpeg_executable() {
     )
     local candidate
     for candidate in "${candidates[@]}"; do
-        if [[ -x "$candidate" ]]; then
+        if [[ -x "$candidate" ]] && is_portable_ffmpeg_runtime "$candidate"; then
             printf '%s\n' "$candidate"
             return 0
+        elif [[ -x "$candidate" ]]; then
+            echo "Skipping ffmpeg candidate with non-portable dynamic dependencies: $candidate" >&2
         fi
     done
     return 1
+}
+
+is_portable_ffmpeg_runtime() {
+    local executable="$1"
+    "$executable" -version >/dev/null 2>&1 || return 1
+    ! otool -L "$executable" 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -Eq '^(/opt/homebrew/|/usr/local/(Cellar|opt)/|/opt/local/)'
+}
+
+assert_portable_ffmpeg_runtime() {
+    local executable="$1"
+    local label="$2"
+    if ! "$executable" -version >/dev/null 2>&1; then
+        echo "Refusing to package Streamly with a non-working ffmpeg runtime: $label" >&2
+        "$executable" -version >&2 || true
+        exit 76
+    fi
+
+    local nonportable_dependencies
+    nonportable_dependencies="$(otool -L "$executable" 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -E '^(/opt/homebrew/|/usr/local/(Cellar|opt)/|/opt/local/)' || true)"
+    if [[ -n "$nonportable_dependencies" ]]; then
+        echo "Refusing to package Streamly because ffmpeg runtime has non-portable dynamic dependencies: $label" >&2
+        echo "$nonportable_dependencies" >&2
+        echo "Use a self-contained ffmpeg runtime, for example Vendor/ffmpeg/ffmpeg or Stremio's bundled ffmpeg." >&2
+        exit 76
+    fi
 }
 
 cleanup_extended_attributes() {
@@ -223,6 +251,7 @@ if ! FFMPEG_SOURCE="$(resolve_ffmpeg_executable)"; then
 fi
 /usr/bin/ditto --noextattr --norsrc "$FFMPEG_SOURCE" "$APP_BUNDLE/Contents/Resources/ffmpeg"
 chmod 755 "$APP_BUNDLE/Contents/Resources/ffmpeg"
+assert_portable_ffmpeg_runtime "$APP_BUNDLE/Contents/Resources/ffmpeg" "Contents/Resources/ffmpeg"
 
 if ! otool -l "$APP_BUNDLE/Contents/MacOS/$APP_NAME" | grep -q '@executable_path/../Frameworks'; then
     install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP_BUNDLE/Contents/MacOS/$APP_NAME"

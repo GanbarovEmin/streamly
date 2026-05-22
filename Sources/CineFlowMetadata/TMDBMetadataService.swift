@@ -322,12 +322,12 @@ public final class TMDBMetadataService: MetadataServiceProtocol {
 
     public func seasonDetail(seriesTMDBID: Int, seasonNumber: Int) async throws -> Season {
         let dto: TMDBSeasonDetailDTO = try await fetch(path: "/tv/\(seriesTMDBID)/season/\(seasonNumber)")
-        return dto.season(seriesTMDBID: seriesTMDBID)
+        return dto.season(seriesTMDBID: seriesTMDBID, imageURLBuilder: imageURLBuilder)
     }
 
     public func episodeDetail(seriesTMDBID: Int, seasonNumber: Int, episodeNumber: Int) async throws -> Episode {
         let dto: TMDBEpisodeDTO = try await fetch(path: "/tv/\(seriesTMDBID)/season/\(seasonNumber)/episode/\(episodeNumber)")
-        return dto.episode(seriesTMDBID: seriesTMDBID, seasonNumber: seasonNumber)
+        return dto.episode(seriesTMDBID: seriesTMDBID, seasonNumber: seasonNumber, imageURLBuilder: imageURLBuilder)
     }
 
     public func popularMovies() async throws -> [MediaItem] {
@@ -791,14 +791,14 @@ private struct TMDBSeasonDetailDTO: Decodable {
         case episodes
     }
 
-    func season(seriesTMDBID: Int) -> Season {
+    func season(seriesTMDBID: Int, imageURLBuilder: TMDBImageURLBuilder) -> Season {
         Season(
             id: "tmdb:tv:\(seriesTMDBID):season:\(seasonNumber)",
             seriesID: "tmdb:tv:\(seriesTMDBID)",
             seasonNumber: seasonNumber,
             title: name,
             overview: overview,
-            episodes: episodes.map { $0.episode(seriesTMDBID: seriesTMDBID, seasonNumber: seasonNumber) }
+            episodes: episodes.map { $0.episode(seriesTMDBID: seriesTMDBID, seasonNumber: seasonNumber, imageURLBuilder: imageURLBuilder) }
         )
     }
 }
@@ -809,6 +809,7 @@ private struct TMDBEpisodeDTO: Decodable {
     let overview: String?
     let runtime: Int?
     let airDate: Date?
+    let stillPath: String?
 
     enum CodingKeys: String, CodingKey {
         case episodeNumber = "episode_number"
@@ -816,9 +817,10 @@ private struct TMDBEpisodeDTO: Decodable {
         case overview
         case runtime
         case airDate = "air_date"
+        case stillPath = "still_path"
     }
 
-    func episode(seriesTMDBID: Int, seasonNumber: Int) -> Episode {
+    func episode(seriesTMDBID: Int, seasonNumber: Int, imageURLBuilder: TMDBImageURLBuilder) -> Episode {
         let seasonID = "tmdb:tv:\(seriesTMDBID):season:\(seasonNumber)"
         return Episode(
             id: "\(seasonID):episode:\(episodeNumber)",
@@ -828,7 +830,8 @@ private struct TMDBEpisodeDTO: Decodable {
             title: name ?? "Episode \(episodeNumber)",
             overview: overview,
             runtimeMinutes: runtime,
-            airDate: airDate
+            airDate: airDate,
+            thumbnailURL: imageURLBuilder.url(path: stillPath, size: .backdrop)
         )
     }
 }

@@ -553,15 +553,9 @@ public struct MediaCarousel: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: verticalSpacing) {
-            VStack(alignment: .leading, spacing: CFSpacing.xs) {
-                Text(title)
-                    .font(CFTypography.sectionTitle)
-                    .foregroundStyle(CFColors.textPrimary)
-
-                Capsule()
-                    .fill(CFColors.horizontalGradient)
-                    .frame(width: 64, height: 2)
-            }
+            Text(title)
+                .font(CFTypography.sectionTitle)
+                .foregroundStyle(CFColors.textPrimary)
 
             ScrollView(.horizontal) {
                 HStack(spacing: CFSpacing.md) {

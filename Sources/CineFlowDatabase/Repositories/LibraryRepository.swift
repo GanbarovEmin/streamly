@@ -24,8 +24,12 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
                     INNER JOIN library_items ON library_items.media_id = media_items.id
                     ORDER BY library_items.added_at DESC
                     """
-            ).map(mediaItem(from:))
+            ).map(CineFlowDatabase.mediaItem(from:))
         }
+    }
+
+    public func mediaItem(id: String) async throws -> MediaItem? {
+        try await mediaRepository.item(id: id)
     }
 
     public func libraryEntries() async throws -> [LibraryItem] {
@@ -81,7 +85,7 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
                     INNER JOIN favorite_items ON favorite_items.media_id = media_items.id
                     ORDER BY favorite_items.added_at DESC
                     """
-            ).map(mediaItem(from:))
+            ).map(CineFlowDatabase.mediaItem(from:))
         }
     }
 
@@ -130,7 +134,7 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
                     """
             ).map { row in
                 WatchedMediaItem(
-                    item: mediaItem(from: row),
+                    item: CineFlowDatabase.mediaItem(from: row),
                     watchedAt: date(from: row["history_watched_at"]),
                     positionSeconds: row["history_position_seconds"]
                 )
@@ -178,7 +182,7 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
                     """
             ).map { row in
                 RatedMediaItem(
-                    item: mediaItem(from: row),
+                    item: CineFlowDatabase.mediaItem(from: row),
                     rating: row["user_rating"],
                     updatedAt: date(from: row["rating_updated_at"])
                 )
@@ -346,7 +350,7 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
                     ORDER BY user_list_items.added_at DESC
                     """,
                 arguments: [listID]
-            ).map(mediaItem(from:))
+            ).map(CineFlowDatabase.mediaItem(from:))
         }
     }
 

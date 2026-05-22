@@ -47,6 +47,7 @@ public struct PlayerView: View {
                         .cfAnimation(CFMotion.cinematic, value: viewModel.controlsAreVisible, reduceMotion: reduceMotion)
                 }
                 .overlay(renderOverlay)
+                .overlay(bufferingCenterOverlay)
                 .overlay(mouseActivityOverlay)
                 .overlay(keyboardInput)
                 .ignoresSafeArea()
@@ -171,15 +172,23 @@ public struct PlayerView: View {
                     resumePromptCard(resumePrompt)
                 }
 
-                if case .buffering(let progress) = viewModel.status.bufferingState {
-                    bufferingCard(progress: progress)
-                }
-
                 if let nextEpisodePrompt = viewModel.nextEpisodePrompt {
                     nextEpisodeCard(nextEpisodePrompt)
                 }
             }
             .padding(.bottom, 112)
+        }
+    }
+
+    @ViewBuilder
+    private var bufferingCenterOverlay: some View {
+        if case .buffering(let progress) = viewModel.status.bufferingState {
+            bufferingCard(progress: progress)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .padding(.horizontal, CFSpacing.xl)
+                .padding(.bottom, viewModel.controlsAreVisible ? 96 : 0)
+                .allowsHitTesting(true)
+                .transition(.opacity)
         }
     }
 
@@ -373,10 +382,10 @@ public struct PlayerView: View {
     }
 
     private var controls: some View {
-        VStack(spacing: CFSpacing.md) {
+        VStack(spacing: 10) {
             timelineControl
 
-            HStack(spacing: CFSpacing.md) {
+            HStack(spacing: 10) {
                 Text(viewModel.elapsedLabel)
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textSecondary)
@@ -409,30 +418,37 @@ public struct PlayerView: View {
                     ),
                     in: 0...1
                 )
-                .frame(width: 120)
+                .frame(width: 96)
                 .keyboardShortcut(.upArrow, modifiers: [])
                 .accessibilityLabel(t(.playerControlVolume))
                 .accessibilityValue("\(Int(viewModel.status.volume * 100))%")
                 .help(t(.playerControlVolume))
 
-                Menu(t(.playerControlAudio)) {
+                Menu {
                     Text(viewModel.audioSelectionSummary)
                     audioBoostControls
-                    if !viewModel.audioMenuTracks.isEmpty {
-                        Divider()
-                    }
-                    ForEach(viewModel.audioMenuTracks) { track in
-                        Button("\(track.isSelected ? "✓ " : "")\(track.languageLabel) · \(track.title) · \(track.qualityLabel)") {
-                            Task { await viewModel.selectAudioTrack(id: track.id) }
+                    Divider()
+                    Section("Tracks") {
+                        if viewModel.audioMenuTracks.isEmpty {
+                            Text("No audio tracks found")
+                        } else {
+                            ForEach(viewModel.audioMenuTracks) { track in
+                                Button(trackMenuTitle(track)) {
+                                    Task { await viewModel.selectAudioTrack(id: track.id) }
+                                }
+                                .keyboardShortcut(track.languageLabel.lowercased().hasPrefix("r") ? "1" : "2", modifiers: [.command, .option])
+                            }
                         }
-                        .keyboardShortcut(track.languageLabel.lowercased().hasPrefix("r") ? "1" : "2", modifiers: [.command, .option])
                     }
+                } label: {
+                    compactMenuLabel(systemImage: "waveform", isActive: viewModel.status.selectedAudioTrackId != nil)
                 }
+                .buttonStyle(.plain)
                 .keyboardShortcut("a", modifiers: [])
-                .help(t(.playerControlAudio))
+                .help(audioMenuHelp)
                 .accessibilityLabel(t(.playerControlAudio))
 
-                Menu(t(.playerControlSubtitles)) {
+                Menu {
                     Button(t(.playerControlSubtitlesOff)) {
                         Task { await viewModel.disableSubtitles() }
                     }
@@ -446,7 +462,7 @@ public struct PlayerView: View {
                             Text("No embedded subtitles")
                         } else {
                             ForEach(viewModel.embeddedSubtitleTracks) { track in
-                                Button(subtitleMenuTitle(track)) {
+                                Button(subtitleMenuTitle(track, isSelected: isSelectedSubtitle(track))) {
                                     Task { await viewModel.selectSubtitleTrack(id: track.id) }
                                 }
                             }
@@ -461,7 +477,7 @@ public struct PlayerView: View {
                             Task { await viewModel.reloadLocalSubtitles() }
                         }
                         ForEach(viewModel.localSubtitleTracks) { track in
-                            Button(subtitleMenuTitle(track)) {
+                            Button(subtitleMenuTitle(track, isSelected: isSelectedSubtitle(track))) {
                                 Task { await viewModel.selectSubtitleTrack(id: track.id) }
                             }
                         }
@@ -469,7 +485,7 @@ public struct PlayerView: View {
 
                     Section("Online") {
                         ForEach(viewModel.onlineSubtitleTracks) { track in
-                            Button(subtitleMenuTitle(track)) {
+                            Button(subtitleMenuTitle(track, isSelected: isSelectedSubtitle(track))) {
                                 Task { await viewModel.selectSubtitleTrack(id: track.id) }
                             }
                         }
@@ -485,14 +501,17 @@ public struct PlayerView: View {
                             Task { await viewModel.findOnlineSubtitles() }
                         }
                     }
+                } label: {
+                    compactMenuLabel(systemImage: "captions.bubble", isActive: viewModel.status.selectedSubtitleTrackId != nil)
                 }
+                .buttonStyle(.plain)
                 .keyboardShortcut("s", modifiers: [])
-                .help(t(.playerControlSubtitles))
+                .help(subtitleMenuHelp)
                 .accessibilityLabel(t(.playerControlSubtitles))
 
-                Menu(t(.playerControlSpeed)) {
+                Menu {
                     ForEach(viewModel.speedChoices, id: \.self) { speed in
-                        Button("\(speed, specifier: "%.2g")x") {
+                        Button("\(isSelectedSpeed(speed) ? "✓ " : "")\(speed, specifier: "%.2g")x") {
                             Task { await viewModel.setPlaybackSpeed(speed) }
                         }
                     }
@@ -505,8 +524,11 @@ public struct PlayerView: View {
                         Task { await viewModel.increasePlaybackSpeed() }
                     }
                     .keyboardShortcut(".", modifiers: [])
+                } label: {
+                    compactMenuLabel(systemImage: "speedometer", isActive: abs(viewModel.status.playbackSpeed - 1) > 0.001)
                 }
-                .help(t(.playerControlSpeed))
+                .buttonStyle(.plain)
+                .help("\(t(.playerControlSpeed)): \(viewModel.status.playbackSpeed, specifier: "%.2g")x")
                 .accessibilityLabel(t(.playerControlSpeed))
 
                 if !viewModel.chapters.isEmpty {
@@ -545,11 +567,12 @@ public struct PlayerView: View {
 
             }
         }
-        .padding(CFSpacing.lg)
+        .padding(.horizontal, CFSpacing.lg)
+        .padding(.vertical, 14)
         .cinematicChrome(in: RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
         .padding(.horizontal, CFSpacing.xl)
-        .padding(.bottom, CFSpacing.lg)
+        .padding(.bottom, CFSpacing.md)
     }
 
     private var timelineControl: some View {
@@ -745,6 +768,52 @@ public struct PlayerView: View {
         viewModel.status.state == .playing ? "pause.fill" : "play.fill"
     }
 
+    private func compactMenuLabel(systemImage: String, isActive: Bool) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(isActive ? CFColors.textPrimary : CFColors.textSecondary)
+            .frame(width: 34, height: 34)
+            .background(
+                Circle()
+                    .fill(isActive ? CFColors.hoverFill : CFColors.panelFill)
+                    .overlay(
+                        Circle()
+                            .stroke(isActive ? CFColors.focusRing.opacity(0.5) : CFColors.separator, lineWidth: CFSeparators.width)
+                    )
+            )
+            .contentShape(Circle())
+    }
+
+    private func trackMenuTitle(_ track: AudioMenuTrack) -> String {
+        "\(track.isSelected ? "✓ " : "")\(track.languageLabel) · \(track.title) · \(track.qualityLabel)"
+    }
+
+    private var audioMenuHelp: String {
+        guard let selected = viewModel.audioMenuTracks.first(where: \.isSelected) else {
+            return t(.playerControlAudio)
+        }
+        return "\(t(.playerControlAudio)): \(selected.languageLabel) · \(selected.title) · \(selected.qualityLabel)"
+    }
+
+    private var subtitleMenuHelp: String {
+        guard let selected = selectedSubtitleTrack else {
+            return "\(t(.playerControlSubtitles)): \(t(.playerControlSubtitlesOff))"
+        }
+        return "\(t(.playerControlSubtitles)): \(subtitleMenuTitle(selected, isSelected: false))"
+    }
+
+    private var selectedSubtitleTrack: SubtitleTrack? {
+        viewModel.subtitleTracks.first { $0.id == viewModel.status.selectedSubtitleTrackId }
+    }
+
+    private func isSelectedSubtitle(_ track: SubtitleTrack) -> Bool {
+        track.id == viewModel.status.selectedSubtitleTrackId
+    }
+
+    private func isSelectedSpeed(_ speed: Double) -> Bool {
+        abs(viewModel.status.playbackSpeed - speed) < 0.001
+    }
+
     private func timeLabel(_ value: Double) -> String {
         let totalSeconds = max(0, Int(value.rounded()))
         let hours = totalSeconds / 3_600
@@ -756,9 +825,10 @@ public struct PlayerView: View {
         return String(format: "%d:%02d", minutes, seconds)
     }
 
-    private func subtitleMenuTitle(_ track: SubtitleTrack) -> String {
+    private func subtitleMenuTitle(_ track: SubtitleTrack, isSelected: Bool) -> String {
+        let selected = isSelected ? "✓ " : ""
         let forced = track.isForced ? " · Forced" : ""
-        return "\(track.languageCode.uppercased()) · \(track.displayName)\(forced)"
+        return "\(selected)\(track.languageCode.uppercased()) · \(track.displayName)\(forced)"
     }
 
     private var sourceInfo: String {

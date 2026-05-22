@@ -15,7 +15,7 @@ final class SeriesDetailViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.series?.seasonsCount, 2)
         XCTAssertEqual(viewModel.series?.rating, "8.4")
         XCTAssertEqual(viewModel.series?.genres, ["Drama", "Fantasy"])
-        XCTAssertEqual(viewModel.tabs, [.seasons, .releases, .trailers, .similar, .cast, .details])
+        XCTAssertEqual(viewModel.tabs, [.releases, .trailers, .similar, .cast, .details])
     }
 
     @MainActor

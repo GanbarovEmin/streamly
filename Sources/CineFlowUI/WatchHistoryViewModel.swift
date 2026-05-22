@@ -23,24 +23,45 @@ public struct WatchHistoryDateGroup: Identifiable, Equatable, Sendable {
     public let entries: [WatchHistoryItem]
 }
 
+public struct ContinueWatchingCardItem: Identifiable, Equatable, Sendable {
+    public let progress: PlaybackProgress
+    public let model: CFMediaCardModel
+
+    public var id: String { progress.id }
+}
+
 @MainActor
 public final class ContinueWatchingViewModel: ObservableObject {
     @Published public private(set) var state: WatchHistoryState = .loading
     @Published public private(set) var items: [PlaybackProgress] = []
+    @Published public private(set) var cardItems: [ContinueWatchingCardItem] = []
 
     private let repository: any PlaybackProgressRepositoryProtocol
+    private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let metadataService: (any MetadataServiceProtocol)?
 
-    public init(repository: any PlaybackProgressRepositoryProtocol) {
+    public init(
+        repository: any PlaybackProgressRepositoryProtocol,
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        metadataService: (any MetadataServiceProtocol)? = nil
+    ) {
         self.repository = repository
+        self.libraryRepository = libraryRepository
+        self.metadataService = metadataService
     }
 
     public func load() async {
         state = .loading
         do {
             items = try await repository.continueWatching(includeCompleted: false)
+            let resolver = ViewingCardResolver(libraryRepository: libraryRepository, metadataService: metadataService)
+            cardItems = await items.asyncMap { progress in
+                ContinueWatchingCardItem(progress: progress, model: await resolver.card(for: progress))
+            }
             state = items.isEmpty ? .empty : .loaded
         } catch {
             items = []
+            cardItems = []
             state = .failed(CineFlowError.from(error, fallbackCategory: .database).userMessage)
         }
     }
@@ -51,7 +72,10 @@ public final class ContinueWatchingViewModel: ObservableObject {
     }
 
     public func cardModel(for progress: PlaybackProgress) -> CFMediaCardModel {
-        CFMediaCardModel(
+        if let resolved = cardItems.first(where: { $0.progress.id == progress.id })?.model {
+            return resolved
+        }
+        return CFMediaCardModel(
             id: progress.episodeID ?? progress.mediaID,
             title: title(for: progress),
             metadata: "\(Int(progress.progressPercent.rounded()))% · \(timeLabel(progress.positionSeconds))",
@@ -62,10 +86,9 @@ public final class ContinueWatchingViewModel: ObservableObject {
     }
 
     private func title(for progress: PlaybackProgress) -> String {
-        if progress.mediaID.contains(":tv:") {
-            return progress.episodeID == nil ? "Сериал" : "Серия"
-        }
-        return "Фильм"
+        progress.episodeID != nil || progress.mediaID.contains(":tv:")
+            ? "Без названия сериала"
+            : "Без названия"
     }
 
     private func timeLabel(_ seconds: Double) -> String {
@@ -81,9 +104,18 @@ public final class WatchHistoryViewModel: ObservableObject {
     @Published public private(set) var selectedFilter: WatchHistoryFilter = .all
 
     private let repository: any WatchHistoryRepositoryProtocol
+    private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let metadataService: (any MetadataServiceProtocol)?
+    private var cardModelsByEntryID: [String: CFMediaCardModel] = [:]
 
-    public init(repository: any WatchHistoryRepositoryProtocol) {
+    public init(
+        repository: any WatchHistoryRepositoryProtocol,
+        libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        metadataService: (any MetadataServiceProtocol)? = nil
+    ) {
         self.repository = repository
+        self.libraryRepository = libraryRepository
+        self.metadataService = metadataService
     }
 
     public var visibleEntries: [WatchHistoryItem] {
@@ -118,9 +150,15 @@ public final class WatchHistoryViewModel: ObservableObject {
         state = .loading
         do {
             entries = try await repository.entries(limit: 500)
+            let resolver = ViewingCardResolver(libraryRepository: libraryRepository, metadataService: metadataService)
+            let pairs = await entries.asyncMap { entry in
+                (entry.id, await resolver.card(for: entry, dateTitle: self.dateTitle(entry.lastWatchedAt)))
+            }
+            cardModelsByEntryID = Dictionary(uniqueKeysWithValues: pairs)
             state = entries.isEmpty ? .empty : .loaded
         } catch {
             entries = []
+            cardModelsByEntryID = [:]
             state = .failed(CineFlowError.from(error, fallbackCategory: .database).userMessage)
         }
     }
@@ -133,6 +171,7 @@ public final class WatchHistoryViewModel: ObservableObject {
         do {
             try await repository.clear()
             entries = []
+            cardModelsByEntryID = [:]
             state = .empty
         } catch {
             state = .failed(CineFlowError.from(error, fallbackCategory: .database).userMessage)
@@ -140,7 +179,10 @@ public final class WatchHistoryViewModel: ObservableObject {
     }
 
     public func cardModel(for entry: WatchHistoryItem) -> CFMediaCardModel {
-        CFMediaCardModel(
+        if let resolved = cardModelsByEntryID[entry.id] {
+            return resolved
+        }
+        return CFMediaCardModel(
             id: entry.episodeID ?? entry.mediaID,
             title: title(for: entry),
             metadata: "\(Int(entry.progressPercent.rounded()))% · \(dateTitle(entry.lastWatchedAt))",
@@ -151,10 +193,9 @@ public final class WatchHistoryViewModel: ObservableObject {
     }
 
     private func title(for entry: WatchHistoryItem) -> String {
-        if entry.mediaID.contains(":tv:") {
-            return entry.episodeID == nil ? "Сериал" : "Серия"
-        }
-        return "Фильм"
+        entry.episodeID != nil || entry.mediaID.contains(":tv:")
+            ? "Без названия сериала"
+            : "Без названия"
     }
 
     private func dateTitle(_ date: Date) -> String {
@@ -162,5 +203,16 @@ public final class WatchHistoryViewModel: ObservableObject {
         formatter.dateStyle = .medium
         formatter.timeStyle = .none
         return formatter.string(from: date)
+    }
+}
+
+private extension Array {
+    func asyncMap<T>(_ transform: (Element) async -> T) async -> [T] {
+        var values: [T] = []
+        values.reserveCapacity(count)
+        for element in self {
+            values.append(await transform(element))
+        }
+        return values
     }
 }

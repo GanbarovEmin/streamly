@@ -98,8 +98,10 @@ final class ReleasePackagingTests: XCTestCase {
         XCTAssertTrue(releaseScript.contains("STREAMLY_FFMPEG_EXECUTABLE"))
         XCTAssertTrue(releaseScript.contains("Contents/Resources/ffmpeg"))
         XCTAssertTrue(releaseScript.contains("Refusing to package Streamly without ffmpeg runtime"))
+        XCTAssertTrue(releaseScript.contains("ffmpeg runtime has non-portable dynamic dependencies"))
         XCTAssertTrue(dmgScript.contains("Contents/Resources/ffmpeg"))
         XCTAssertTrue(dmgScript.contains("Refusing to create DMG without ffmpeg runtime"))
+        XCTAssertTrue(dmgScript.contains("ffmpeg runtime has non-portable dynamic dependencies"))
     }
 
     func testProductionAppDoesNotSeedDevelopmentDataByDefaultAndUsesRealSubtitles() throws {

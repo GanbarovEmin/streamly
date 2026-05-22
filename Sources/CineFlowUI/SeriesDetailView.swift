@@ -250,27 +250,53 @@ public struct SeriesDetailView: View {
     }
 
     private var episodeBrowserRail: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Toggle(isOn: Binding(
-                get: { viewModel.isSeriesTracked },
-                set: { value in Task { await viewModel.setSeriesTracked(value) } }
-            )) {
-                Text("Track Series")
-                    .font(CFTypography.caption)
-                    .foregroundStyle(CFColors.textPrimary)
-            }
-            .toggleStyle(.switch)
+        VStack(alignment: .leading, spacing: CFSpacing.lg) {
+            HStack(alignment: .center, spacing: CFSpacing.md) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Эпизоды")
+                        .font(CFTypography.sectionTitle)
+                        .foregroundStyle(CFColors.textPrimary)
+                    Text(viewModel.selectedSeason.map { "Сезон \($0.seasonNumber)" } ?? "Выбор сезона")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
 
-            HStack {
+                Spacer()
+
+                Toggle(isOn: Binding(
+                    get: { viewModel.isSeriesTracked },
+                    set: { value in Task { await viewModel.setSeriesTracked(value) } }
+                )) {
+                    EmptyView()
+                }
+                .toggleStyle(.switch)
+                .help(viewModel.isSeriesTracked ? "Сериал отслеживается" : "Отслеживать сериал")
+            }
+
+            if let episode = viewModel.selectedEpisode {
+                SelectedSeriesEpisodePreview(
+                    episode: episode,
+                    progress: viewModel.progressValue(for: episode.id),
+                    fallbackArtworkURL: seriesEpisodeArtworkURL,
+                    dateText: episodeDateText(episode),
+                    actionTitle: viewModel.primaryWatchActionTitle,
+                    onPlay: {
+                        if let series = viewModel.series, episode.isReleased {
+                            playBestSeries(series, episode: episode)
+                        }
+                    }
+                )
+            }
+
+            HStack(spacing: CFSpacing.md) {
                 Button {
                     selectAdjacentEpisode(offset: -1)
                 } label: {
                     Image(systemName: "chevron.left")
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .help("Пред.")
-
-                Spacer()
 
                 Menu(viewModel.selectedSeason.map { "Сезон \($0.seasonNumber)" } ?? "Сезон") {
                     ForEach(viewModel.seasons) { season in
@@ -280,13 +306,13 @@ public struct SeriesDetailView: View {
                     }
                 }
                 .menuStyle(.borderlessButton)
-
-                Spacer()
+                .frame(maxWidth: .infinity)
 
                 Button {
                     selectAdjacentEpisode(offset: 1)
                 } label: {
                     Image(systemName: "chevron.right")
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .help("След.")
@@ -327,13 +353,14 @@ public struct SeriesDetailView: View {
             )
 
             ScrollView {
-                LazyVStack(spacing: 16) {
+                LazyVStack(spacing: 10) {
                     ForEach(filteredEpisodes) { episode in
                         SeriesEpisodeRailRow(
                             episode: episode,
                             progress: viewModel.progressValue(for: episode.id),
                             isSelected: viewModel.selectedEpisode?.id == episode.id,
                             dateText: episodeDateText(episode),
+                            fallbackArtworkURL: seriesEpisodeArtworkURL,
                             upcomingBadge: t(.seriesEpisodeUpcomingBadge),
                             upcomingHelp: t(.seriesEpisodeUpcomingHelp),
                             openHelp: t(.seriesEpisodeOpenSourcesHelp),
@@ -350,7 +377,27 @@ public struct SeriesDetailView: View {
             .scrollIndicators(.visible)
         }
         .padding(CFSpacing.lg)
-        .cfPanelBackground(fill: CFColors.railFill, shadow: .panel)
+        .background(
+            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                .fill(CFColors.railFill.opacity(0.96))
+                .overlay(
+                    LinearGradient(
+                        colors: [CFColors.elevatedFill, CFColors.clear],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                        .stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width)
+                )
+        )
+        .cfShadow(.panel)
+    }
+
+    private var seriesEpisodeArtworkURL: URL? {
+        viewModel.series?.backdropURL ?? viewModel.series?.posterURL
     }
 
     private var filteredEpisodes: [SeriesEpisode] {
@@ -574,7 +621,7 @@ public struct SeriesDetailView: View {
     private var tabContent: some View {
         switch viewModel.selectedTab {
         case .seasons:
-            seasonsTab
+            releasesTab
         case .releases:
             releasesTab
         case .trailers:
@@ -1018,11 +1065,127 @@ private struct SeriesReleaseRow: View {
     }
 }
 
+private struct SelectedSeriesEpisodePreview: View {
+    let episode: SeriesEpisode
+    let progress: Double
+    let fallbackArtworkURL: URL?
+    let dateText: String
+    let actionTitle: String
+    let onPlay: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: CFSpacing.md) {
+            SeriesEpisodeArtwork(
+                episode: episode,
+                fallbackArtworkURL: fallbackArtworkURL,
+                height: 150,
+                showsLargeBadge: true
+            )
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("S\(episode.seasonNumber)E\(String(format: "%02d", episode.episodeNumber))")
+                    .font(CFTypography.overline)
+                    .foregroundStyle(CFColors.accentPrimary)
+                Text(episode.title)
+                    .font(CFTypography.bodyEmphasis)
+                    .foregroundStyle(CFColors.textPrimary)
+                    .lineLimit(2)
+                Text(dateText.isEmpty ? episode.runtime : "\(dateText) · \(episode.runtime)")
+                    .font(CFTypography.caption)
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+                if !episode.overview.isEmpty {
+                    Text(episode.overview)
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textSecondary)
+                        .lineLimit(3)
+                }
+            }
+
+            if progress > 0 {
+                ProgressBar(value: progress)
+                    .frame(height: 5)
+            }
+
+            SecondaryButton(actionTitle, systemImage: "play.fill", action: onPlay)
+                .disabled(!episode.isReleased)
+        }
+        .padding(CFSpacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                .fill(CFColors.elevatedFill)
+                .overlay(
+                    RoundedRectangle(cornerRadius: CFRadius.panel, style: .continuous)
+                        .stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width)
+                )
+        )
+    }
+}
+
+private struct SeriesEpisodeArtwork: View {
+    let episode: SeriesEpisode
+    let fallbackArtworkURL: URL?
+    let height: CGFloat
+    let showsLargeBadge: Bool
+
+    private var artworkURL: URL? {
+        episode.thumbnailURL ?? fallbackArtworkURL
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            CFColors.backgroundTertiary,
+                            CFColors.surfaceOverlay,
+                            CFColors.accentSecondary.opacity(0.26)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            if let artworkURL {
+                CFCachedAsyncImage(url: artworkURL, contentMode: .fill)
+                    .saturation(episode.thumbnailURL == nil ? 0.72 : 1.0)
+                    .opacity(episode.thumbnailURL == nil ? 0.62 : 1.0)
+            } else {
+                Image(systemName: episode.isUpcoming ? "play.slash.fill" : "play.rectangle.fill")
+                    .font(.system(size: showsLargeBadge ? 30 : 18, weight: .semibold))
+                    .foregroundStyle(CFColors.textMuted)
+            }
+
+            LinearGradient(
+                colors: [CFColors.clear, CFColors.backgroundPrimary.opacity(0.74)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            Text("E\(episode.episodeNumber)")
+                .font(showsLargeBadge ? CFTypography.bodyEmphasis : CFTypography.caption.weight(.bold))
+                .foregroundStyle(CFColors.textPrimary)
+                .padding(.horizontal, showsLargeBadge ? 11 : 8)
+                .frame(height: showsLargeBadge ? 28 : 22)
+                .background(Capsule().fill(CFColors.backgroundPrimary.opacity(0.66)))
+                .padding(showsLargeBadge ? CFSpacing.md : CFSpacing.xs)
+        }
+        .frame(height: height)
+        .clipShape(RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                .stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width)
+        )
+    }
+}
+
 private struct SeriesEpisodeRailRow: View {
     let episode: SeriesEpisode
     let progress: Double
     let isSelected: Bool
     let dateText: String
+    let fallbackArtworkURL: URL?
     let upcomingBadge: String
     let upcomingHelp: String
     let openHelp: String
@@ -1030,24 +1193,18 @@ private struct SeriesEpisodeRailRow: View {
 
     var body: some View {
         Button(action: onSelect) {
-            HStack(alignment: .center, spacing: 16) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous)
-                        .fill(CFColors.surfaceOverlay.opacity(0.64))
-                    if let thumbnailURL = episode.thumbnailURL {
-                        CFCachedAsyncImage(url: thumbnailURL, contentMode: .fill)
-                    } else {
-                        Image(systemName: episode.isUpcoming ? "play.slash.fill" : "play.rectangle.fill")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(CFColors.textMuted)
-                    }
-                }
-                .frame(width: 106, height: 60)
-                .clipShape(RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous))
+            HStack(alignment: .center, spacing: CFSpacing.md) {
+                SeriesEpisodeArtwork(
+                    episode: episode,
+                    fallbackArtworkURL: fallbackArtworkURL,
+                    height: 66,
+                    showsLargeBadge: false
+                )
+                .frame(width: 116)
 
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(episode.episodeNumber). \(episode.title)")
+                        Text(episode.title)
                             .font(CFTypography.body)
                             .foregroundStyle(CFColors.textPrimary)
                             .lineLimit(1)
@@ -1074,16 +1231,20 @@ private struct SeriesEpisodeRailRow: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
+            .padding(CFSpacing.sm)
             .background(
-                RoundedRectangle(cornerRadius: CFRadius.control, style: .continuous)
-                    .fill(isSelected ? CFColors.activeFill.opacity(0.72) : CFColors.clear)
+                RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                    .fill(isSelected ? CFColors.activeFill.opacity(0.74) : CFColors.backgroundSecondary.opacity(0.28))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                            .stroke(isSelected ? CFColors.focusRing.opacity(0.48) : CFColors.separatorSubtle, lineWidth: CFSeparators.width)
+                    )
             )
         }
         .buttonStyle(.plain)
         .disabled(false)
         .help(episode.isUpcoming ? upcomingHelp : openHelp)
+        .cfFocusRing(cornerRadius: CFRadius.component)
     }
 }
 

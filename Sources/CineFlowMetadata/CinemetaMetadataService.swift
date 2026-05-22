@@ -3,6 +3,9 @@ import CineFlowCore
 import Foundation
 
 public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCacheControlProtocol {
+    private static let topCatalogPageSize = 50
+    private static let topCatalogPageLimit = 4
+
     private let cacheRepository: CacheRepository?
     private let session: URLSession
     private let baseURL: URL
@@ -74,15 +77,17 @@ public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCac
     }
 
     public func popularMovies() async throws -> [MediaItem] {
-        try await catalog(type: .movie, id: "top")
+        try await topCatalog(type: .movie)
     }
 
     public func popularSeries() async throws -> [MediaItem] {
-        try await catalog(type: .series, id: "top")
+        try await topCatalog(type: .series)
     }
 
     public func trending() async throws -> [MediaItem] {
-        try await popularMovies() + popularSeries()
+        async let movies = catalog(type: .movie, id: "top")
+        async let series = catalog(type: .series, id: "top")
+        return try await movies + series
     }
 
     public func videos(for mediaID: String) async throws -> [Trailer] {
@@ -118,6 +123,24 @@ public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCac
         }
         let response: CinemetaCatalogResponse = try await fetch(path: path)
         return response.metas.compactMap { $0.mediaItem(typeHint: type) }
+    }
+
+    private func topCatalog(type: CinemetaMediaType) async throws -> [MediaItem] {
+        var seen: Set<String> = []
+        var items: [MediaItem] = []
+
+        for pageIndex in 0..<Self.topCatalogPageLimit {
+            let skip = pageIndex * Self.topCatalogPageSize
+            let extraPath = skip == 0 ? nil : "skip=\(skip)"
+            let pageItems = try await catalog(type: type, id: "top", extraPath: extraPath)
+            guard !pageItems.isEmpty else { break }
+
+            for item in pageItems where seen.insert(item.id).inserted {
+                items.append(item)
+            }
+        }
+
+        return items
     }
 
     private func meta(for mediaID: String) async throws -> CinemetaMetaDTO {
@@ -541,6 +564,8 @@ private struct CinemetaVideoDTO: Decodable {
     let runtime: Int?
     let firstAired: String?
     let released: String?
+    let thumbnail: String?
+    let poster: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -554,6 +579,8 @@ private struct CinemetaVideoDTO: Decodable {
         case runtime
         case firstAired
         case released
+        case thumbnail
+        case poster
     }
 
     func episodeModel(seriesID: String, seasonNumber: Int) -> Episode {
@@ -566,13 +593,19 @@ private struct CinemetaVideoDTO: Decodable {
             title: name ?? title ?? "Episode \(episodeNumber)",
             overview: overview ?? description,
             runtimeMinutes: runtime,
-            airDate: Self.date(from: firstAired ?? released)
+            airDate: Self.date(from: firstAired ?? released),
+            thumbnailURL: Self.url(from: thumbnail ?? poster)
         )
     }
 
     private static func date(from value: String?) -> Date? {
         guard let value else { return nil }
         return ISO8601DateFormatter().date(from: value)
+    }
+
+    private static func url(from value: String?) -> URL? {
+        guard let value = value?.nilIfBlank else { return nil }
+        return URL(string: value)
     }
 }
 

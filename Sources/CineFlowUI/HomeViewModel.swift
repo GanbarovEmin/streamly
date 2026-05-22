@@ -16,6 +16,7 @@ public enum HomeSectionKind: String, CaseIterable, Equatable, Sendable {
     case moodDiscovery
     case watchNext
     case continueWatching
+    case trendingNow
     case popularMovies
     case popularSeries
     case trendingMovies
@@ -42,6 +43,7 @@ public extension HomeSectionKind {
         .watchNext,
         .newEpisodes,
         .recommendedTonight,
+        .trendingNow,
         .recommended,
         .moreLikeThis,
         .fromFavoriteGenres,
@@ -350,6 +352,7 @@ public final class HomeViewModel: ObservableObject {
     private let recommendationService: (any RecommendationServiceProtocol)?
     private let progressRepository: (any PlaybackProgressRepositoryProtocol)?
     private let libraryRepository: (any LibraryRepositoryProtocol)?
+    private let metadataService: (any MetadataServiceProtocol)?
     private let watchNextProvider: (any WatchNextProviderProtocol)?
     private let newEpisodesProvider: (any NewEpisodesProviderProtocol)?
     private let upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)?
@@ -366,6 +369,7 @@ public final class HomeViewModel: ObservableObject {
         recommendationService: (any RecommendationServiceProtocol)? = nil,
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        metadataService: (any MetadataServiceProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
         upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
@@ -375,6 +379,7 @@ public final class HomeViewModel: ObservableObject {
         self.recommendationService = recommendationService
         self.progressRepository = progressRepository
         self.libraryRepository = libraryRepository
+        self.metadataService = metadataService
         self.watchNextProvider = watchNextProvider
         self.newEpisodesProvider = newEpisodesProvider
         self.upcomingCalendarProvider = upcomingCalendarProvider
@@ -386,6 +391,7 @@ public final class HomeViewModel: ObservableObject {
         recommendationService: (any RecommendationServiceProtocol)? = nil,
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        metadataService: (any MetadataServiceProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
         upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
@@ -395,6 +401,7 @@ public final class HomeViewModel: ObservableObject {
         self.recommendationService = recommendationService
         self.progressRepository = progressRepository
         self.libraryRepository = libraryRepository
+        self.metadataService = metadataService
         self.watchNextProvider = watchNextProvider
         self.newEpisodesProvider = newEpisodesProvider
         self.upcomingCalendarProvider = upcomingCalendarProvider
@@ -406,6 +413,7 @@ public final class HomeViewModel: ObservableObject {
         recommendationService: (any RecommendationServiceProtocol)? = nil,
         progressRepository: (any PlaybackProgressRepositoryProtocol)? = nil,
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
+        metadataService: (any MetadataServiceProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
         upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
@@ -419,6 +427,7 @@ public final class HomeViewModel: ObservableObject {
             recommendationService: recommendationService,
             progressRepository: progressRepository,
             libraryRepository: libraryRepository,
+            metadataService: metadataService,
             watchNextProvider: watchNextProvider,
             newEpisodesProvider: newEpisodesProvider,
             upcomingCalendarProvider: upcomingCalendarProvider
@@ -443,6 +452,7 @@ public final class HomeViewModel: ObservableObject {
             recommendationService: recommendationService,
             progressRepository: progressRepository,
             libraryRepository: libraryRepository,
+            metadataService: metadataService,
             watchNextProvider: watchNextProvider ?? SeriesDetailWatchNextProvider(
                 provider: TMDBSeriesDetailProvider(metadataService: metadataService)
             ),
@@ -471,7 +481,7 @@ public final class HomeViewModel: ObservableObject {
 
         do {
             let appSettings = await settingsRepository?.appSettings ?? AppSettings()
-            let preferences = appSettings.home
+            let preferences = Self.presentationPreferences(appSettings.home)
             let localRecommendationsEnabled = appSettings.recommendations.localRecommendationsEnabled
             let hiddenMediaIDs = appSettings.tasteProfile.hiddenMediaIDs
             homePreferences = preferences
@@ -542,6 +552,16 @@ public final class HomeViewModel: ObservableObject {
                 libraryIDs: Set(visibleLibraryItems.map(\.id)),
                 watchlistIDs: []
             )
+            let viewingResolver = ViewingCardResolver(
+                seedItems: visibleItems,
+                libraryRepository: libraryRepository,
+                metadataService: metadataService
+            )
+            var resolvedContinueItems: [CFMediaCardModel] = []
+            resolvedContinueItems.reserveCapacity(visibleProgressRecords.count)
+            for progress in visibleProgressRecords {
+                resolvedContinueItems.append(await viewingResolver.card(for: progress))
+            }
             lastMoodCandidates = moodCandidates
             lastMoodTasteProfile = moodTasteProfile
             self.moodPick = moodPick
@@ -551,6 +571,7 @@ public final class HomeViewModel: ObservableObject {
                 HomeContentBuilder.build(
                     items: visibleItems,
                     progressRecords: visibleProgressRecords,
+                    resolvedContinueItems: resolvedContinueItems,
                     watchNextItems: watchNextItems,
                     newEpisodes: newEpisodes,
                     upcomingItems: upcomingItems,
@@ -586,10 +607,27 @@ public final class HomeViewModel: ObservableObject {
 
     public func refreshHomePreferences() async {
         guard let settingsRepository else { return }
-        let preferences = await settingsRepository.appSettings.home
+        let preferences = Self.presentationPreferences(await settingsRepository.appSettings.home)
         guard preferences != homePreferences else { return }
         homePreferences = preferences
         sections = Self.applyHomePreferences(preferences, to: allLoadedSections)
+    }
+
+    private static func presentationPreferences(_ preferences: HomePreferences) -> HomePreferences {
+        guard preferences.schemaVersion < HomePreferences.currentSchemaVersion else {
+            return preferences
+        }
+
+        var migrated = preferences
+        migrated.sections = migrated.sections.map { section in
+            var section = section
+            if HomePreferences.defaultCollapsedSectionIDs.contains(section.sectionID) {
+                section.isEnabled = false
+            }
+            return section
+        }
+        migrated.schemaVersion = HomePreferences.currentSchemaVersion
+        return migrated
     }
 
     private static func applyHomePreferences(_ preferences: HomePreferences, to sections: [HomeSection]) -> [HomeSection] {
@@ -766,6 +804,7 @@ private enum HomeContentBuilder {
     static func build(
         items: [HomeSeedItem],
         progressRecords: [PlaybackProgress],
+        resolvedContinueItems: [CFMediaCardModel],
         watchNextItems: [WatchNextEpisode],
         newEpisodes: [NewSeriesEpisode],
         upcomingItems: [UpcomingCalendarItem],
@@ -797,16 +836,7 @@ private enum HomeContentBuilder {
 
         let continueItems: [CFMediaCardModel]
         if usesProgressRepository {
-            continueItems = progressRecords.map { progress in
-                let mediaItem = mediaByID[progress.mediaID]
-                let seedItem = seedItem(
-                    for: progress.mediaID,
-                    title: mediaItem?.displayTitle,
-                    seedByID: seedByID,
-                    seedByTitle: seedByTitle
-                )
-                return card(from: progress, mediaItem: mediaItem, seedItem: seedItem)
-            }
+            continueItems = resolvedContinueItems
         } else {
             continueItems = cards(from: items.filter { $0.progress != nil }, limit: 6)
         }
@@ -849,6 +879,7 @@ private enum HomeContentBuilder {
         let recommendedTonightCards = localRecommendationsEnabled ? cards(from: moodItems, titlePrefix: nil) : []
         let becauseYouWatchedCards = localRecommendationsEnabled ? becauseYouWatchedCards(from: items, progressRecords: progressRecords, limit: 8) : []
         let recentlyAddedCards = cards(from: items.filter(\.isRecentlyAdded), limit: 8)
+        let trendingNowCards = cards(from: trendingNowItems(from: items), limit: 8)
         let trendingMovieCards = cards(from: ranked(items, kind: .movie), limit: 8)
         let trendingSeriesCards = cards(from: ranked(items, kind: .series), limit: 8)
         let bestQualityCards = cards(from: bestQualityItems(from: items), limit: 8)
@@ -883,6 +914,7 @@ private enum HomeContentBuilder {
         appendSection(&sections, kind: .watchNext, title: "Watch Next", cardStyle: .landscape, items: Array(watchNextCards.prefix(6)))
         appendSection(&sections, kind: .newEpisodes, title: "New Episodes", cardStyle: .landscape, items: Array(newEpisodeCards.prefix(6)))
         appendSection(&sections, kind: .recommendedTonight, title: "Recommended Tonight", cardStyle: .landscape, items: Array(recommendedTonightCards.prefix(6)))
+        appendSection(&sections, kind: .trendingNow, title: "Trending Now", cardStyle: .poster, items: trendingNowCards)
         appendRecommendationSections(recommendationSections, to: &sections)
         if !recommendationSections.contains(where: { $0.kind == .becauseYouWatched }) {
             appendSection(&sections, kind: .recommended, title: "Because You Watched", cardStyle: .poster, items: becauseYouWatchedCards)
@@ -1016,6 +1048,15 @@ private enum HomeContentBuilder {
         items
             .filter { $0.kind == kind }
             .sorted { $0.popularityRank < $1.popularityRank }
+    }
+
+    private static func trendingNowItems(from items: [HomeSeedItem]) -> [HomeSeedItem] {
+        items.sorted { lhs, rhs in
+            if lhs.popularityRank == rhs.popularityRank {
+                return lhs.title < rhs.title
+            }
+            return lhs.popularityRank < rhs.popularityRank
+        }
     }
 
     private static func cards(from items: [HomeSeedItem], limit: Int) -> [CFMediaCardModel] {
@@ -1260,10 +1301,12 @@ private enum HomeContentBuilder {
         if let title = seedItem?.title, !title.isEmpty {
             return title
         }
-        if let title = mediaItem?.displayTitle, !title.isEmpty {
+        if let title = mediaItem?.displayTitle,
+           !title.isEmpty,
+           !isTechnicalMediaIdentifier(title) {
             return title
         }
-        return progress.episodeID == nil ? "Фильм" : "Серия"
+        return progress.episodeID == nil ? "Без названия" : "Без названия сериала"
     }
 
     private static func isTechnicalMediaIdentifier(_ title: String) -> Bool {

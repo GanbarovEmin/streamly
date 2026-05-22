@@ -69,9 +69,9 @@ final class TMDBMetadataServiceTests: XCTestCase {
         let service = makeService { request in
             switch request.url?.path {
             case "/3/tv/1399/season/1":
-                return (200, #"{"id":10,"season_number":1,"name":"Season 1","overview":"Start","episodes":[{"id":101,"episode_number":1,"name":"Winter Is Coming","overview":"Pilot","runtime":62,"air_date":"2011-04-17"}]}"#)
+                return (200, #"{"id":10,"season_number":1,"name":"Season 1","overview":"Start","episodes":[{"id":101,"episode_number":1,"name":"Winter Is Coming","overview":"Pilot","runtime":62,"air_date":"2011-04-17","still_path":"/winter.jpg"}]}"#)
             case "/3/tv/1399/season/1/episode/1":
-                return (200, #"{"id":101,"episode_number":1,"name":"Winter Is Coming","overview":"Pilot","runtime":62,"air_date":"2011-04-17"}"#)
+                return (200, #"{"id":101,"episode_number":1,"name":"Winter Is Coming","overview":"Pilot","runtime":62,"air_date":"2011-04-17","still_path":"/winter.jpg"}"#)
             case "/3/movie/popular", "/3/tv/popular", "/3/trending/all/week", "/3/movie/603/similar":
                 return (200, #"{"page":1,"results":[],"total_pages":1,"total_results":0}"#)
             case "/3/movie/603/videos":
@@ -95,7 +95,9 @@ final class TMDBMetadataServiceTests: XCTestCase {
 
         XCTAssertEqual(season.id, "tmdb:tv:1399:season:1")
         XCTAssertEqual(season.episodes.first?.title, "Winter Is Coming")
+        XCTAssertEqual(season.episodes.first?.thumbnailURL?.absoluteString, "https://image.tmdb.org/t/p/w1280/winter.jpg")
         XCTAssertEqual(episode.id, "tmdb:tv:1399:season:1:episode:1")
+        XCTAssertEqual(episode.thumbnailURL?.absoluteString, "https://image.tmdb.org/t/p/w1280/winter.jpg")
         XCTAssertEqual(videos.first?.url.absoluteString, "https://www.youtube.com/watch?v=abc")
         XCTAssertEqual(credits.first?.profileURL?.absoluteString, "https://image.tmdb.org/t/p/w185/neo.jpg")
         XCTAssertEqual(TMDBImageURLBuilder().url(path: "/poster.jpg", size: .poster)?.absoluteString, "https://image.tmdb.org/t/p/w500/poster.jpg")

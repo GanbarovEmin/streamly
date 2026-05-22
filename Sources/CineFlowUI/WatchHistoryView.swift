@@ -6,10 +6,16 @@ public struct ContinueWatchingView: View {
     @StateObject private var viewModel: ContinueWatchingViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
+    private let imagePipeline: CineFlowImagePipeline?
 
-    public init(viewModel: ContinueWatchingViewModel, navigationCoordinator: NavigationCoordinator) {
+    public init(
+        viewModel: ContinueWatchingViewModel,
+        navigationCoordinator: NavigationCoordinator,
+        imagePipeline: CineFlowImagePipeline? = nil
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
         self.navigationCoordinator = navigationCoordinator
+        self.imagePipeline = imagePipeline
     }
 
     public var body: some View {
@@ -51,22 +57,37 @@ public struct ContinueWatchingView: View {
             }
                 .frame(maxWidth: .infinity, minHeight: 360)
         case .loaded:
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 430), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
-                ForEach(viewModel.items, id: \.id) { progress in
-                    LandscapeCard(model: viewModel.cardModel(for: progress)) {
-                        navigationCoordinator.navigate(to: .player(mediaID: progress.episodeID ?? progress.mediaID))
-                    }
-                    .contextMenu {
-                        Button("Продолжить", systemImage: "play.fill") {
-                            navigationCoordinator.navigate(to: .player(mediaID: progress.episodeID ?? progress.mediaID))
-                        }
-                        Button("Убрать из продолжения", systemImage: "xmark") {
-                            Task { await viewModel.clear(progress) }
+            ScrollView(.horizontal) {
+                HStack(spacing: CFSpacing.md) {
+                    ForEach(viewModel.cardItems) { item in
+                        LandscapeCard(
+                            model: item.model,
+                            action: {
+                                navigationCoordinator.navigate(to: .player(mediaID: item.progress.episodeID ?? item.progress.mediaID))
+                            },
+                            imageDataLoader: imageDataLoader
+                        )
+                        .frame(width: 380)
+                        .contextMenu {
+                            Button("Продолжить", systemImage: "play.fill") {
+                                navigationCoordinator.navigate(to: .player(mediaID: item.progress.episodeID ?? item.progress.mediaID))
+                            }
+                            Button("Убрать из продолжения", systemImage: "xmark") {
+                                Task { await viewModel.clear(item.progress) }
+                            }
                         }
                     }
                 }
+                .padding(.vertical, CFSpacing.xs)
+                .padding(.horizontal, 1)
             }
+            .scrollIndicators(.hidden)
         }
+    }
+
+    private var imageDataLoader: CFImageDataLoader? {
+        guard let imagePipeline else { return nil }
+        return { url in try await imagePipeline.data(for: url) }
     }
 
     private var selectedLanguage: AppLanguage {
@@ -82,10 +103,16 @@ public struct WatchHistoryView: View {
     @StateObject private var viewModel: WatchHistoryViewModel
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
+    private let imagePipeline: CineFlowImagePipeline?
 
-    public init(viewModel: WatchHistoryViewModel, navigationCoordinator: NavigationCoordinator) {
+    public init(
+        viewModel: WatchHistoryViewModel,
+        navigationCoordinator: NavigationCoordinator,
+        imagePipeline: CineFlowImagePipeline? = nil
+    ) {
         _viewModel = StateObject(wrappedValue: viewModel)
         self.navigationCoordinator = navigationCoordinator
+        self.imagePipeline = imagePipeline
     }
 
     public var body: some View {
@@ -164,11 +191,16 @@ public struct WatchHistoryView: View {
                                 .font(CFTypography.sectionTitle)
                                 .foregroundStyle(CFColors.textPrimary)
 
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 320, maximum: 430), spacing: CFSpacing.md)], spacing: CFSpacing.md) {
+                            LazyVStack(spacing: CFSpacing.md) {
                                 ForEach(group.entries) { entry in
-                                    LandscapeCard(model: viewModel.cardModel(for: entry)) {
-                                        navigationCoordinator.navigate(to: .player(mediaID: entry.episodeID ?? entry.mediaID))
-                                    }
+                                    LandscapeCard(
+                                        model: viewModel.cardModel(for: entry),
+                                        action: {
+                                            navigationCoordinator.navigate(to: .player(mediaID: entry.episodeID ?? entry.mediaID))
+                                        },
+                                        imageDataLoader: imageDataLoader
+                                    )
+                                    .frame(maxWidth: 720)
                                 }
                             }
                         }
@@ -187,6 +219,11 @@ public struct WatchHistoryView: View {
         case .series:
             "Сериалы"
         }
+    }
+
+    private var imageDataLoader: CFImageDataLoader? {
+        guard let imagePipeline else { return nil }
+        return { url in try await imagePipeline.data(for: url) }
     }
 
     private var selectedLanguage: AppLanguage {

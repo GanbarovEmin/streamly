@@ -134,7 +134,7 @@ final class SettingsViewModelTests: XCTestCase {
 
         await viewModel.load()
         await viewModel.updateHomeSection("continueWatching", isEnabled: false)
-        await viewModel.updateHomeSection("trendingMovies", isEnabled: false)
+        await viewModel.updateHomeSection("trendingNow", isEnabled: false)
         await viewModel.moveHomeSection("recommended", direction: .up)
         await viewModel.updateHomeLayoutDensity(.compact)
         await viewModel.updateHomePosterSize(.large)
@@ -145,7 +145,7 @@ final class SettingsViewModelTests: XCTestCase {
         let customized = await settingsRepository.appSettings.home
         let customizedSettings = await settingsRepository.appSettings
         XCTAssertFalse(customized.isSectionEnabled("continueWatching"))
-        XCTAssertFalse(customized.isSectionEnabled("trendingMovies"))
+        XCTAssertFalse(customized.isSectionEnabled("trendingNow"))
         XCTAssertEqual(customized.layoutDensity, .compact)
         XCTAssertEqual(customized.posterSize, .large)
         XCTAssertGreaterThan(customized.syncRevision, 0)

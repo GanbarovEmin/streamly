@@ -118,6 +118,7 @@ public struct Episode: Identifiable, Codable, Equatable, Sendable {
     public let overview: String?
     public let runtimeMinutes: Int?
     public let airDate: Date?
+    public let thumbnailURL: URL?
 
     public init(
         id: String,
@@ -127,7 +128,8 @@ public struct Episode: Identifiable, Codable, Equatable, Sendable {
         title: String,
         overview: String? = nil,
         runtimeMinutes: Int? = nil,
-        airDate: Date? = nil
+        airDate: Date? = nil,
+        thumbnailURL: URL? = nil
     ) {
         self.id = id
         self.seriesID = seriesID
@@ -137,5 +139,6 @@ public struct Episode: Identifiable, Codable, Equatable, Sendable {
         self.overview = overview
         self.runtimeMinutes = runtimeMinutes
         self.airDate = airDate
+        self.thumbnailURL = thumbnailURL
     }
 }

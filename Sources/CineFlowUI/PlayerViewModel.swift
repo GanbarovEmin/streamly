@@ -178,7 +178,7 @@ public enum PlayerKeyboardShortcut: Equatable, Sendable {
 
 @MainActor
 public final class PlayerViewModel: ObservableObject {
-    static let startupPlayableBufferTargetBytes: Int64 = 16 * 1024 * 1024
+    static let startupPlayableBufferTargetBytes: Int64 = 4 * 1024 * 1024
 
     @Published public private(set) var status: PlaybackStatus
     @Published public private(set) var errorMessage: String?
@@ -778,7 +778,12 @@ public final class PlayerViewModel: ObservableObject {
         controlsAreVisible = true
         controlsHideTask = Task { [weak self] in
             guard delay > 0 else { return }
-            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
             await MainActor.run {
                 self?.controlsAreVisible = false
             }

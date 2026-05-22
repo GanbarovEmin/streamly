@@ -721,10 +721,9 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             "-loglevel", "info",
             "-nostdin",
             "-fflags", "+genpts",
-            "-probesize", isLocalTorrentStream ? "33554432" : "5000000",
-            "-analyzeduration", isLocalTorrentStream ? "30000000" : "5000000",
             "-rw_timeout", readTimeoutMicros,
         ]
+        arguments += Self.hlsInputProbeArguments(isLocalTorrentStream: isLocalTorrentStream)
         if startTimeSeconds > 0 {
             arguments += ["-ss", Self.ffmpegTimeLabel(startTimeSeconds)]
         }
@@ -765,6 +764,13 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         process.standardOutput = logPipe
         process.standardError = logPipe
         return process
+    }
+
+    static func hlsInputProbeArguments(isLocalTorrentStream: Bool) -> [String] {
+        [
+            "-probesize", isLocalTorrentStream ? "4194304" : "5000000",
+            "-analyzeduration", isLocalTorrentStream ? "3000000" : "5000000"
+        ]
     }
 
     private func videoMode(for attempt: Int, isLocalTorrentStream: Bool) -> FFmpegHLSVideoMode {

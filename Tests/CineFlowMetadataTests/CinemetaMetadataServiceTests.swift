@@ -68,6 +68,7 @@ final class CinemetaMetadataServiceTests: XCTestCase {
         XCTAssertEqual(series.seasons.map(\.seasonNumber), [1])
         XCTAssertEqual(series.seasons.first?.episodes.map(\.id), ["tt0944947:1:1", "tt0944947:1:2"])
         XCTAssertEqual(series.seasons.first?.episodes.first?.title, "Winter Is Coming")
+        XCTAssertEqual(series.seasons.first?.episodes.first?.thumbnailURL?.absoluteString, "https://images.example.com/got-s1e1.jpg")
     }
 
     func testCompositeMetadataServiceKeepsCinemetaPrimaryWhenBothProvidersCanSearch() async throws {
@@ -102,6 +103,26 @@ final class CinemetaMetadataServiceTests: XCTestCase {
         let results = try await composite.search(query: "matrix")
 
         XCTAssertEqual(results.map(\.id), ["tmdb:movie:603"])
+    }
+
+    func testPopularMoviesLoadsMultipleTopCatalogPages() async throws {
+        let service = makeService { request in
+            switch request.url?.path {
+            case "/catalog/movie/top.json":
+                return (200, Self.pagedCatalogFixture(id: "tt0000001", title: "First Page Movie"))
+            case "/catalog/movie/top/skip=50.json":
+                return (200, Self.pagedCatalogFixture(id: "tt0000051", title: "Second Page Movie"))
+            case "/catalog/movie/top/skip=100.json":
+                return (200, #"{"metas":[]}"#)
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (404, "{}")
+            }
+        }
+
+        let results = try await service.popularMovies()
+
+        XCTAssertEqual(results.map(\.id), ["imdb:movie:tt0000001", "imdb:movie:tt0000051"])
     }
 
     func testCinemetaMatchCandidatesScoreExactAlternativeYearAndType() async throws {
@@ -203,6 +224,25 @@ final class CinemetaMetadataServiceTests: XCTestCase {
     }
     """
 
+    private static func pagedCatalogFixture(id: String, title: String) -> String {
+        """
+        {
+          "metas": [
+            {
+              "id": "\(id)",
+              "imdb_id": "\(id)",
+              "type": "movie",
+              "name": "\(title)",
+              "description": "Paged catalog fixture.",
+              "genre": ["Drama"],
+              "imdbRating": "7.1",
+              "releaseInfo": "2026"
+            }
+          ]
+        }
+        """
+    }
+
     private static let movieDetailFixture = """
     {
       "meta": {
@@ -247,7 +287,8 @@ final class CinemetaMetadataServiceTests: XCTestCase {
             "episode": 1,
             "overview": "Pilot.",
             "released": "2011-04-17T05:00:00.000Z",
-            "runtime": 62
+            "runtime": 62,
+            "thumbnail": "https://images.example.com/got-s1e1.jpg"
           },
           {
             "id": "tt0944947:1:2",

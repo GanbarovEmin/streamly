@@ -863,6 +863,31 @@ final class PlayerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testPlayerViewModelKeepsControlsVisibleWhenPointerActivityResetsAutoHideTimer() async throws {
+        let viewModel = PlayerViewModel(
+            service: MockPlaybackService(),
+            mediaSource: PlaybackMediaSource(
+                id: "tmdb:movie:603",
+                title: "The Matrix",
+                url: URL(fileURLWithPath: "/tmp/matrix.mkv")
+            )
+        )
+
+        viewModel.showControlsTemporarily(autoHideAfter: 0.08)
+        try await Task.sleep(nanoseconds: 30_000_000)
+        viewModel.showControlsTemporarily(autoHideAfter: 0.08)
+        try await Task.sleep(nanoseconds: 30_000_000)
+
+        XCTAssertTrue(viewModel.controlsAreVisible)
+
+        for _ in 0..<50 where viewModel.controlsAreVisible {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        XCTAssertFalse(viewModel.controlsAreVisible)
+    }
+
+    @MainActor
     func testPlayerViewModelShowsNextEpisodePromptNearCompletion() async throws {
         let nextEpisode = PlayerNextEpisodePrompt(
             title: "S1E2 The Kingsroad",
@@ -994,7 +1019,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertTrue(presentation.message.contains("50%"))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Download speed:") && $0.contains("/s") }))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("GB") && $0.contains("(10%)") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer:") && $0.contains("16.0 MB") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer:") && $0.contains("4.0 MB") }))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Full file ETA:") }))
         XCTAssertFalse((presentation.primaryDetails + presentation.advancedDetails).contains(where: { $0.contains("unavailable") }))
 
@@ -1053,7 +1078,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertEqual(presentation.message, "Waiting for playable pieces")
         XCTAssertFalse(presentation.message.contains("10%"))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("(10%)") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer: 0 B / 16.0 MB") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer: 0 B / 4.0 MB") }))
     }
 
     @MainActor

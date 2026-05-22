@@ -41,6 +41,24 @@ read_info_value() {
     /usr/libexec/PlistBuddy -c "Print :$1" "$2"
 }
 
+assert_portable_ffmpeg_runtime() {
+    local executable="$1"
+    if ! "$executable" -version >/dev/null 2>&1; then
+        echo "Refusing to create DMG with a non-working ffmpeg runtime in $APP_BUNDLE." >&2
+        "$executable" -version >&2 || true
+        exit 76
+    fi
+
+    local nonportable_dependencies
+    nonportable_dependencies="$(otool -L "$executable" 2>/dev/null | awk 'NR > 1 { print $1 }' | grep -E '^(/opt/homebrew/|/usr/local/(Cellar|opt)/|/opt/local/)' || true)"
+    if [[ -n "$nonportable_dependencies" ]]; then
+        echo "Refusing to create DMG because ffmpeg runtime has non-portable dynamic dependencies in $APP_BUNDLE." >&2
+        echo "$nonportable_dependencies" >&2
+        echo "Rebuild with a self-contained ffmpeg runtime before packaging." >&2
+        exit 76
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)
@@ -119,6 +137,7 @@ if [[ ! -x "$FFMPEG_RUNTIME" ]]; then
     echo "Expected executable: Contents/Resources/ffmpeg" >&2
     exit 75
 fi
+assert_portable_ffmpeg_runtime "$FFMPEG_RUNTIME"
 
 VERSION="$(read_info_value CFBundleShortVersionString "$APP_BUNDLE/Contents/Info.plist")"
 DMG_PATH="${DMG_PATH:-$DMG_DIR/$APP_NAME-$VERSION.dmg}"

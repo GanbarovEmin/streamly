@@ -22,30 +22,14 @@ final class HomeViewModelTests: XCTestCase {
                 .continueWatching,
                 .watchNext,
                 .recommendedTonight,
-                .recommended,
-                .recentlyAdded,
-                .trendingMovies,
-                .trendingSeries,
-                .topQuality,
-                .ultraHDR,
-                .unfinishedMovies,
-                .collections,
-                .moodDiscovery
+                .trendingNow
             ]
         )
         XCTAssertEqual(viewModel.sections.map(\.title), [
             "Continue Watching",
             "Watch Next",
             "Recommended Tonight",
-            "Because You Watched",
-            "Recently Added",
-            "Trending Movies",
-            "Trending Series",
-            "Best Quality Available",
-            "4K/HDR Available",
-            "Unfinished Movies",
-            "Collections",
-            "What to Watch Today?"
+            "Trending Now"
         ])
         XCTAssertEqual(viewModel.sections[0].cardStyle, .landscape)
         XCTAssertEqual(viewModel.sections[1].cardStyle, .landscape)
@@ -67,14 +51,16 @@ final class HomeViewModelTests: XCTestCase {
         await viewModel.load()
 
         XCTAssertTrue(viewModel.sections.map(\.title).contains("Continue Watching"))
-        XCTAssertTrue(viewModel.sections.map(\.title).contains("Recently Added"))
-        XCTAssertTrue(viewModel.sections.map(\.title).contains("Trending Movies"))
-        XCTAssertTrue(viewModel.sections.map(\.title).contains("Best Quality Available"))
-        XCTAssertTrue(viewModel.sections.map(\.title).contains("Because You Watched"))
+        XCTAssertTrue(viewModel.sections.map(\.title).contains("Trending Now"))
+        XCTAssertFalse(viewModel.sections.map(\.title).contains("Recently Added"))
+        XCTAssertFalse(viewModel.sections.map(\.title).contains("Trending Movies"))
+        XCTAssertTrue(viewModel.sections.map(\.title).contains("Trending Now"))
+        XCTAssertFalse(viewModel.sections.map(\.title).contains("Because You Watched"))
+        XCTAssertFalse(viewModel.sections.map(\.title).contains("Best Quality Available"))
 
-        let becauseYouWatched = try XCTUnwrap(viewModel.sections.first { $0.title == "Because You Watched" })
-        XCTAssertFalse(becauseYouWatched.items.map(\.id).contains("tmdb:movie:693134"))
-        XCTAssertTrue(becauseYouWatched.items.contains { $0.metadata.contains("Sci-Fi") })
+        let trendingNow = try XCTUnwrap(viewModel.sections.first { $0.kind == .trendingNow })
+        XCTAssertTrue(trendingNow.items.contains { $0.id.contains(":movie:") })
+        XCTAssertTrue(trendingNow.items.contains { $0.id.contains(":tv:") })
     }
 
     @MainActor
@@ -97,8 +83,8 @@ final class HomeViewModelTests: XCTestCase {
 
         await viewModel.load()
 
-        XCTAssertTrue(viewModel.sections.map(\.title).contains("Trending Movies"))
-        XCTAssertTrue(viewModel.sections.map(\.personalizationID).contains("trendingMovies"))
+        XCTAssertTrue(viewModel.sections.map(\.title).contains("Trending Now"))
+        XCTAssertTrue(viewModel.sections.map(\.personalizationID).contains("trendingNow"))
         XCTAssertEqual(
             viewModel.sections.map { $0.kind.defaultOrderIndex },
             viewModel.sections.map { $0.kind.defaultOrderIndex }.sorted()
@@ -115,7 +101,8 @@ final class HomeViewModelTests: XCTestCase {
     func testHomeAppliesPersistedSectionVisibilityAndOrder() async throws {
         var settings = AppSettings()
         settings.home.setSection("continueWatching", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 10))
-        settings.home.setSection("trendingMovies", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 20))
+        settings.home.setSection("trendingNow", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 20))
+        settings.home.setSection("recommended", isEnabled: true, updatedAt: Date(timeIntervalSince1970: 25))
         settings.home.moveSection("recommended", to: 0, updatedAt: Date(timeIntervalSince1970: 30))
         let settingsRepository = CoreMockSettingsRepository(settings: settings)
         let viewModel = HomeViewModel(
@@ -129,19 +116,45 @@ final class HomeViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.homePreferences.posterSize, .medium)
         XCTAssertEqual(viewModel.sections.first?.kind, .recommended)
         XCTAssertFalse(viewModel.sections.contains { $0.kind == .continueWatching })
-        XCTAssertFalse(viewModel.sections.contains { $0.kind == .trendingMovies })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .trendingNow })
 
         await settingsRepository.setAppSettings(AppSettings())
         await viewModel.refreshHomePreferences()
 
         XCTAssertTrue(viewModel.sections.contains { $0.kind == .continueWatching })
-        XCTAssertTrue(viewModel.sections.contains { $0.kind == .trendingMovies })
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .trendingNow })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .recommended })
+    }
+
+    @MainActor
+    func testOlderHomePreferenceSchemaMigratesToNetflixFocusDefaults() async throws {
+        var settings = AppSettings()
+        settings.home = HomePreferences(
+            sections: HomePreferences.defaultSectionIDs.enumerated().map { index, sectionID in
+                HomeSectionPreference(sectionID: sectionID, isEnabled: true, order: index)
+            },
+            schemaVersion: 2
+        )
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            settingsRepository: CoreMockSettingsRepository(settings: settings)
+        )
+
+        await viewModel.load()
+
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .trendingNow })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .recommended })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .recentlyAdded })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .trendingMovies })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .trendingSeries })
     }
 
     @MainActor
     func testHomeUsesLocalRecommendationServiceAndSettingCanDisableRows() async throws {
         var enabledSettings = AppSettings()
         enabledSettings.recommendations.localRecommendationsEnabled = true
+        enabledSettings.home.setSection("moreLikeThis", isEnabled: true)
+        enabledSettings.home.setSection("fromFavoriteGenres", isEnabled: true)
         let settingsRepository = CoreMockSettingsRepository(settings: enabledSettings)
         let recommendationService = HomeRecommendationFixtureService(sections: [
             RecommendationSection(
@@ -243,8 +256,14 @@ final class HomeViewModelTests: XCTestCase {
         let progressRepository = InMemoryHomeProgressRepository(records: [
             PlaybackProgress(mediaID: libraryMovie.id, positionSeconds: 1_800, durationSeconds: 7_200)
         ])
+        var settings = AppSettings()
+        settings.home.setSection("favoriteGenres", isEnabled: true)
+        settings.home.setSection("unfinishedMovies", isEnabled: true)
+        settings.home.setSection("forgottenInLibrary", isEnabled: true)
+        settings.home.setSection("ultraHDR", isEnabled: true)
         let viewModel = HomeViewModel(
             seedItems: HomeSeedLibrary.developmentItems,
+            settingsRepository: CoreMockSettingsRepository(settings: settings),
             progressRepository: progressRepository,
             libraryRepository: repository
         )
@@ -531,8 +550,11 @@ final class HomeViewModelTests: XCTestCase {
             isStale: false
         )
         let provider = InMemoryUpcomingCalendarProvider(items: [upcoming])
+        var settings = AppSettings()
+        settings.home.setSection("upcomingCalendar", isEnabled: true)
         let viewModel = HomeViewModel(
             seedItems: HomeSeedLibrary.developmentItems,
+            settingsRepository: CoreMockSettingsRepository(settings: settings),
             libraryRepository: repository,
             upcomingCalendarProvider: provider
         )
@@ -604,7 +626,7 @@ final class HomeViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.state, .loaded)
         XCTAssertEqual(viewModel.featuredItems.count, 4)
-        XCTAssertEqual(viewModel.sections.count, 9)
+        XCTAssertLessThanOrEqual(viewModel.sections.count, 6)
         XCTAssertTrue(viewModel.sections.allSatisfy { $0.items.count <= 8 })
         XCTAssertLessThanOrEqual(viewModel.prefetchArtworkURLs.count, 24)
     }

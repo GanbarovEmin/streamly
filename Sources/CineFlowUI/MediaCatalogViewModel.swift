@@ -75,9 +75,11 @@ public final class MediaCatalogViewModel: ObservableObject {
     }
 
     private func catalogItems() async throws -> [MediaItem] {
-        async let primary = primaryCatalog()
-        async let trending = metadataService.trending()
-        let groups = try await [primary, trending.filter { $0.kind == kind.mediaKind }]
+        let primary = try await primaryCatalog()
+        let supplemental = primary.count >= 80
+            ? []
+            : try await metadataService.trending().filter { $0.kind == kind.mediaKind }
+        let groups = [primary, supplemental]
 
         var seen: Set<String> = []
         var uniqueItems: [MediaItem] = []

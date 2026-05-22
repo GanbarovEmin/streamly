@@ -191,6 +191,8 @@ public struct HomeView: View {
             t(.homeSectionWatchNext)
         case .continueWatching:
             t(.homeSectionContinueWatching)
+        case .trendingNow:
+            "В тренде"
         case .popularMovies:
             t(.homeSectionPopularMovies)
         case .popularSeries:
@@ -307,17 +309,17 @@ public struct HomeView: View {
     }
 
     private var homeRowSpacing: CGFloat {
-        viewModel.homePreferences.layoutDensity == .compact ? CFSpacing.lg : CFSpacing.xl
+        viewModel.homePreferences.layoutDensity == .compact ? CFSpacing.md : CFSpacing.lg
     }
 
     private var preferredPosterWidth: CGFloat {
         switch viewModel.homePreferences.posterSize {
         case .small:
-            return viewModel.homePreferences.layoutDensity == .compact ? 156 : 168
+            return viewModel.homePreferences.layoutDensity == .compact ? 146 : 158
         case .medium:
-            return viewModel.homePreferences.layoutDensity == .compact ? 176 : 190
+            return viewModel.homePreferences.layoutDensity == .compact ? 164 : 178
         case .large:
-            return viewModel.homePreferences.layoutDensity == .compact ? 204 : 222
+            return viewModel.homePreferences.layoutDensity == .compact ? 190 : 206
         }
     }
 
@@ -457,8 +459,8 @@ private struct HomeHeroView: View {
                     .overlay {
                         if let backdropURL = item.backdropURL {
                             CFCachedAsyncImage(url: backdropURL, contentMode: .fill, imageDataLoader: imageDataLoader)
-                                .opacity(0.38)
-                                .overlay(CFColors.backgroundPrimary.opacity(0.26))
+                                .opacity(0.72)
+                                .saturation(1.08)
                         }
                     }
                     .id(item.id)
@@ -466,9 +468,9 @@ private struct HomeHeroView: View {
 
                 LinearGradient(
                     colors: [
-                        CFColors.backgroundPrimary.opacity(0.78),
-                        CFColors.backgroundPrimary.opacity(0.26),
-                        CFColors.backgroundPrimary.opacity(0.90)
+                        CFColors.backgroundPrimary.opacity(0.94),
+                        CFColors.backgroundPrimary.opacity(0.58),
+                        CFColors.backgroundPrimary.opacity(0.10)
                     ],
                     startPoint: .leading,
                     endPoint: .trailing
@@ -477,8 +479,8 @@ private struct HomeHeroView: View {
                 LinearGradient(
                     colors: [
                         CFColors.clear,
-                        CFColors.backgroundPrimary.opacity(0.34),
-                        CFColors.backgroundPrimary.opacity(0.92)
+                        CFColors.backgroundPrimary.opacity(0.38),
+                        CFColors.backgroundPrimary.opacity(0.96)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -493,15 +495,14 @@ private struct HomeHeroView: View {
                 }
                 .padding(CFSpacing.xl)
             }
-            .clipShape(RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: CFRadius.poster, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: CFRadius.hero, style: .continuous)
-                    .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                RoundedRectangle(cornerRadius: CFRadius.poster, style: .continuous)
+                    .stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width)
             )
-            .cfShadow(.elevated)
             .cfAnimation(CFMotion.standard, value: item.id, reduceMotion: reduceMotion)
         }
-        .frame(minHeight: 390, idealHeight: 460, maxHeight: 500)
+        .frame(minHeight: 420, idealHeight: 470, maxHeight: 520)
     }
 
     private func heroCopy(width: CGFloat) -> some View {
@@ -512,7 +513,7 @@ private struct HomeHeroView: View {
                 .foregroundStyle(CFColors.accentPrimary)
 
             Text(item.title)
-                .font(width < 840 ? .system(size: 42, weight: .bold, design: .rounded) : CFTypography.heroTitle)
+                .font(width < 840 ? .system(size: 40, weight: .bold, design: .default) : .system(size: 58, weight: .bold, design: .default))
                 .foregroundStyle(CFColors.textPrimary)
                 .lineLimit(2)
                 .minimumScaleFactor(0.78)
@@ -529,7 +530,7 @@ private struct HomeHeroView: View {
                 .font(CFTypography.body)
                 .foregroundStyle(CFColors.textSecondary)
                 .lineLimit(width < 760 ? 2 : 3)
-                .frame(maxWidth: width < 840 ? 520 : 640, alignment: .leading)
+                .frame(maxWidth: width < 840 ? 500 : 610, alignment: .leading)
 
             HStack(spacing: CFSpacing.md) {
                 PrimaryButton(watchTitle, systemImage: "play.fill", action: onWatch)
@@ -537,7 +538,7 @@ private struct HomeHeroView: View {
             }
             .padding(.top, 4)
         }
-        .frame(maxWidth: width < 840 ? .infinity : 680, alignment: .leading)
+        .frame(maxWidth: width < 840 ? .infinity : 640, alignment: .leading)
     }
 
     private var metadataBadges: [String] {

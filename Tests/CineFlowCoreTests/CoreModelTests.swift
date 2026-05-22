@@ -251,21 +251,24 @@ final class CoreModelTests: XCTestCase {
         XCTAssertEqual(preferences.posterSize, .medium)
         XCTAssertEqual(preferences.sections.first?.sectionID, HomePreferences.defaultSectionIDs.first)
         XCTAssertTrue(preferences.isSectionEnabled("continueWatching"))
-        XCTAssertEqual(preferences.schemaVersion, 1)
+        XCTAssertTrue(preferences.isSectionEnabled("trendingNow"))
+        XCTAssertFalse(preferences.isSectionEnabled("trendingMovies"))
+        XCTAssertFalse(preferences.isSectionEnabled("moodDiscovery"))
+        XCTAssertEqual(preferences.schemaVersion, HomePreferences.currentSchemaVersion)
         XCTAssertEqual(preferences.syncRevision, 0)
 
-        preferences.setSection("trendingMovies", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 100))
+        preferences.setSection("trendingNow", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 100))
         preferences.moveSection("recommended", to: 0, updatedAt: Date(timeIntervalSince1970: 120))
         preferences.layoutDensity = .compact
         preferences.posterSize = .large
 
-        XCTAssertFalse(preferences.isSectionEnabled("trendingMovies"))
+        XCTAssertFalse(preferences.isSectionEnabled("trendingNow"))
         XCTAssertEqual(preferences.orderedSections.first?.sectionID, "recommended")
 
         let decoded = try JSONDecoder().decode(HomePreferences.self, from: try JSONEncoder().encode(preferences))
         XCTAssertEqual(decoded.layoutDensity, .compact)
         XCTAssertEqual(decoded.posterSize, .large)
-        XCTAssertFalse(decoded.isSectionEnabled("trendingMovies"))
+        XCTAssertFalse(decoded.isSectionEnabled("trendingNow"))
         XCTAssertEqual(decoded.orderedSections.first?.sectionID, "recommended")
         XCTAssertEqual(decoded.syncRevision, 2)
         XCTAssertEqual(decoded.updatedAt, Date(timeIntervalSince1970: 120))
@@ -279,7 +282,8 @@ final class CoreModelTests: XCTestCase {
         XCTAssertTrue(settings.general.launchAtLogin)
         XCTAssertEqual(settings.home, HomePreferences())
         XCTAssertTrue(settings.home.isSectionEnabled("continueWatching"))
-        XCTAssertTrue(settings.home.isSectionEnabled("trendingMovies"))
+        XCTAssertTrue(settings.home.isSectionEnabled("trendingNow"))
+        XCTAssertFalse(settings.home.isSectionEnabled("trendingMovies"))
         XCTAssertTrue(settings.notifications.betterReleaseNotificationsEnabled)
         XCTAssertTrue(settings.notifications.betterReleaseDigestMode)
         XCTAssertFalse(settings.notifications.macOSBetterReleaseNotificationsEnabled)

@@ -1128,6 +1128,8 @@ public struct SettingsView: View {
             return "Watch Next"
         case .continueWatching:
             return "Continue Watching"
+        case .trendingNow:
+            return "Trending Now"
         case .popularMovies:
             return "Popular Movies"
         case .popularSeries:

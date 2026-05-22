@@ -67,7 +67,12 @@ let package = Package(
             resources: [.process("Resources")],
             swiftSettings: arm64OnlySwiftSettings
         ),
-        .target(name: "CineFlowDesignSystem", dependencies: ["CineFlowLocalization"], swiftSettings: arm64OnlySwiftSettings),
+        .target(
+            name: "CineFlowDesignSystem",
+            dependencies: ["CineFlowLocalization"],
+            resources: [.process("Resources")],
+            swiftSettings: arm64OnlySwiftSettings
+        ),
         .target(name: "CineFlowUI", dependencies: ["CineFlowCore", "CineFlowDesignSystem", "CineFlowLocalization", "CineFlowPlayback", "CineFlowSources", "CineFlowSubtitles"], swiftSettings: arm64OnlySwiftSettings),
         .target(
             name: "CineFlowDatabase",
