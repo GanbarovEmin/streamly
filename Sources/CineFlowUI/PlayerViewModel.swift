@@ -70,19 +70,22 @@ public struct PlayerBufferingPresentation: Equatable, Sendable {
     public let progress: Double?
     public let primaryDetails: [String]
     public let advancedDetails: [String]
+    public let logoURL: URL?
 
     public init(
         title: String,
         message: String,
         progress: Double? = nil,
         primaryDetails: [String] = [],
-        advancedDetails: [String] = []
+        advancedDetails: [String] = [],
+        logoURL: URL? = nil
     ) {
         self.title = title
         self.message = message
         self.progress = progress
         self.primaryDetails = primaryDetails
         self.advancedDetails = advancedDetails
+        self.logoURL = logoURL
     }
 }
 
@@ -350,7 +353,8 @@ public final class PlayerViewModel: ObservableObject {
                 message: transfer.message,
                 progress: transfer.progress,
                 primaryDetails: transfer.primaryDetails,
-                advancedDetails: details
+                advancedDetails: details,
+                logoURL: status.media?.selectionContext?.logoURL ?? mediaSource.selectionContext?.logoURL
             )
         }
     }

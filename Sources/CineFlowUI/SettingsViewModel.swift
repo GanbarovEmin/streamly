@@ -170,7 +170,7 @@ public struct TMDBCredentialSummary: Equatable, Sendable {
     }
 
     public var detailText: String {
-        lastValidation ?? "Metadata and artwork use TMDB. Save a read access token or v3 API key locally to enable live content."
+        lastValidation ?? "TMDB is optional. Save a read access token or v3 API key here to enable TMDB fallback metadata."
     }
 }
 

@@ -84,6 +84,18 @@ public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCac
         try await topCatalog(type: .series)
     }
 
+    public func catalog(kind: MetadataCatalogKind, mediaKind: MediaKind) async throws -> [MediaItem] {
+        let type = CinemetaMediaType(mediaKind: mediaKind)
+        switch kind {
+        case .popular:
+            return try await topCatalog(type: type)
+        case .newByYear(let year):
+            return try await pagedCatalog(type: type, id: "year", firstExtraPath: "genre=\(year)")
+        case .featuredByIMDbRating:
+            return try await pagedCatalog(type: type, id: "imdbRating")
+        }
+    }
+
     public func trending() async throws -> [MediaItem] {
         async let movies = catalog(type: .movie, id: "top")
         async let series = catalog(type: .series, id: "top")
@@ -126,13 +138,17 @@ public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCac
     }
 
     private func topCatalog(type: CinemetaMediaType) async throws -> [MediaItem] {
+        try await pagedCatalog(type: type, id: "top")
+    }
+
+    private func pagedCatalog(type: CinemetaMediaType, id: String, firstExtraPath: String? = nil) async throws -> [MediaItem] {
         var seen: Set<String> = []
         var items: [MediaItem] = []
 
         for pageIndex in 0..<Self.topCatalogPageLimit {
             let skip = pageIndex * Self.topCatalogPageSize
-            let extraPath = skip == 0 ? nil : "skip=\(skip)"
-            let pageItems = try await catalog(type: type, id: "top", extraPath: extraPath)
+            let extraPath = skip == 0 ? firstExtraPath : Self.appendingSkip(skip, to: firstExtraPath)
+            let pageItems = try await catalog(type: type, id: id, extraPath: extraPath)
             guard !pageItems.isEmpty else { break }
 
             for item in pageItems where seen.insert(item.id).inserted {
@@ -141,6 +157,13 @@ public final class CinemetaMetadataService: MetadataServiceProtocol, MetadataCac
         }
 
         return items
+    }
+
+    private static func appendingSkip(_ skip: Int, to extraPath: String?) -> String {
+        guard let extraPath, !extraPath.isEmpty else {
+            return "skip=\(skip)"
+        }
+        return "\(extraPath)&skip=\(skip)"
     }
 
     private func meta(for mediaID: String) async throws -> CinemetaMetaDTO {
@@ -269,6 +292,10 @@ public struct CompositeMetadataService: MetadataServiceProtocol {
         try await withFallback { try await primary.popularSeries() } fallback: { try await fallback.popularSeries() }
     }
 
+    public func catalog(kind: MetadataCatalogKind, mediaKind: MediaKind) async throws -> [MediaItem] {
+        try await withFallback { try await primary.catalog(kind: kind, mediaKind: mediaKind) } fallback: { try await fallback.catalog(kind: kind, mediaKind: mediaKind) }
+    }
+
     public func trending() async throws -> [MediaItem] {
         try await withFallback { try await primary.trending() } fallback: { try await fallback.trending() }
     }
@@ -304,6 +331,15 @@ public struct CompositeMetadataService: MetadataServiceProtocol {
 private enum CinemetaMediaType: String {
     case movie
     case series
+
+    init(mediaKind: MediaKind) {
+        switch mediaKind {
+        case .movie:
+            self = .movie
+        case .series:
+            self = .series
+        }
+    }
 
     var kind: MediaKind {
         switch self {
@@ -358,6 +394,7 @@ private struct CinemetaMetaDTO: Decodable {
     let imdbRating: String?
     let poster: String?
     let background: String?
+    let logo: String?
     let releaseInfo: String?
     let released: String?
     let runtime: CinemetaRuntime?
@@ -380,6 +417,7 @@ private struct CinemetaMetaDTO: Decodable {
         case imdbRating
         case poster
         case background
+        case logo
         case releaseInfo
         case released
         case runtime
@@ -472,6 +510,7 @@ private struct CinemetaMetaDTO: Decodable {
             rating: imdbRating.flatMap(Double.init),
             posterURL: poster.flatMap(URL.init(string:)),
             backdropURL: background.flatMap(URL.init(string:)),
+            logoURL: logo.flatMap(URL.init(string:)),
             trailerURLs: trailerObjects.map(\.url),
             cast: castMembers,
             alternativeTitles: resolvedAlternativeTitles,

@@ -1134,6 +1134,14 @@ public struct SettingsView: View {
             return "Popular Movies"
         case .popularSeries:
             return "Popular Series"
+        case .newMovies:
+            return "New Movies"
+        case .newSeries:
+            return "New Series"
+        case .featuredMovies:
+            return "Featured Movies"
+        case .featuredSeries:
+            return "Featured Series"
         case .trendingMovies:
             return "Trending Movies"
         case .trendingSeries:

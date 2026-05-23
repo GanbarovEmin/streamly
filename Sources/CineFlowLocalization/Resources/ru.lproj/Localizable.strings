@@ -26,7 +26,7 @@
 "topControl.profile" = "Профиль";
 "search.placeholder" = "Поиск фильмов, сериалов, релизов";
 "search.title" = "Поиск";
-"search.subtitle" = "Ищите фильмы и сериалы через TMDB-метаданные. Воспроизведение использует только добавленные вами источники.";
+"search.subtitle" = "Ищите фильмы и сериалы через каталоги метаданных. Воспроизведение использует только добавленные вами источники.";
 "search.filters" = "Фильтры";
 "search.sort" = "Сортировка";
 "search.state.idle.title" = "Поиск Streamly";
@@ -176,8 +176,8 @@
 "series.release.empty.message" = "Для выбранной серии пока нет доступных релизов.";
 
 "sidebar.tagline" = "Киноцентр";
-"sidebar.runtime.title" = "Локальный режим";
-"sidebar.runtime.message" = "TMDB-метаданные активны; источники добавляете вы";
+"sidebar.runtime.title" = "Streamly";
+"sidebar.runtime.message" = "Версия";
 
 "hero.metric.bestRelease" = "Лучший релиз";
 "hero.metric.mode" = "Режим";
@@ -314,7 +314,7 @@
 "series.state.empty.action" = "Открыть поиск";
 "series.state.error.recovery" = "Попробуйте открыть карточку позже или проверьте настройки источников метаданных.";
 "home.state.empty.action" = "Открыть настройки";
-"home.state.error.recovery" = "Проверьте TMDB credentials в настройках или попробуйте перезапустить загрузку.";
+"home.state.error.recovery" = "Проверьте соединение или попробуйте перезапустить загрузку.";
 
 "empty.inline.message.format" = "В разделе \"%@\" пока нет элементов.";
 "empty.inline.action" = "Открыть поиск";

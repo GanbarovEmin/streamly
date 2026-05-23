@@ -527,7 +527,9 @@ public struct MediaCarousel: View {
     private let landscapeWidth: CGFloat
     private let verticalSpacing: CGFloat
     private let menuActions: CFMediaCardMenuActions
+    private let dismissAction: ((CFMediaCardModel) -> Void)?
     private let action: (CFMediaCardModel) -> Void
+    @State private var pageIndex = 0
 
     public init(
         title: String,
@@ -537,6 +539,7 @@ public struct MediaCarousel: View {
         landscapeWidth: CGFloat = 360,
         verticalSpacing: CGFloat = CFSpacing.md,
         menuActions: CFMediaCardMenuActions = CFMediaCardMenuActions(),
+        dismissAction: ((CFMediaCardModel) -> Void)? = nil,
         action: @escaping (CFMediaCardModel) -> Void = { _ in },
         imageDataLoader: CFImageDataLoader? = nil
     ) {
@@ -547,54 +550,179 @@ public struct MediaCarousel: View {
         self.landscapeWidth = landscapeWidth
         self.verticalSpacing = verticalSpacing
         self.menuActions = menuActions
+        self.dismissAction = dismissAction
         self.imageDataLoader = imageDataLoader
         self.action = action
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: verticalSpacing) {
-            Text(title)
-                .font(CFTypography.sectionTitle)
-                .foregroundStyle(CFColors.textPrimary)
+            HStack(alignment: .center, spacing: CFSpacing.md) {
+                Text(title)
+                    .font(CFTypography.sectionTitle)
+                    .foregroundStyle(CFColors.textPrimary)
+            }
 
-            ScrollView(.horizontal) {
-                HStack(spacing: CFSpacing.md) {
-                    ForEach(items) { item in
-                        switch cardStyle {
-                        case .poster:
-                            PosterCard(model: item, action: {
-                                action(item)
-                            }, menuActions: menuActions, imageDataLoader: imageDataLoader)
-                            .frame(width: posterWidth)
-                        case .landscape:
-                            LandscapeCard(model: item, action: {
-                                action(item)
-                            }, menuActions: menuActions, imageDataLoader: imageDataLoader)
-                            .frame(width: landscapeWidth)
+            GeometryReader { proxy in
+                let metrics = carouselMetrics(for: proxy.size.width)
+
+                ZStack(alignment: .topTrailing) {
+                    HStack(spacing: CFSpacing.md) {
+                        ForEach(items) { item in
+                            card(for: item)
+                                .frame(width: metrics.cardWidth)
                         }
                     }
+                    .padding(.vertical, CFSpacing.xs)
+                    .offset(x: -CGFloat(metrics.leadingIndex) * metrics.step)
+                    .frame(width: proxy.size.width, alignment: .leading)
+                    .animation(CFMotion.standard, value: metrics.leadingIndex)
+
+                    pageDots(lastPageIndex: metrics.lastPageIndex)
+                        .padding(.top, 1)
+                        .padding(.trailing, 56)
+
+                    if metrics.canGoBackward {
+                        carouselArrow(systemImage: "chevron.left") {
+                            pageIndex = max(pageIndex - 1, 0)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if metrics.canGoForward {
+                        carouselArrow(systemImage: "chevron.right") {
+                            pageIndex = min(pageIndex + 1, metrics.lastPageIndex)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    }
                 }
-                .padding(.vertical, CFSpacing.xs)
-                .padding(.horizontal, 1)
-                .frame(minHeight: carouselHeight, alignment: .top)
+                .contentShape(Rectangle())
+                .clipped()
+                .gesture(
+                    DragGesture(minimumDistance: 36)
+                        .onEnded { value in
+                            if value.translation.width < -48, metrics.canGoForward {
+                                pageIndex = min(pageIndex + 1, metrics.lastPageIndex)
+                            } else if value.translation.width > 48, metrics.canGoBackward {
+                                pageIndex = max(pageIndex - 1, 0)
+                            }
+                        }
+                )
+                .onChange(of: items.map(\.id).joined(separator: "|")) { _ in
+                    pageIndex = 0
+                }
+                .onChange(of: metrics.lastPageIndex) { lastPageIndex in
+                    pageIndex = min(pageIndex, lastPageIndex)
+                }
             }
             .frame(height: carouselHeight)
-            .scrollIndicators(.hidden)
-            .overlay(alignment: .trailing) {
-                LinearGradient(
-                    colors: [CFColors.clear, CFColors.backgroundPrimary.opacity(0.74)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 54)
-                .allowsHitTesting(false)
-            }
             .focusable(true)
             .accessibilityLabel(title)
             .accessibilityHint(L10n.string(.accessibilityCarouselHint))
             .task(id: prefetchKey) {
                 await prefetchArtwork()
             }
+        }
+    }
+
+    @ViewBuilder
+    private func card(for item: CFMediaCardModel) -> some View {
+        ZStack(alignment: .topTrailing) {
+            switch cardStyle {
+            case .poster:
+                PosterCard(model: item, action: {
+                    action(item)
+                }, menuActions: menuActions, imageDataLoader: imageDataLoader)
+            case .landscape:
+                LandscapeCard(model: item, action: {
+                    action(item)
+                }, menuActions: menuActions, imageDataLoader: imageDataLoader)
+            }
+
+            if let dismissAction {
+                Button {
+                    dismissAction(item)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(CFColors.textPrimary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            Circle()
+                                .fill(CFColors.backgroundPrimary.opacity(0.78))
+                                .overlay(Circle().stroke(CFColors.separator, lineWidth: CFSeparators.width))
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+                .help("Remove from Continue Watching")
+                .accessibilityLabel("Remove \(item.title) from Continue Watching")
+                .zIndex(2)
+            }
+        }
+    }
+
+    private func pageDots(lastPageIndex: Int) -> some View {
+        HStack(spacing: 6) {
+            if lastPageIndex > 0 {
+                ForEach(0...lastPageIndex, id: \.self) { index in
+                    Capsule()
+                        .fill(index == min(pageIndex, lastPageIndex) ? CFColors.textPrimary : CFColors.textMuted.opacity(0.40))
+                        .frame(width: index == min(pageIndex, lastPageIndex) ? 18 : 12, height: 2)
+                        .animation(CFMotion.quick, value: pageIndex)
+                }
+            }
+        }
+        .frame(height: 10)
+        .accessibilityHidden(true)
+    }
+
+    private func carouselArrow(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(CFColors.textPrimary)
+                .frame(width: 48, height: carouselHeight)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            CFColors.backgroundPrimary.opacity(0.02),
+                            CFColors.backgroundPrimary.opacity(0.78)
+                        ],
+                        startPoint: systemImage == "chevron.left" ? .trailing : .leading,
+                        endPoint: systemImage == "chevron.left" ? .leading : .trailing
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .help(systemImage == "chevron.left" ? "Previous" : "Next")
+        .accessibilityLabel(systemImage == "chevron.left" ? "Previous page" : "Next page")
+    }
+
+    private func carouselMetrics(for width: CGFloat) -> CarouselMetrics {
+        let cardWidth = resolvedCardWidth
+        let step = cardWidth + CFSpacing.md
+        let visibleCount = max(1, Int((max(width, cardWidth) + CFSpacing.md) / step))
+        let pageSize = max(1, visibleCount)
+        let lastPageIndex = max(0, Int(ceil(Double(max(items.count - visibleCount, 0)) / Double(pageSize))))
+        let clampedPageIndex = min(pageIndex, lastPageIndex)
+        let leadingIndex = min(clampedPageIndex * pageSize, max(items.count - visibleCount, 0))
+        return CarouselMetrics(
+            cardWidth: cardWidth,
+            step: step,
+            leadingIndex: leadingIndex,
+            lastPageIndex: lastPageIndex,
+            canGoBackward: leadingIndex > 0,
+            canGoForward: leadingIndex < max(items.count - visibleCount, 0)
+        )
+    }
+
+    private var resolvedCardWidth: CGFloat {
+        switch cardStyle {
+        case .poster:
+            posterWidth
+        case .landscape:
+            landscapeWidth
         }
     }
 
@@ -619,6 +747,15 @@ public struct MediaCarousel: View {
             _ = try? await imageDataLoader(url)
         }
     }
+}
+
+private struct CarouselMetrics {
+    let cardWidth: CGFloat
+    let step: CGFloat
+    let leadingIndex: Int
+    let lastPageIndex: Int
+    let canGoBackward: Bool
+    let canGoForward: Bool
 }
 
 public struct CFCachedAsyncImage: View {

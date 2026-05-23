@@ -31,6 +31,7 @@ public struct MovieDetail: Identifiable, Equatable, Sendable {
     public let backdropAccentIndex: Int
     public let posterURL: URL?
     public let backdropURL: URL?
+    public let logoURL: URL?
 
     public init(
         id: String,
@@ -44,7 +45,8 @@ public struct MovieDetail: Identifiable, Equatable, Sendable {
         overview: String,
         backdropAccentIndex: Int,
         posterURL: URL? = nil,
-        backdropURL: URL? = nil
+        backdropURL: URL? = nil,
+        logoURL: URL? = nil
     ) {
         self.id = id
         self.title = title
@@ -58,6 +60,7 @@ public struct MovieDetail: Identifiable, Equatable, Sendable {
         self.backdropAccentIndex = backdropAccentIndex
         self.posterURL = posterURL
         self.backdropURL = backdropURL
+        self.logoURL = logoURL
     }
 }
 

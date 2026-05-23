@@ -49,6 +49,41 @@ final class MediaCatalogViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.visibleItems.map(\.title), ["Severance"])
     }
 
+    @MainActor
+    func testCatalogSwitchesBetweenPopularNewByYearAndFeaturedWithDeduplication() async {
+        let popular = Self.item(id: "imdb:movie:tt1000001", title: "Popular Movie", kind: .movie)
+        let newMovie = Self.item(id: "imdb:movie:tt2026001", title: "New Movie", kind: .movie)
+        let featured = Self.item(id: "imdb:movie:tt9000001", title: "Featured Movie", kind: .movie)
+        let wrongKind = Self.item(id: "imdb:series:tt2026002", title: "Wrong Kind Series", kind: .series)
+        let service = CatalogFixtureMetadataService(
+            popularMovies: [popular],
+            popularSeries: [],
+            trending: [Self.item(id: "imdb:movie:tt7777777", title: "Trending Supplement", kind: .movie)],
+            catalogResults: [
+                "movie:new:2026": [newMovie, newMovie, wrongKind],
+                "movie:new:2025": [popular],
+                "movie:featured": [featured, featured]
+            ]
+        )
+        let viewModel = MediaCatalogViewModel(kind: .movies, metadataService: service, currentYear: 2026)
+
+        await viewModel.load()
+        XCTAssertEqual(viewModel.selectedCatalog, .popular)
+        XCTAssertEqual(viewModel.items.map(\.title), ["Popular Movie", "Trending Supplement"])
+
+        await viewModel.selectCatalog(.newByYear)
+        XCTAssertEqual(viewModel.selectedCatalog, .newByYear)
+        XCTAssertEqual(viewModel.selectedYear, 2026)
+        XCTAssertEqual(viewModel.items.map(\.title), ["New Movie"])
+
+        await viewModel.selectYear(2025)
+        XCTAssertEqual(viewModel.selectedYear, 2025)
+        XCTAssertEqual(viewModel.items.map(\.title), ["Popular Movie"])
+
+        await viewModel.selectCatalog(.featured)
+        XCTAssertEqual(viewModel.items.map(\.title), ["Featured Movie"])
+    }
+
     private static func item(
         id: String,
         title: String,
@@ -82,11 +117,18 @@ private struct CatalogFixtureMetadataService: MetadataServiceProtocol {
     let popularMovieItems: [MediaItem]
     let popularSeriesItems: [MediaItem]
     let trendingItems: [MediaItem]
+    let catalogResults: [String: [MediaItem]]
 
-    init(popularMovies: [MediaItem], popularSeries: [MediaItem], trending: [MediaItem]) {
+    init(
+        popularMovies: [MediaItem],
+        popularSeries: [MediaItem],
+        trending: [MediaItem],
+        catalogResults: [String: [MediaItem]] = [:]
+    ) {
         self.popularMovieItems = popularMovies
         self.popularSeriesItems = popularSeries
         self.trendingItems = trending
+        self.catalogResults = catalogResults
     }
 
     func search(query: String) async throws -> [MediaItem] {
@@ -103,5 +145,24 @@ private struct CatalogFixtureMetadataService: MetadataServiceProtocol {
 
     func trending() async throws -> [MediaItem] {
         trendingItems
+    }
+
+    func catalog(kind: MetadataCatalogKind, mediaKind: MediaKind) async throws -> [MediaItem] {
+        if kind == .popular {
+            return mediaKind == .movie ? popularMovieItems : popularSeriesItems
+        }
+        return catalogResults[Self.key(kind: kind, mediaKind: mediaKind)] ?? []
+    }
+
+    private static func key(kind: MetadataCatalogKind, mediaKind: MediaKind) -> String {
+        let kindPrefix = mediaKind == .movie ? "movie" : "series"
+        switch kind {
+        case .popular:
+            return "\(kindPrefix):popular"
+        case .newByYear(let year):
+            return "\(kindPrefix):new:\(year)"
+        case .featuredByIMDbRating:
+            return "\(kindPrefix):featured"
+        }
     }
 }

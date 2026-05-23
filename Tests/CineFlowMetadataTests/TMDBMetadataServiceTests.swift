@@ -192,6 +192,41 @@ final class TMDBMetadataServiceTests: XCTestCase {
         XCTAssertEqual(keychainToken, "keychain-token")
     }
 
+    func testUserSuppliedCredentialPolicyIgnoresLocalEnvironmentAndConfig() async throws {
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("json")
+        try #"{"readAccessToken":"file-token","apiKey":"file-key"}"#.write(to: tempURL, atomically: true, encoding: .utf8)
+        let localProvider = LocalTMDBCredentialProvider(
+            configURL: tempURL,
+            environment: ["TMDB_READ_ACCESS_TOKEN": "env-token", "TMDB_API_KEY": "env-key"]
+        )
+        let localToken = await localProvider.readAccessToken
+        let localAPIKey = await localProvider.apiKey
+        XCTAssertEqual(localToken, "env-token")
+        XCTAssertEqual(localAPIKey, "env-key")
+
+        let keychainService = MockKeychainService()
+        let userSuppliedProvider = TMDBCredentialPolicy.userSupplied(keychainService: keychainService)
+
+        let missingUserToken = await userSuppliedProvider.readAccessToken
+        let missingUserAPIKey = await userSuppliedProvider.apiKey
+        XCTAssertNil(missingUserToken)
+        XCTAssertNil(missingUserAPIKey)
+
+        _ = try await keychainService.saveCredential(
+            KeychainCredential(
+                accountID: TMDBCredentialAccountIDs.apiKey,
+                kind: .apiToken,
+                sourceID: "tmdb",
+                token: "saved-key"
+            )
+        )
+
+        let savedUserToken = await userSuppliedProvider.readAccessToken
+        let savedUserAPIKey = await userSuppliedProvider.apiKey
+        XCTAssertNil(savedUserToken)
+        XCTAssertEqual(savedUserAPIKey, "saved-key")
+    }
+
     func testKeychainTMDBCredentialProviderMigratesLegacyDatabaseCredentials() async throws {
         let database = try DatabaseManager.inMemory()
         let settings = DatabaseSettingsRepository(databaseManager: database)

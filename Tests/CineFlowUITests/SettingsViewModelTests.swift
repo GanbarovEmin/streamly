@@ -212,6 +212,10 @@ final class SettingsViewModelTests: XCTestCase {
 
         await viewModel.load()
         XCTAssertEqual(viewModel.tmdbCredentialSummary.statusText, "TMDB credentials missing")
+        XCTAssertEqual(
+            viewModel.tmdbCredentialSummary.detailText,
+            "TMDB is optional. Save a read access token or v3 API key here to enable TMDB fallback metadata."
+        )
 
         await viewModel.saveTMDBCredentials(readAccessToken: " token ", apiKey: " key ")
 

@@ -19,6 +19,15 @@ final class ShellNavigationTests: XCTestCase {
         XCTAssertEqual(state.topControls.map { L10n.string($0.titleKey, language: .en) }, ["Updates", "Notifications", "Profile"])
     }
 
+    func testSidebarFooterUsesCompactVersionCopyInsteadOfRuntimeStatus() {
+        let content = SidebarFooterContent(version: "1.4.2", build: "18")
+
+        XCTAssertEqual(content.title, "Streamly")
+        XCTAssertEqual(content.detail, "Version 1.4.2 (18)")
+        XCTAssertFalse(content.title.contains("runtime"))
+        XCTAssertFalse(content.detail.contains("TMDB"))
+    }
+
     @MainActor
     func testNavigationCoordinatorPushesDeepLinksAndGoesBack() {
         let coordinator = NavigationCoordinator()

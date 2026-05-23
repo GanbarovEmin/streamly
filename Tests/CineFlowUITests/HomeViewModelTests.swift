@@ -104,6 +104,89 @@ final class HomeViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testHomeAddsCinemetaCatalogRowsWithStableOrderAndCurrentYear() async throws {
+        let service = HomeCatalogFixtureMetadataService(
+            popularMovies: [makeLibraryItem(id: "imdb:movie:tt1000001", title: "Popular Movie", kind: .movie, year: 2025, genres: ["Action"])],
+            popularSeries: [makeLibraryItem(id: "imdb:series:tt1000002", title: "Popular Series", kind: .series, year: 2025, genres: ["Drama"])],
+            newMovies: [makeLibraryItem(id: "imdb:movie:tt2026001", title: "New Movie", kind: .movie, year: 2026, genres: ["Sci-Fi"])],
+            newSeries: [makeLibraryItem(id: "imdb:series:tt2026002", title: "New Series", kind: .series, year: 2026, genres: ["Mystery"])],
+            featuredMovies: [makeLibraryItem(id: "imdb:movie:tt9000001", title: "Featured Movie", kind: .movie, year: 2024, genres: ["Adventure"])],
+            featuredSeries: [makeLibraryItem(id: "imdb:series:tt9000002", title: "Featured Series", kind: .series, year: 2024, genres: ["Fantasy"])]
+        )
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            metadataService: service,
+            currentYearProvider: { 2026 }
+        )
+
+        await viewModel.load()
+
+        let catalogSections = viewModel.sections.filter { section in
+            [.popularMovies, .popularSeries, .newMovies, .newSeries, .featuredMovies, .featuredSeries].contains(section.kind)
+        }
+        XCTAssertEqual(
+            catalogSections.map(\.kind),
+            [.popularMovies, .popularSeries, .newMovies, .newSeries, .featuredMovies, .featuredSeries]
+        )
+        XCTAssertEqual(
+            catalogSections.map(\.title),
+            ["Popular Movies", "Popular Series", "New Movies 2026", "New Series 2026", "Featured Movies", "Featured Series"]
+        )
+        XCTAssertEqual(catalogSections.map(\.cardStyle), Array(repeating: .poster, count: 6))
+        XCTAssertEqual(catalogSections.first { $0.kind == .newMovies }?.items.map(\.title), ["New Movie"])
+    }
+
+    @MainActor
+    func testHomeCatalogFailureHidesOnlyFailedCatalogRow() async throws {
+        let service = HomeCatalogFixtureMetadataService(
+            popularMovies: [makeLibraryItem(id: "imdb:movie:tt1000001", title: "Popular Movie", kind: .movie, year: 2025, genres: ["Action"])],
+            popularSeries: [makeLibraryItem(id: "imdb:series:tt1000002", title: "Popular Series", kind: .series, year: 2025, genres: ["Drama"])],
+            newMovies: [makeLibraryItem(id: "imdb:movie:tt2026001", title: "New Movie", kind: .movie, year: 2026, genres: ["Sci-Fi"])],
+            newSeries: [makeLibraryItem(id: "imdb:series:tt2026002", title: "New Series", kind: .series, year: 2026, genres: ["Mystery"])],
+            featuredMovies: [makeLibraryItem(id: "imdb:movie:tt9000001", title: "Featured Movie", kind: .movie, year: 2024, genres: ["Adventure"])],
+            featuredSeries: [makeLibraryItem(id: "imdb:series:tt9000002", title: "Featured Series", kind: .series, year: 2024, genres: ["Fantasy"])],
+            failingKeys: ["series:new:2026"]
+        )
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            metadataService: service,
+            currentYearProvider: { 2026 }
+        )
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.state, .loaded)
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .newMovies })
+        XCTAssertFalse(viewModel.sections.contains { $0.kind == .newSeries })
+        XCTAssertTrue(viewModel.sections.contains { $0.kind == .featuredSeries })
+    }
+
+    @MainActor
+    func testHomeCatalogRowsStartInParallelForFastInitialLoad() async throws {
+        let probe = CatalogConcurrencyProbe()
+        let service = HomeCatalogFixtureMetadataService(
+            popularMovies: [makeLibraryItem(id: "imdb:movie:tt1000001", title: "Popular Movie", kind: .movie, year: 2025, genres: ["Action"])],
+            popularSeries: [makeLibraryItem(id: "imdb:series:tt1000002", title: "Popular Series", kind: .series, year: 2025, genres: ["Drama"])],
+            newMovies: [makeLibraryItem(id: "imdb:movie:tt2026001", title: "New Movie", kind: .movie, year: 2026, genres: ["Sci-Fi"])],
+            newSeries: [makeLibraryItem(id: "imdb:series:tt2026002", title: "New Series", kind: .series, year: 2026, genres: ["Mystery"])],
+            featuredMovies: [makeLibraryItem(id: "imdb:movie:tt9000001", title: "Featured Movie", kind: .movie, year: 2024, genres: ["Adventure"])],
+            featuredSeries: [makeLibraryItem(id: "imdb:series:tt9000002", title: "Featured Series", kind: .series, year: 2024, genres: ["Fantasy"])],
+            delayNanoseconds: 60_000_000,
+            concurrencyProbe: probe
+        )
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            metadataService: service,
+            currentYearProvider: { 2026 }
+        )
+
+        await viewModel.load()
+
+        let peakActiveCalls = await probe.peakActiveCalls()
+        XCTAssertGreaterThan(peakActiveCalls, 1)
+    }
+
+    @MainActor
     func testHomeAppliesPersistedSectionVisibilityAndOrder() async throws {
         var settings = AppSettings()
         settings.home.setSection("continueWatching", isEnabled: false, updatedAt: Date(timeIntervalSince1970: 10))
@@ -437,6 +520,35 @@ final class HomeViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testRemoveFromContinueWatchingClearsProgressAndReloadsSection() async throws {
+        let mediaItem = MediaItem(
+            id: "tmdb:movie:603",
+            title: "The Matrix",
+            kind: .movie,
+            overview: "A hacker discovers the truth.",
+            releaseYear: 1999,
+            posterPath: nil
+        )
+        let progressRepository = InMemoryHomeProgressRepository(records: [
+            PlaybackProgress(mediaID: mediaItem.id, positionSeconds: 50, durationSeconds: 100)
+        ])
+        let viewModel = HomeViewModel(
+            seedItems: HomeSeedLibrary.developmentItems,
+            progressRepository: progressRepository,
+            libraryRepository: CoreMockLibraryRepository(storedItems: [mediaItem])
+        )
+
+        await viewModel.load()
+        XCTAssertNotNil(viewModel.sections.first { $0.kind == .continueWatching })
+
+        await viewModel.removeFromContinueWatching(itemID: mediaItem.id)
+
+        let remainingProgress = try await progressRepository.progress(mediaID: mediaItem.id, episodeID: nil)
+        XCTAssertNil(remainingProgress)
+        XCTAssertNil(viewModel.sections.first { $0.kind == .continueWatching })
+    }
+
+    @MainActor
     func testWatchNextSectionIsHiddenByDefaultBecauseContinueWatchingOwnsNextEpisodeContext() async throws {
         let backdropURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w780/got-backdrop.jpg"))
         let series = MediaItem(
@@ -710,6 +822,112 @@ private struct HomeRecommendationFixtureService: RecommendationServiceProtocol {
 
     func recommendations(for item: MediaItem, seedSimilar: [MediaItem], limit: Int) async throws -> [MediaItem] {
         []
+    }
+}
+
+private struct HomeCatalogFixtureMetadataService: MetadataServiceProtocol {
+    let popularMovies: [MediaItem]
+    let popularSeries: [MediaItem]
+    let newMovies: [MediaItem]
+    let newSeries: [MediaItem]
+    let featuredMovies: [MediaItem]
+    let featuredSeries: [MediaItem]
+    let failingKeys: Set<String>
+    let delayNanoseconds: UInt64
+    let concurrencyProbe: CatalogConcurrencyProbe?
+
+    init(
+        popularMovies: [MediaItem] = [],
+        popularSeries: [MediaItem] = [],
+        newMovies: [MediaItem] = [],
+        newSeries: [MediaItem] = [],
+        featuredMovies: [MediaItem] = [],
+        featuredSeries: [MediaItem] = [],
+        failingKeys: Set<String> = [],
+        delayNanoseconds: UInt64 = 0,
+        concurrencyProbe: CatalogConcurrencyProbe? = nil
+    ) {
+        self.popularMovies = popularMovies
+        self.popularSeries = popularSeries
+        self.newMovies = newMovies
+        self.newSeries = newSeries
+        self.featuredMovies = featuredMovies
+        self.featuredSeries = featuredSeries
+        self.failingKeys = failingKeys
+        self.delayNanoseconds = delayNanoseconds
+        self.concurrencyProbe = concurrencyProbe
+    }
+
+    func search(query: String) async throws -> [MediaItem] {
+        []
+    }
+
+    func catalog(kind: MetadataCatalogKind, mediaKind: MediaKind) async throws -> [MediaItem] {
+        await concurrencyProbe?.begin()
+        if delayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+        }
+        do {
+            let items = try catalogItems(kind: kind, mediaKind: mediaKind)
+            await concurrencyProbe?.end()
+            return items
+        } catch {
+            await concurrencyProbe?.end()
+            throw error
+        }
+    }
+
+    private func catalogItems(kind: MetadataCatalogKind, mediaKind: MediaKind) throws -> [MediaItem] {
+        let key = Self.key(kind: kind, mediaKind: mediaKind)
+        if failingKeys.contains(key) {
+            throw CoreMetadataServiceError.unsupported
+        }
+        switch key {
+        case "movie:popular":
+            return popularMovies
+        case "series:popular":
+            return popularSeries
+        case "movie:new:2026":
+            return newMovies
+        case "series:new:2026":
+            return newSeries
+        case "movie:featured":
+            return featuredMovies
+        case "series:featured":
+            return featuredSeries
+        default:
+            return []
+        }
+    }
+
+    private static func key(kind: MetadataCatalogKind, mediaKind: MediaKind) -> String {
+        let kindPrefix = mediaKind == .movie ? "movie" : "series"
+        switch kind {
+        case .popular:
+            return "\(kindPrefix):popular"
+        case .newByYear(let year):
+            return "\(kindPrefix):new:\(year)"
+        case .featuredByIMDbRating:
+            return "\(kindPrefix):featured"
+        }
+    }
+}
+
+private actor CatalogConcurrencyProbe {
+    private var activeCalls = 0
+    private var maxActiveCalls = 0
+
+    func begin() {
+        activeCalls += 1
+        maxActiveCalls = max(maxActiveCalls, activeCalls)
+    }
+
+    func end() {
+        activeCalls -= 1
+    }
+
+    func peakActiveCalls() -> Int {
+        maxActiveCalls
     }
 }
 

@@ -74,36 +74,83 @@ public struct MediaCatalogView: View {
     }
 
     private var controls: some View {
-        HStack(spacing: CFSpacing.md) {
-            TextField(searchPlaceholder, text: $viewModel.searchQuery)
-                .textFieldStyle(.plain)
-                .font(CFTypography.body)
-                .padding(.horizontal, CFSpacing.md)
-                .frame(height: 42)
-                .background(
-                    RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                        .fill(CFColors.panelFill)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
-                                .stroke(CFColors.separator, lineWidth: CFSeparators.width)
-                        )
-                )
+        VStack(alignment: .leading, spacing: CFSpacing.sm) {
+            HStack(spacing: CFSpacing.md) {
+                Picker("", selection: Binding(
+                    get: { viewModel.selectedCatalog },
+                    set: { catalog in Task { await viewModel.selectCatalog(catalog) } }
+                )) {
+                    ForEach(MediaCatalogSource.allCases) { source in
+                        Text(catalogSourceTitle(source)).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 320)
 
-            Text(countLabel)
-                .font(CFTypography.caption.weight(.semibold))
-                .foregroundStyle(CFColors.textMuted)
-                .lineLimit(1)
-                .padding(.horizontal, CFSpacing.md)
-                .frame(height: 42)
-                .background(
-                    Capsule()
-                        .fill(CFColors.panelFill.opacity(0.72))
-                        .overlay(Capsule().stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width))
-                )
+                if viewModel.selectedCatalog == .newByYear {
+                    Stepper(value: Binding(
+                        get: { viewModel.selectedYear },
+                        set: { year in Task { await viewModel.selectYear(year) } }
+                    ), in: viewModel.supportedYearRange) {
+                        Text("\(viewModel.selectedYear)")
+                            .font(CFTypography.caption.weight(.semibold))
+                            .foregroundStyle(CFColors.textPrimary)
+                            .monospacedDigit()
+                    }
+                    .frame(width: 128)
+                }
 
-            SecondaryButton(refreshTitle, systemImage: "arrow.clockwise") {
-                Task { await viewModel.refresh() }
+                Spacer(minLength: CFSpacing.md)
             }
+
+            HStack(spacing: CFSpacing.md) {
+                TextField(searchPlaceholder, text: $viewModel.searchQuery)
+                    .textFieldStyle(.plain)
+                    .font(CFTypography.body)
+                    .padding(.horizontal, CFSpacing.md)
+                    .frame(height: 42)
+                    .background(
+                        RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                            .fill(CFColors.panelFill)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: CFRadius.component, style: .continuous)
+                                    .stroke(CFColors.separator, lineWidth: CFSeparators.width)
+                            )
+                    )
+
+                Text(countLabel)
+                    .font(CFTypography.caption.weight(.semibold))
+                    .foregroundStyle(CFColors.textMuted)
+                    .lineLimit(1)
+                    .padding(.horizontal, CFSpacing.md)
+                    .frame(height: 42)
+                    .background(
+                        Capsule()
+                            .fill(CFColors.panelFill.opacity(0.72))
+                            .overlay(Capsule().stroke(CFColors.separatorSubtle, lineWidth: CFSeparators.width))
+                    )
+
+                SecondaryButton(refreshTitle, systemImage: "arrow.clockwise") {
+                    Task { await viewModel.refresh() }
+                }
+            }
+        }
+    }
+
+    private func catalogSourceTitle(_ source: MediaCatalogSource) -> String {
+        switch (source, selectedLanguage) {
+        case (.popular, .ru):
+            "Популярное"
+        case (.popular, .system), (.popular, .en):
+            "Popular"
+        case (.newByYear, .ru):
+            "Новинки"
+        case (.newByYear, .system), (.newByYear, .en):
+            "New"
+        case (.featured, .ru):
+            "Featured"
+        case (.featured, .system), (.featured, .en):
+            "Featured"
         }
     }
 

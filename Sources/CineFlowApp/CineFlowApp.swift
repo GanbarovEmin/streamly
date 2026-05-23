@@ -48,15 +48,12 @@ struct CineFlowApplication: App {
         if let liveDatabaseManager {
             let cacheRepository = CacheRepository(databaseManager: liveDatabaseManager)
             let legacySettingsRepository = DatabaseSettingsRepository(databaseManager: liveDatabaseManager)
-            let keychainCredentialProvider = KeychainTMDBCredentialProvider(
+            let userSuppliedTMDBCredentials = TMDBCredentialPolicy.userSupplied(
                 keychainService: keychainService,
                 legacySettingsRepository: legacySettingsRepository
             )
             let tmdbMetadataService = TMDBMetadataService(
-                credentialProvider: CompositeTMDBCredentialProvider([
-                    keychainCredentialProvider,
-                    LocalTMDBCredentialProvider()
-                ]),
+                credentialProvider: userSuppliedTMDBCredentials,
                 cacheRepository: cacheRepository
             )
             metadataService = CompositeMetadataService(

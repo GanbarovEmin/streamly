@@ -32,7 +32,8 @@ final class TMDBUIProvidersTests: XCTestCase {
                     title: "The Matrix",
                     kind: .movie,
                     poster: "https://image.tmdb.org/t/p/w500/matrix.jpg",
-                    backdrop: "https://image.tmdb.org/t/p/w1280/matrix-backdrop.jpg"
+                    backdrop: "https://image.tmdb.org/t/p/w1280/matrix-backdrop.jpg",
+                    logo: "https://image.tmdb.org/t/p/w500/matrix-logo.png"
                 )
             ],
             popularMovieResults: [],
@@ -46,6 +47,7 @@ final class TMDBUIProvidersTests: XCTestCase {
         XCTAssertEqual(items.first?.title, "The Matrix")
         XCTAssertEqual(items.first?.artworkURL?.absoluteString, "https://image.tmdb.org/t/p/w500/matrix.jpg")
         XCTAssertEqual(items.first?.backdropURL?.absoluteString, "https://image.tmdb.org/t/p/w1280/matrix-backdrop.jpg")
+        XCTAssertEqual(items.first?.logoURL?.absoluteString, "https://image.tmdb.org/t/p/w500/matrix-logo.png")
         XCTAssertEqual(items.first?.quality, "Movie")
     }
 
@@ -77,6 +79,7 @@ final class TMDBUIProvidersTests: XCTestCase {
     func testTMDBMovieDetailProviderMapsDetailTrailersCastAndSimilarItems() async throws {
         let posterURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w500/matrix.jpg"))
         let backdropURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w1280/matrix-backdrop.jpg"))
+        let logoURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w500/matrix-logo.png"))
         let metadata = MediaMetadata(
             tmdbId: 603,
             title: "The Matrix",
@@ -87,7 +90,8 @@ final class TMDBUIProvidersTests: XCTestCase {
             runtime: 136,
             rating: 8.2,
             posterURL: posterURL,
-            backdropURL: backdropURL
+            backdropURL: backdropURL,
+            logoURL: logoURL
         )
         let movie = Movie(
             id: "tmdb:movie:603",
@@ -122,6 +126,7 @@ final class TMDBUIProvidersTests: XCTestCase {
         XCTAssertEqual(response?.movie.runtime, "2h 16m")
         XCTAssertEqual(response?.movie.posterURL, posterURL)
         XCTAssertEqual(response?.movie.backdropURL, backdropURL)
+        XCTAssertEqual(response?.movie.logoURL, logoURL)
         XCTAssertEqual(response?.trailers.first?.source, "YouTube")
         XCTAssertEqual(response?.cast.first?.role, "Neo")
         XCTAssertEqual(response?.similar.map(\.title), ["Inception"])
@@ -194,7 +199,8 @@ final class TMDBUIProvidersTests: XCTestCase {
     }
 
     func testTMDBSeriesDetailProviderSupportsIMDbIDsFromCinemetaSearch() async throws {
-        let series = Self.series(id: "imdb:series:tt0944947", imdbID: "tt0944947")
+        let logoURL = try XCTUnwrap(URL(string: "https://image.tmdb.org/t/p/w500/got-logo.png"))
+        let series = Self.series(id: "imdb:series:tt0944947", imdbID: "tt0944947", logoURL: logoURL)
         let metadataService = StubMetadataService(seriesDetailsByIMDbID: ["tt0944947": series])
         let provider = TMDBSeriesDetailProvider(metadataService: metadataService)
 
@@ -202,6 +208,7 @@ final class TMDBUIProvidersTests: XCTestCase {
 
         XCTAssertEqual(response?.series.id, "imdb:series:tt0944947")
         XCTAssertEqual(response?.series.title, "Game of Thrones")
+        XCTAssertEqual(response?.series.logoURL, logoURL)
         XCTAssertEqual(response?.seasons.map(\.seasonNumber), [1])
         XCTAssertEqual(response?.seasons.first?.episodes.first?.id, "tt0944947:1:1")
     }
@@ -329,7 +336,8 @@ final class TMDBUIProvidersTests: XCTestCase {
         title: String,
         kind: MediaKind,
         poster: String = "https://image.tmdb.org/t/p/w500/default.jpg",
-        backdrop: String? = nil
+        backdrop: String? = nil,
+        logo: String? = nil
     ) -> MediaItem {
         let tmdbId = Int(id.split(separator: ":").last ?? "0") ?? 0
         return MediaItem(
@@ -349,7 +357,8 @@ final class TMDBUIProvidersTests: XCTestCase {
                 runtime: 136,
                 rating: 8.2,
                 posterURL: URL(string: poster),
-                backdropURL: backdrop.flatMap(URL.init(string:))
+                backdropURL: backdrop.flatMap(URL.init(string:)),
+                logoURL: logo.flatMap(URL.init(string:))
             )
         )
     }
@@ -378,7 +387,7 @@ final class TMDBUIProvidersTests: XCTestCase {
         return Movie(id: item.id, mediaItem: item, metadata: metadata)
     }
 
-    private static func series(id: String, imdbID: String?, seasonCount: Int = 1) -> Series {
+    private static func series(id: String, imdbID: String?, seasonCount: Int = 1, logoURL: URL? = nil) -> Series {
         let metadata = MediaMetadata(
             tmdbId: 1399,
             imdbId: imdbID,
@@ -388,7 +397,8 @@ final class TMDBUIProvidersTests: XCTestCase {
             year: 2011,
             genres: ["Action", "Drama"],
             runtime: 57,
-            rating: 9.2
+            rating: 9.2,
+            logoURL: logoURL
         )
         let item = MediaItem(
             id: id,

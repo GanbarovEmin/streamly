@@ -69,13 +69,12 @@ public struct MainShellView: View {
                             controlBadges: ["notifications": notificationCenterViewModel.unreadCount],
                             onQueryChange: { query in
                                 searchViewModel.updateQuery(query)
-                                navigationCoordinator.selectSidebarRoute(.search)
                             },
                             onClear: {
                                 searchViewModel.clearQuery()
                             },
                             onSearchFocus: {
-                                navigationCoordinator.selectSidebarRoute(.search)
+                                navigationCoordinator.focusSearchField()
                             },
                             onControlAction: { control in
                                 handleTopControl(control)

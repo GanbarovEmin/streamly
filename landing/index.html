@@ -4,19 +4,19 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Streamly - Native macOS cinema center</title>
-    <meta name="description" content="Streamly is a native macOS cinema center for browsing movies and series, choosing user-controlled releases, tracking progress and watching through local playback.">
+    <meta name="description" content="Streamly is a native Apple Silicon cinema center for movie and series discovery, ranked release selection, local-first library management and playback.">
     <meta name="theme-color" content="#0a0b0f">
     <link rel="canonical" href="https://ganbarovemin.github.io/streamly/">
     <link rel="icon" href="assets/icons/favicon.svg" type="image/svg+xml">
 
     <meta property="og:type" content="website">
     <meta property="og:title" content="Streamly - Native macOS cinema center">
-    <meta property="og:description" content="Movies, series, release selection, Continue Watching and local-first library management in one Apple Silicon app.">
+    <meta property="og:description" content="Browse, inspect, choose a release, watch and resume in a local-first Apple Silicon app.">
     <meta property="og:image" content="assets/mockups/og-image.png">
     <meta property="og:url" content="https://ganbarovemin.github.io/streamly/">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Streamly">
-    <meta name="twitter:description" content="A native macOS cinema center for movies, series, release selection and local-first watching.">
+    <meta name="twitter:description" content="A native macOS cinema center for discovery, release selection and local-first watching.">
     <meta name="twitter:image" content="assets/mockups/og-image.png">
 
     <link rel="preload" as="image" href="assets/mockups/hero-app.png">
@@ -30,36 +30,37 @@
       </a>
       <nav class="main-nav" aria-label="Primary navigation">
         <a href="#preview">Screens</a>
-        <a href="#features">Product</a>
+        <a href="#flow">Flow</a>
+        <a href="#features">Features</a>
         <a href="#download">Download</a>
-        <a href="#privacy">Privacy</a>
+        <a href="#trust">Trust</a>
       </nav>
-      <a class="nav-cta" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download</a>
+      <a class="nav-cta" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download beta</a>
     </header>
 
     <main id="top">
       <section class="hero section-shell" aria-labelledby="hero-title">
         <div class="hero-copy" data-reveal>
-          <p class="platform">macOS 13+ - Apple Silicon - Local-first</p>
+          <p class="platform">Public beta - macOS 13+ - Apple Silicon</p>
           <h1 id="hero-title">Streamly</h1>
-          <p class="hero-tagline">A native cinema center for movies, series and release-based playback.</p>
-          <p class="hero-description">Browse real catalogs, open detail pages, choose the best available release, continue episodes and keep your library on this Mac.</p>
+          <p class="hero-tagline">Browse, choose and watch without leaving a native Mac app.</p>
+          <p class="hero-description">Streamly combines cinematic discovery, ranked user-controlled releases, local playback, Continue Watching and private library management in one focused desktop experience.</p>
           <div class="hero-actions">
-            <a class="button button-primary" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download .dmg</a>
-            <a class="button button-secondary" href="https://github.com/GanbarovEmin/streamly">View on GitHub</a>
+            <a class="button button-primary" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download latest DMG</a>
+            <a class="button button-secondary" href="#flow">See how it works</a>
           </div>
           <dl class="hero-facts" aria-label="Streamly highlights">
             <div>
-              <dt>Movies</dt>
-              <dd>Live catalog and details</dd>
+              <dt>Native</dt>
+              <dd>SwiftUI macOS app</dd>
             </div>
             <div>
-              <dt>Series</dt>
-              <dd>Seasons and episode tracking</dd>
+              <dt>Private</dt>
+              <dd>Local-first data</dd>
             </div>
             <div>
-              <dt>Playback</dt>
-              <dd>Ranked user sources</dd>
+              <dt>Flexible</dt>
+              <dd>User-controlled sources</dd>
             </div>
           </dl>
         </div>
@@ -70,10 +71,16 @@
         </div>
       </section>
 
+      <section class="trust-strip section-shell" aria-label="Beta trust notes" data-reveal>
+        <div><strong>Public beta</strong><span>Unsigned/notarization work is still in progress.</span></div>
+        <div><strong>No bundled media</strong><span>Streamly is a client for sources the user controls.</span></div>
+        <div><strong>Local by default</strong><span>Library, progress, cache and diagnostics stay on this Mac.</span></div>
+      </section>
+
       <section class="preview section-shell" id="preview" aria-labelledby="preview-title">
         <div class="section-heading" data-reveal>
-          <p class="section-label">Product Screens</p>
-          <h2 id="preview-title">Real Streamly screens from the current macOS build.</h2>
+          <p class="section-label">Real Product Screens</p>
+          <h2 id="preview-title">A Netflix-like desktop flow, built for the Mac instead of the browser.</h2>
         </div>
         <div class="preview-layout">
           <figure class="large-shot" data-reveal>
@@ -86,16 +93,16 @@
               <figcaption>Search</figcaption>
             </figure>
             <figure data-reveal>
-              <img src="assets/screenshots/library.png" alt="Streamly movie and series catalog grid">
-              <figcaption>Movies &amp; Series</figcaption>
-            </figure>
-            <figure data-reveal>
               <img src="assets/screenshots/movie-detail.png" alt="Streamly movie detail screen with ranked releases">
               <figcaption>Movie Detail</figcaption>
             </figure>
             <figure data-reveal>
               <img src="assets/screenshots/series-detail.png" alt="Streamly series detail screen with seasons and episodes">
               <figcaption>Series Detail</figcaption>
+            </figure>
+            <figure data-reveal>
+              <img src="assets/screenshots/player.png" alt="Streamly player screen">
+              <figcaption>Player</figcaption>
             </figure>
             <figure data-reveal>
               <img src="assets/screenshots/settings.png" alt="Streamly settings screen">
@@ -105,97 +112,96 @@
         </div>
       </section>
 
-      <section class="features section-shell" id="features" aria-labelledby="features-title">
-        <div class="section-heading compact" data-reveal>
-          <p class="section-label">Product</p>
-          <h2 id="features-title">The core MVP surfaces are visible, connected and ready to test.</h2>
-        </div>
-        <div class="feature-grid">
-          <article data-reveal><h3>Movies catalog</h3><p>Open the Movies section, scan posters, search within the catalog and jump into full detail pages.</p></article>
-          <article data-reveal><h3>Series catalog</h3><p>Browse shows, track seasons, continue the next episode and inspect available episode releases.</p></article>
-          <article data-reveal><h3>Release ranking</h3><p>Quality, seeders, codec, HDR and language signals push the best user-controlled source to the top.</p></article>
-          <article data-reveal><h3>Continue Watching</h3><p>Progress shelves use posters or episode imagery so unfinished movies and series are recognizable.</p></article>
-          <article data-reveal><h3>Library actions</h3><p>Add to library, mark watched, favorite, rate, share and manage local history from detail pages.</p></article>
-          <article data-reveal><h3>Cast navigation</h3><p>Actor rows and detail tabs keep discovery connected instead of trapping users on one title.</p></article>
-          <article data-reveal><h3>Playback bridge</h3><p>Streamly starts the selected release through the local playback path and keeps progress local.</p></article>
-          <article data-reveal><h3>Local-first settings</h3><p>Language, sources, playback, subtitles, cache, updates, diagnostics and privacy are controlled in-app.</p></article>
-        </div>
-      </section>
-
-      <section class="workflow section-shell" id="how-it-works" aria-labelledby="workflow-title">
+      <section class="workflow section-shell" id="flow" aria-labelledby="workflow-title">
         <div class="section-heading compact" data-reveal>
           <p class="section-label">Flow</p>
-          <h2 id="workflow-title">From catalog to playback without leaving the app.</h2>
+          <h2 id="workflow-title">From discovery to playback in four clear steps.</h2>
         </div>
         <div class="steps">
-          <article data-reveal><span>01</span><h3>Browse</h3><p>Open Movies or Series and pick from the current catalog.</p></article>
-          <article data-reveal><span>02</span><h3>Inspect</h3><p>Review posters, ratings, cast, episodes and available releases.</p></article>
-          <article data-reveal><span>03</span><h3>Choose</h3><p>Use the ranked best release or select a specific quality/source manually.</p></article>
-          <article data-reveal><span>04</span><h3>Resume</h3><p>Return from Continue Watching, Watch Next, History or Library.</p></article>
+          <article data-reveal><span>01</span><h3>Browse</h3><p>Open Home, Movies or Series and scan real catalog artwork, shelves and search results.</p></article>
+          <article data-reveal><span>02</span><h3>Inspect</h3><p>Review overview, cast, trailers, seasons, episodes, artwork and similar titles before choosing.</p></article>
+          <article data-reveal><span>03</span><h3>Choose Release</h3><p>Use the recommended release or manually pick a specific quality/source when control matters.</p></article>
+          <article data-reveal><span>04</span><h3>Watch &amp; Resume</h3><p>Start local playback, then return later from Continue Watching, History or Library.</p></article>
         </div>
       </section>
 
-      <section class="requirements section-shell" aria-labelledby="requirements-title">
-        <div class="info-panel" data-reveal>
-          <p class="section-label">System Requirements</p>
-          <h2 id="requirements-title">Built for modern Apple Silicon Macs.</h2>
-          <ul class="check-list">
-            <li>macOS 13.0 or newer.</li>
-            <li>Apple Silicon M1 or newer.</li>
-            <li>Internet connection for metadata, source lookup and release updates.</li>
-            <li>Free disk space for cache, subtitles, diagnostics and temporary playback data.</li>
-          </ul>
+      <section class="features section-shell" id="features" aria-labelledby="features-title">
+        <div class="section-heading compact" data-reveal>
+          <p class="section-label">What Is Inside</p>
+          <h2 id="features-title">A public beta with the core movie-night surfaces already connected.</h2>
         </div>
-        <div class="download-panel" id="download" data-reveal>
+        <div class="feature-grid">
+          <article data-reveal><h3>Catalogs</h3><p>Popular, new and featured movies and series are pulled into native poster shelves.</p></article>
+          <article data-reveal><h3>Search</h3><p>Find movies and shows with posters, metadata, filters and fast detail navigation.</p></article>
+          <article data-reveal><h3>Detail pages</h3><p>Cinematic title pages combine artwork, logos, cast, trailers, episodes and similar items.</p></article>
+          <article data-reveal><h3>Release ranking</h3><p>Quality, seeders, codec, HDR and source signals push strong releases forward.</p></article>
+          <article data-reveal><h3>Playback</h3><p>Start local playback from user-controlled files, magnets or compatible source results.</p></article>
+          <article data-reveal><h3>Subtitles</h3><p>Use embedded, local `.srt`/`.ass` and online subtitle workflows from the player path.</p></article>
+          <article data-reveal><h3>Library</h3><p>Track favorites, ratings, lists, progress, history and Continue Watching locally.</p></article>
+          <article data-reveal><h3>Diagnostics</h3><p>Create local support bundles with privacy-aware redaction only when you choose.</p></article>
+        </div>
+      </section>
+
+      <section class="requirements section-shell" id="download" aria-labelledby="download-title">
+        <div class="download-panel" data-reveal>
           <p class="section-label">Download</p>
-          <h2>Latest version</h2>
-          <p>The latest public `.dmg` is distributed through GitHub Releases.</p>
-          <a class="button button-primary full" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download for macOS</a>
+          <h2 id="download-title">Get the latest public beta for macOS.</h2>
+          <p>The DMG is published through GitHub Releases. The download button resolves to the newest release asset when GitHub allows it, otherwise it falls back to the latest release page.</p>
+          <a class="button button-primary full" data-download-link href="https://github.com/GanbarovEmin/streamly/releases/latest">Download for Apple Silicon Mac</a>
           <div class="download-links">
             <a href="https://github.com/GanbarovEmin/streamly/releases/latest">GitHub Releases</a>
             <a href="https://github.com/GanbarovEmin/streamly/blob/main/CHANGELOG.md">Release notes</a>
             <a data-checksum-link href="https://github.com/GanbarovEmin/streamly/releases/latest" hidden>SHA-256</a>
           </div>
-          <p class="checksum">Checksum: published beside every release DMG.</p>
+          <p class="checksum">Checksum is published next to every release DMG.</p>
+        </div>
+        <div class="info-panel" data-reveal>
+          <p class="section-label">Requirements</p>
+          <h2>Built for modern Apple Silicon Macs.</h2>
+          <ul class="check-list">
+            <li>macOS 13.0 or newer.</li>
+            <li>Apple Silicon M1, M2, M3, M4 or newer.</li>
+            <li>Internet connection for metadata, source lookup and release updates.</li>
+            <li>Free disk space for cache, subtitles, diagnostics and temporary playback data.</li>
+          </ul>
         </div>
       </section>
 
       <section class="install section-shell" id="install" aria-labelledby="install-title">
         <div class="section-heading compact" data-reveal>
           <p class="section-label">Installation</p>
-          <h2 id="install-title">Download the DMG, then move the app to Applications.</h2>
+          <h2 id="install-title">Install like a normal Mac app.</h2>
         </div>
         <ol class="install-list">
-          <li data-reveal><span>Download</span>Get the `.dmg` from the latest GitHub Release.</li>
-          <li data-reveal><span>Drag</span>Drag <code>Streamly.app</code> to Applications.</li>
-          <li data-reveal><span>Open</span>Launch the app from Applications.</li>
-          <li data-reveal><span>Allow</span>If macOS blocks an unsigned build, open it from Privacy &amp; Security with Open Anyway.</li>
+          <li data-reveal><span>Download</span>Get the latest `.dmg` from GitHub Releases.</li>
+          <li data-reveal><span>Drag</span>Move <code>Streamly.app</code> into Applications.</li>
+          <li data-reveal><span>Open</span>Launch Streamly from Applications.</li>
+          <li data-reveal><span>Allow</span>If macOS blocks the unsigned beta, use Privacy &amp; Security -> Open Anyway.</li>
         </ol>
       </section>
 
-      <section class="privacy-legal section-shell" id="privacy" aria-labelledby="privacy-title">
+      <section class="privacy-legal section-shell" id="trust" aria-labelledby="trust-title">
         <article data-reveal>
           <p class="section-label">Privacy</p>
-          <h2 id="privacy-title">Local-first by default.</h2>
+          <h2 id="trust-title">Local-first by default.</h2>
           <ul>
-            <li>Local library and history stay on this Mac.</li>
             <li>No telemetry is enabled by default.</li>
-            <li>Credentials are stored in Keychain.</li>
-            <li>Diagnostics export happens only by user action.</li>
+            <li>Library, history, settings and cache stay on this Mac.</li>
+            <li>Credentials use macOS Keychain where supported.</li>
+            <li>Diagnostics export is local and user-triggered.</li>
           </ul>
         </article>
-        <article id="legal" data-reveal>
-          <p class="section-label">Legal Note</p>
+        <article data-reveal>
+          <p class="section-label">Legal</p>
           <h2>Streamly is a media client.</h2>
           <ul>
             <li>Streamly does not host or provide media content.</li>
-            <li>Users are responsible for content sources and rights.</li>
-            <li>The app does not bypass DRM, paywalls or captcha.</li>
-            <li>Movie and TV metadata is provided by TMDB.</li>
+            <li>Users choose and configure their own sources.</li>
+            <li>The app does not bypass DRM, paywalls or captchas.</li>
+            <li>Users are responsible for content rights and local law.</li>
           </ul>
         </article>
       </section>
-
     </main>
 
     <footer class="site-footer">
@@ -206,7 +212,7 @@
       <nav aria-label="Footer navigation">
         <a href="https://github.com/GanbarovEmin/streamly">GitHub</a>
         <a href="https://github.com/GanbarovEmin/streamly/releases/latest">Releases</a>
-        <a href="https://github.com/GanbarovEmin/streamly/tree/main/docs">Documentation</a>
+        <a href="https://github.com/GanbarovEmin/streamly/tree/main/docs">Docs</a>
         <a href="https://github.com/GanbarovEmin/streamly/blob/main/docs/privacy.md">Privacy</a>
         <a href="https://github.com/GanbarovEmin/streamly/blob/main/docs/legal.md">Legal</a>
       </nav>

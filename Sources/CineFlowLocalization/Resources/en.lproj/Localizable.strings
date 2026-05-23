@@ -26,7 +26,7 @@
 "topControl.profile" = "Profile";
 "search.placeholder" = "Search movies, series, releases";
 "search.title" = "Search";
-"search.subtitle" = "Find movies and series through TMDB metadata. Playback uses only sources you add.";
+"search.subtitle" = "Find movies and series through metadata catalogs. Playback uses only sources you add.";
 "search.filters" = "Filters";
 "search.sort" = "Sort";
 "search.state.idle.title" = "Search Streamly";
@@ -176,8 +176,8 @@
 "series.release.empty.message" = "There are no available releases for the selected episode yet.";
 
 "sidebar.tagline" = "Cinema Center";
-"sidebar.runtime.title" = "Local-first runtime";
-"sidebar.runtime.message" = "TMDB metadata active; playback uses your sources";
+"sidebar.runtime.title" = "Streamly";
+"sidebar.runtime.message" = "Version";
 
 "hero.metric.bestRelease" = "Best release";
 "hero.metric.mode" = "Mode";
@@ -314,7 +314,7 @@
 "series.state.empty.action" = "Open Search";
 "series.state.error.recovery" = "Try opening the detail screen later or check metadata source settings.";
 "home.state.empty.action" = "Open Settings";
-"home.state.error.recovery" = "Check TMDB credentials in Settings or retry loading.";
+"home.state.error.recovery" = "Check the connection or retry loading.";
 
 "empty.inline.message.format" = "There are no items in \"%@\" yet.";
 "empty.inline.action" = "Open Search";

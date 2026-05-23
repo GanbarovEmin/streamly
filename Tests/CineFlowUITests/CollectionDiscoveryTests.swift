@@ -49,6 +49,21 @@ final class CollectionDiscoveryTests: XCTestCase {
         ])
     }
 
+    func testShortFranchiseKeywordsRequireWholeTitleTokens() {
+        let collections = CollectionDiscoveryBuilder.automaticCollections(
+            candidates: [
+                Self.media(id: "tmdb:movie:1", title: "DC League of Super-Pets", year: 2022, rating: 7.2),
+                Self.media(id: "tmdb:movie:2", title: "ABCD Mystery", year: 2025, rating: 7.0),
+                Self.media(id: "tmdb:movie:3", title: "The Documentary", year: 2024, rating: 7.1)
+            ],
+            libraryIDs: [],
+            watchlistIDs: []
+        )
+
+        let dc = collections.first { $0.id == "automatic-dc" }
+        XCTAssertEqual(dc?.items.map(\.mediaItem.displayTitle), ["DC League of Super-Pets"])
+    }
+
     @MainActor
     func testCollectionDetailViewModelAddsVisibleItemsToWatchlistWithoutUserCollectionMutation() async throws {
         let repository = CoreMockLibraryRepository(storedItems: [])

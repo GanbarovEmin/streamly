@@ -71,12 +71,17 @@ public struct TopSearchBarView: View {
         .padding(.trailing, CFSpacing.xl)
         .padding(.top, CFSpacing.md)
         .padding(.bottom, CFSpacing.md)
-        .background(.ultraThinMaterial)
-        .overlay(CFColors.backgroundPrimary.opacity(0.72))
+        .background {
+            ZStack {
+                Rectangle().fill(.ultraThinMaterial)
+                CFColors.backgroundPrimary.opacity(0.72)
+            }
+        }
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(CFColors.separator)
                 .frame(height: CFSeparators.width)
+                .allowsHitTesting(false)
         }
     }
 
@@ -137,8 +142,11 @@ public struct TopSearchBarView: View {
                     .padding(.bottom, 4)
             }
         }
-        .onTapGesture(perform: onSearchFocus)
         .help(L10n.string(.searchPlaceholder, language: languageSettingsStore.selectedLanguage))
+        .onTapGesture {
+            isSearchFocused = true
+            onSearchFocus()
+        }
         .onChange(of: focusRequestID) { _ in
             isSearchFocused = true
         }

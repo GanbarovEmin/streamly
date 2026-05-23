@@ -14,6 +14,7 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
     public let rating: Double?
     public let posterURL: URL?
     public let backdropURL: URL?
+    public let logoURL: URL?
     public let trailerURLs: [URL]
     public let cast: [CastMember]
     public let alternativeTitles: [String]
@@ -34,6 +35,7 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
         rating: Double? = nil,
         posterURL: URL? = nil,
         backdropURL: URL? = nil,
+        logoURL: URL? = nil,
         trailerURLs: [URL] = [],
         cast: [CastMember] = [],
         alternativeTitles: [String] = [],
@@ -53,6 +55,7 @@ public struct MediaMetadata: Codable, Equatable, Sendable {
         self.rating = rating
         self.posterURL = posterURL
         self.backdropURL = backdropURL
+        self.logoURL = logoURL
         self.trailerURLs = trailerURLs
         self.cast = cast
         self.alternativeTitles = alternativeTitles

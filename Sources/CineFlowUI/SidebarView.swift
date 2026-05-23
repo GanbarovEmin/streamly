@@ -1,14 +1,51 @@
 import CineFlowDesignSystem
 import CineFlowLocalization
+import Foundation
 import SwiftUI
+
+public struct SidebarFooterContent: Equatable {
+    public let title: String
+    public let versionSummary: String
+
+    public var detail: String {
+        detail(prefix: "Version")
+    }
+
+    public init(
+        version: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0",
+        build: String = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "dev"
+    ) {
+        title = "Streamly"
+        versionSummary = Self.versionSummary(version: version, build: build)
+    }
+
+    public func detail(prefix: String) -> String {
+        "\(prefix) \(versionSummary)"
+    }
+
+    private static func versionSummary(version: String, build: String) -> String {
+        let normalizedVersion = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedBuild = build.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayVersion = normalizedVersion.isEmpty ? "0.1.0" : normalizedVersion
+        guard !normalizedBuild.isEmpty else {
+            return displayVersion
+        }
+        return "\(displayVersion) (\(normalizedBuild))"
+    }
+}
 
 public struct SidebarView: View {
     @ObservedObject private var navigationCoordinator: NavigationCoordinator
     @EnvironmentObject private var languageSettingsStore: LanguageSettingsStore
     @Environment(\.cfReduceMotion) private var reduceMotion
+    private let footerContent: SidebarFooterContent
 
-    public init(navigationCoordinator: NavigationCoordinator) {
+    public init(
+        navigationCoordinator: NavigationCoordinator,
+        footerContent: SidebarFooterContent = SidebarFooterContent()
+    ) {
         self.navigationCoordinator = navigationCoordinator
+        self.footerContent = footerContent
     }
 
     public var body: some View {
@@ -101,13 +138,14 @@ public struct SidebarView: View {
 
     private var sidebarFooter: some View {
         VStack(alignment: .leading, spacing: CFSpacing.sm) {
-            Text(L10n.string(.sidebarRuntimeTitle, language: languageSettingsStore.selectedLanguage))
+            Text(footerContent.title)
                 .font(CFTypography.caption)
                 .foregroundStyle(CFColors.textSecondary)
 
-            Text(L10n.string(.sidebarRuntimeMessage, language: languageSettingsStore.selectedLanguage))
+            Text(footerContent.detail(prefix: L10n.string(.sidebarRuntimeMessage, language: languageSettingsStore.selectedLanguage)))
                 .font(CFTypography.caption)
-                .lineLimit(2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
                 .foregroundStyle(CFColors.textMuted)
         }
         .padding(CFSpacing.md)

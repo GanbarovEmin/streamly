@@ -37,7 +37,7 @@ struct AppWindowConfigurator: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.styleMask.insert([.fullSizeContentView, .resizable, .titled, .closable, .miniaturizable])
         window.collectionBehavior.insert(.fullScreenPrimary)
-        window.isMovableByWindowBackground = true
+        window.isMovableByWindowBackground = false
         window.backgroundColor = CFColors.windowBackgroundNSColor
         window.isOpaque = true
         window.minSize = minimumSize

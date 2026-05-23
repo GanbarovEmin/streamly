@@ -77,18 +77,9 @@ public struct MovieDetailView: View {
 
     private func movieDetailLayout(_ movie: MovieDetail) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: CFSpacing.xl) {
-                cinematicMovie(movie)
-
-                VStack(alignment: .leading, spacing: CFSpacing.lg) {
-                    tabs
-                    tabContent
-                }
-                .padding(.horizontal, CFSpacing.xxl)
-                .padding(.bottom, CFSpacing.xxl)
-            }
+            cinematicMovie(movie)
         }
-        .scrollIndicators(.visible)
+        .scrollIndicators(.hidden)
     }
 
     private func cinematicMovie(_ movie: MovieDetail) -> some View {
@@ -170,11 +161,7 @@ public struct MovieDetailView: View {
     private func movieMetadataPanel(_ movie: MovieDetail, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 14) {
-                Text(movie.title)
-                    .font(compact ? .system(size: 48, weight: .bold, design: .rounded) : CFTypography.heroTitle)
-                    .foregroundStyle(CFColors.textPrimary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.72)
+                movieLogoOrTitle(movie, compact: compact)
 
                 HStack(spacing: 26) {
                     Text(movie.runtime)
@@ -187,7 +174,7 @@ public struct MovieDetailView: View {
             }
 
             metadataSection(title: "ЖАНРЫ", values: movie.genres)
-            metadataSection(title: "АКТЁРЫ", values: viewModel.cast.prefix(3).map(\.name))
+            castMetadataSection(title: "АКТЁРЫ", cast: Array(viewModel.cast.prefix(3)))
 
             if let highlight = viewModel.bestReleaseHighlight {
                 DetailReleaseHighlightView(
@@ -234,43 +221,65 @@ public struct MovieDetailView: View {
         }
     }
 
-    private func movieActionDock(_ movie: MovieDetail) -> some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: CFSpacing.sm) {
-                DockButton(title: "Трейлер", systemImage: "movieclapper") {
-                    viewModel.selectedTab = .trailers
-                }
-                DockIconButton(systemImage: "folder.badge.plus", title: viewModel.isInLibrary ? "В библиотеке" : "Добавить в библиотеку") {
-                    viewModel.addToLibrary()
-                }
-                DockIconButton(systemImage: viewModel.isWatched ? "eye.fill" : "eye", title: "Отметить просмотренным") {
-                    viewModel.markWatched()
-                }
-                DockIconButton(systemImage: "hand.thumbsup", title: "Оценить") {
-                    viewModel.setUserRating(8)
-                }
-                DockIconButton(systemImage: viewModel.isFavorite ? "heart.fill" : "heart", title: "Избранное") {
-                    viewModel.toggleFavorite()
-                }
-                DockIconButton(systemImage: "play.fill", title: t(.detailWatchBest)) {
-                    playBestMovie(movie)
-                }
-                DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(movie.title, forType: .string)
-                }
-                DockIconButton(systemImage: "arrow.clockwise", title: "Обновить metadata") {
-                    Task { await viewModel.refreshMetadata() }
-                }
-                DockIconButton(systemImage: "clock.badge.xmark", title: "Убрать из истории") {
-                    Task { await viewModel.removeFromHistory() }
-                }
-                DockIconButton(systemImage: "trash", title: "Очистить cache metadata") {
-                    Task { await viewModel.clearMetadataCacheForItem() }
+    private func castMetadataSection(title: String, cast: [MovieCastMember]) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textMuted)
+
+            HStack(spacing: 10) {
+                ForEach(cast) { member in
+                    Button {
+                        navigateToPerson(member)
+                    } label: {
+                        Text(member.name)
+                            .font(CFTypography.caption)
+                            .foregroundStyle(CFColors.textPrimary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 16)
+                            .frame(height: 32)
+                            .background(Capsule().fill(CFColors.dockFill))
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(member.name) · \(member.role)")
+                    .cfFocusRing(cornerRadius: CFRadius.pill)
                 }
             }
         }
-        .scrollIndicators(.hidden)
+    }
+
+    private func navigateToPerson(_ member: MovieCastMember) {
+        navigationCoordinator.navigate(to: .personDetail(PersonRoutePayload(
+            id: member.id,
+            name: member.name,
+            role: member.role,
+            profileURL: member.profileURL,
+            sourceMedia: viewModel.mediaItem.map(PersonSourceMedia.init(mediaItem:))
+        )))
+    }
+
+    private func movieActionDock(_ movie: MovieDetail) -> some View {
+        HStack(spacing: CFSpacing.sm) {
+            DockButton(title: "Трейлер", systemImage: "movieclapper") {
+                viewModel.selectedTab = .trailers
+            }
+            DockIconButton(systemImage: "folder.badge.plus", title: viewModel.isInLibrary ? "В библиотеке" : "Добавить в библиотеку") {
+                viewModel.addToLibrary()
+            }
+            DockIconButton(systemImage: viewModel.isWatched ? "eye.fill" : "eye", title: "Отметить просмотренным") {
+                viewModel.markWatched()
+            }
+            DockIconButton(systemImage: "hand.thumbsup", title: "Оценить") {
+                viewModel.setUserRating(8)
+            }
+            DockIconButton(systemImage: viewModel.isFavorite ? "heart.fill" : "heart", title: "Избранное") {
+                viewModel.toggleFavorite()
+            }
+            DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(movie.title, forType: .string)
+            }
+        }
     }
 
     private func hero(_ movie: MovieDetail) -> some View {
@@ -347,11 +356,7 @@ public struct MovieDetailView: View {
 
     private func heroCopy(_ movie: MovieDetail, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 15) {
-            Text(movie.title)
-                .font(compact ? .system(size: 40, weight: .bold, design: .rounded) : CFTypography.heroTitle)
-                .foregroundStyle(CFColors.textPrimary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.76)
+            movieLogoOrTitle(movie, compact: compact)
 
             Text(movie.originalTitle)
                 .font(CFTypography.bodyEmphasis)
@@ -462,7 +467,8 @@ public struct MovieDetailView: View {
         PlaybackSelectionContext(
             mediaID: movie.id,
             displayTitle: movie.title,
-            mediaKind: .movie
+            mediaKind: .movie,
+            logoURL: movie.logoURL
         )
     }
 
@@ -485,6 +491,41 @@ public struct MovieDetailView: View {
                 ))
             }
         }
+    }
+
+    @ViewBuilder
+    private func movieLogoOrTitle(_ movie: MovieDetail, compact: Bool) -> some View {
+        let fallbackFont: Font = compact ? .system(size: 48, weight: .bold, design: .rounded) : CFTypography.heroTitle
+        if let logoURL = movie.logoURL {
+            AsyncImage(url: logoURL) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: 460, minHeight: compact ? 62 : 82, alignment: .leading)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: compact ? 340 : 460, maxHeight: compact ? 86 : 112, alignment: .leading)
+                        .accessibilityLabel(movie.title)
+                case .failure:
+                    movieTitleText(movie.title, font: fallbackFont)
+                @unknown default:
+                    movieTitleText(movie.title, font: fallbackFont)
+                }
+            }
+        } else {
+            movieTitleText(movie.title, font: fallbackFont)
+        }
+    }
+
+    private func movieTitleText(_ title: String, font: Font) -> some View {
+        Text(title)
+            .font(font)
+            .foregroundStyle(CFColors.textPrimary)
+            .lineLimit(2)
+            .minimumScaleFactor(0.72)
     }
 
     private var tabs: some View {
@@ -571,13 +612,7 @@ public struct MovieDetailView: View {
             } else {
                 ForEach(cast) { member in
                     Button {
-                        navigationCoordinator.navigate(to: .personDetail(PersonRoutePayload(
-                            id: member.id,
-                            name: member.name,
-                            role: member.role,
-                            profileURL: member.profileURL,
-                            sourceMedia: viewModel.mediaItem.map(PersonSourceMedia.init(mediaItem:))
-                        )))
+                        navigateToPerson(member)
                     } label: {
                         HStack(spacing: CFSpacing.md) {
                             Image(systemName: "person.crop.circle")

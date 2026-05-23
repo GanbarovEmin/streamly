@@ -38,7 +38,7 @@ public struct HomeSectionPreference: Codable, Equatable, Identifiable, Sendable 
 }
 
 public struct HomePreferences: Codable, Equatable, Sendable {
-    public static let currentSchemaVersion = 4
+    public static let currentSchemaVersion = 5
 
     public static let defaultSectionIDs: [String] = [
         "continueWatching",
@@ -48,6 +48,12 @@ public struct HomePreferences: Codable, Equatable, Sendable {
         "moreLikeThis",
         "collections",
         "trendingNow",
+        "popularMovies",
+        "popularSeries",
+        "newMovies",
+        "newSeries",
+        "featuredMovies",
+        "featuredSeries",
         "watchNext",
         "fromFavoriteGenres",
         "continueSeries",

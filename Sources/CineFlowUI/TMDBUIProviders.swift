@@ -328,7 +328,8 @@ private extension HomeSeedItem {
             isRecentlyAdded: isRecentlyAdded,
             isRecommended: isRecommended,
             artworkURL: mediaItem.bestPosterURL,
-            backdropURL: mediaItem.bestBackdropURL
+            backdropURL: mediaItem.bestBackdropURL,
+            logoURL: metadata?.logoURL
         )
     }
 }
@@ -348,7 +349,8 @@ private extension MovieDetail {
             overview: metadata?.overview.nilIfBlank ?? mediaItem.overview,
             backdropAccentIndex: abs(mediaItem.id.hashValue),
             posterURL: mediaItem.bestPosterURL,
-            backdropURL: mediaItem.bestBackdropURL
+            backdropURL: mediaItem.bestBackdropURL,
+            logoURL: metadata?.logoURL
         )
     }
 }
@@ -366,7 +368,8 @@ private extension SeriesDetail {
             overview: metadata.overview.nilIfBlank ?? series.mediaItem.overview,
             backdropAccentIndex: abs(series.id.hashValue),
             posterURL: series.mediaItem.bestPosterURL,
-            backdropURL: series.mediaItem.bestBackdropURL
+            backdropURL: series.mediaItem.bestBackdropURL,
+            logoURL: metadata.logoURL
         )
     }
 }

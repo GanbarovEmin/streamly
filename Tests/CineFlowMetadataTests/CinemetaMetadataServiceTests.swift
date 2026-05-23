@@ -125,6 +125,52 @@ final class CinemetaMetadataServiceTests: XCTestCase {
         XCTAssertEqual(results.map(\.id), ["imdb:movie:tt0000001", "imdb:movie:tt0000051"])
     }
 
+    func testStructuredCatalogsLoadYearIMDbRatingPaginationAndLogo() async throws {
+        let service = makeService { request in
+            switch request.url?.path {
+            case "/catalog/movie/year/genre=2026.json":
+                return (200, Self.catalogFixture(
+                    id: "tt2026001",
+                    title: "First 2026 Movie",
+                    type: "movie",
+                    releaseInfo: "2026",
+                    logo: "https://images.metahub.space/logo/medium/tt2026001/img"
+                ))
+            case "/catalog/movie/year/genre=2026&skip=50.json":
+                return (200, Self.catalogFixture(
+                    id: "tt2026051",
+                    title: "Second 2026 Movie",
+                    type: "movie",
+                    releaseInfo: "2026"
+                ))
+            case "/catalog/movie/year/genre=2026&skip=100.json":
+                return (200, #"{"metas":[]}"#)
+            case "/catalog/series/imdbRating.json":
+                return (200, Self.catalogFixture(
+                    id: "tt9000001",
+                    title: "Featured Series",
+                    type: "series",
+                    releaseInfo: "2025-"
+                ))
+            case "/catalog/series/imdbRating/skip=50.json":
+                return (200, #"{"metas":[]}"#)
+            default:
+                XCTFail("Unexpected path \(request.url?.path ?? "nil")")
+                return (404, "{}")
+            }
+        }
+
+        let yearResults = try await service.catalog(kind: .newByYear(2026), mediaKind: .movie)
+        let featuredResults = try await service.catalog(kind: .featuredByIMDbRating, mediaKind: .series)
+
+        XCTAssertEqual(yearResults.map(\.id), ["imdb:movie:tt2026001", "imdb:movie:tt2026051"])
+        XCTAssertEqual(
+            yearResults.first?.metadata?.logoURL?.absoluteString,
+            "https://images.metahub.space/logo/medium/tt2026001/img"
+        )
+        XCTAssertEqual(featuredResults.map(\.id), ["imdb:series:tt9000001"])
+    }
+
     func testCinemetaMatchCandidatesScoreExactAlternativeYearAndType() async throws {
         let service = makeService { request in
             switch request.url?.path {
@@ -237,6 +283,32 @@ final class CinemetaMetadataServiceTests: XCTestCase {
               "genre": ["Drama"],
               "imdbRating": "7.1",
               "releaseInfo": "2026"
+            }
+          ]
+        }
+        """
+    }
+
+    private static func catalogFixture(
+        id: String,
+        title: String,
+        type: String,
+        releaseInfo: String,
+        logo: String? = nil
+    ) -> String {
+        let logoLine = logo.map { #","logo": "\#($0)""# } ?? ""
+        return """
+        {
+          "metas": [
+            {
+              "id": "\(id)",
+              "imdb_id": "\(id)",
+              "type": "\(type)",
+              "name": "\(title)",
+              "description": "Catalog fixture.",
+              "genre": ["Drama"],
+              "imdbRating": "8.1",
+              "releaseInfo": "\(releaseInfo)"\(logoLine)
             }
           ]
         }

@@ -19,6 +19,10 @@ public enum HomeSectionKind: String, CaseIterable, Equatable, Sendable {
     case trendingNow
     case popularMovies
     case popularSeries
+    case newMovies
+    case newSeries
+    case featuredMovies
+    case featuredSeries
     case trendingMovies
     case trendingSeries
     case recentlyAdded
@@ -46,6 +50,12 @@ public extension HomeSectionKind {
         .moreLikeThis,
         .collections,
         .trendingNow,
+        .popularMovies,
+        .popularSeries,
+        .newMovies,
+        .newSeries,
+        .featuredMovies,
+        .featuredSeries,
         .watchNext,
         .fromFavoriteGenres,
         .continueSeries,
@@ -81,6 +91,7 @@ public struct HomeFeaturedItem: Identifiable, Equatable, Sendable {
     public let qualityBadge: String
     public let accentIndex: Int
     public let backdropURL: URL?
+    public let logoURL: URL?
 }
 
 public struct HomeSection: Identifiable, Equatable, Sendable {
@@ -123,6 +134,7 @@ public struct HomeSeedItem: Identifiable, Equatable, Sendable {
     public let progress: Double?
     public let artworkURL: URL?
     public let backdropURL: URL?
+    public let logoURL: URL?
 
     public init(
         id: String,
@@ -140,7 +152,8 @@ public struct HomeSeedItem: Identifiable, Equatable, Sendable {
         isRecommended: Bool = false,
         progress: Double? = nil,
         artworkURL: URL? = nil,
-        backdropURL: URL? = nil
+        backdropURL: URL? = nil,
+        logoURL: URL? = nil
     ) {
         self.id = id
         self.title = title
@@ -158,6 +171,7 @@ public struct HomeSeedItem: Identifiable, Equatable, Sendable {
         self.progress = progress.map { min(max($0, 0), 1) }
         self.artworkURL = artworkURL
         self.backdropURL = backdropURL
+        self.logoURL = logoURL
     }
 }
 
@@ -356,12 +370,14 @@ public final class HomeViewModel: ObservableObject {
     private let watchNextProvider: (any WatchNextProviderProtocol)?
     private let newEpisodesProvider: (any NewEpisodesProviderProtocol)?
     private let upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)?
+    private let currentYearProvider: () -> Int
     private let moodEngine = MoodDiscoveryEngine()
     private var lastMoodCandidates: [MoodDiscoveryCandidate] = []
     private var lastMoodTasteProfile = MoodDiscoveryTasteProfile()
     private var allLoadedSections: [HomeSection] = []
     private var personalizationLookup: [String: HomePersonalizationSnapshot] = [:]
     private var actionMediaLookup: [String: MediaItem] = [:]
+    private var continueWatchingProgressByMediaID: [String: PlaybackProgress] = [:]
 
     public init(
         seedItems: [HomeSeedItem] = HomeSeedLibrary.developmentItems,
@@ -372,7 +388,8 @@ public final class HomeViewModel: ObservableObject {
         metadataService: (any MetadataServiceProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
-        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
+        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil,
+        currentYearProvider: @escaping () -> Int = { Calendar(identifier: .gregorian).component(.year, from: Date()) }
     ) {
         self.seedProvider = { seedItems }
         self.settingsRepository = settingsRepository
@@ -383,6 +400,7 @@ public final class HomeViewModel: ObservableObject {
         self.watchNextProvider = watchNextProvider
         self.newEpisodesProvider = newEpisodesProvider
         self.upcomingCalendarProvider = upcomingCalendarProvider
+        self.currentYearProvider = currentYearProvider
     }
 
     public init(
@@ -394,7 +412,8 @@ public final class HomeViewModel: ObservableObject {
         metadataService: (any MetadataServiceProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
-        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
+        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil,
+        currentYearProvider: @escaping () -> Int = { Calendar(identifier: .gregorian).component(.year, from: Date()) }
     ) {
         self.seedProvider = seedProvider
         self.settingsRepository = settingsRepository
@@ -405,6 +424,7 @@ public final class HomeViewModel: ObservableObject {
         self.watchNextProvider = watchNextProvider
         self.newEpisodesProvider = newEpisodesProvider
         self.upcomingCalendarProvider = upcomingCalendarProvider
+        self.currentYearProvider = currentYearProvider
     }
 
     public convenience init(
@@ -416,7 +436,8 @@ public final class HomeViewModel: ObservableObject {
         metadataService: (any MetadataServiceProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
-        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
+        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil,
+        currentYearProvider: @escaping () -> Int = { Calendar(identifier: .gregorian).component(.year, from: Date()) }
     ) {
         let asyncSeedProvider: () async throws -> [HomeSeedItem] = {
             try seedProvider()
@@ -430,7 +451,8 @@ public final class HomeViewModel: ObservableObject {
             metadataService: metadataService,
             watchNextProvider: watchNextProvider,
             newEpisodesProvider: newEpisodesProvider,
-            upcomingCalendarProvider: upcomingCalendarProvider
+            upcomingCalendarProvider: upcomingCalendarProvider,
+            currentYearProvider: currentYearProvider
         )
     }
 
@@ -442,7 +464,8 @@ public final class HomeViewModel: ObservableObject {
         libraryRepository: (any LibraryRepositoryProtocol)? = nil,
         watchNextProvider: (any WatchNextProviderProtocol)? = nil,
         newEpisodesProvider: (any NewEpisodesProviderProtocol)? = nil,
-        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil
+        upcomingCalendarProvider: (any UpcomingCalendarProviderProtocol)? = nil,
+        currentYearProvider: @escaping () -> Int = { Calendar(identifier: .gregorian).component(.year, from: Date()) }
     ) {
         self.init(
             seedProvider: {
@@ -457,10 +480,10 @@ public final class HomeViewModel: ObservableObject {
                 provider: TMDBSeriesDetailProvider(metadataService: metadataService)
             ),
             newEpisodesProvider: newEpisodesProvider,
-            upcomingCalendarProvider: upcomingCalendarProvider
+            upcomingCalendarProvider: upcomingCalendarProvider,
+            currentYearProvider: currentYearProvider
         )
     }
-
     public var selectedFeaturedItem: HomeFeaturedItem? {
         guard featuredItems.indices.contains(selectedFeaturedIndex) else { return featuredItems.first }
         return featuredItems[selectedFeaturedIndex]
@@ -531,10 +554,6 @@ public final class HomeViewModel: ObservableObject {
             let recommendationSections = localRecommendationsEnabled
                 ? Self.filterRecommendationSections((try? await recommendationService?.homeRecommendations(limit: 8)) ?? [], hiddenMediaIDs: hiddenMediaIDs)
                 : []
-            actionMediaLookup = Self.mediaActionLookup(
-                seedItems: visibleItems,
-                mediaItems: visibleLibraryItems + recommendationSections.flatMap(\.items)
-            )
             episodeNotificationDigest = await newEpisodesProvider?.notificationDigest(for: newEpisodes) ?? .empty
             let moodCandidates = Self.applyTasteProfile(appSettings.tasteProfile, to: MoodDiscoveryCandidateBuilder.candidates(seedItems: visibleItems, libraryItems: visibleLibraryItems))
             let moodTasteProfile = MoodDiscoveryTasteProfile.from(
@@ -559,6 +578,10 @@ public final class HomeViewModel: ObservableObject {
             )
             var resolvedContinueItems: [CFMediaCardModel] = []
             resolvedContinueItems.reserveCapacity(visibleProgressRecords.count)
+            continueWatchingProgressByMediaID = Dictionary(
+                visibleProgressRecords.map { ($0.mediaID, $0) },
+                uniquingKeysWith: { current, _ in current }
+            )
             for progress in visibleProgressRecords {
                 resolvedContinueItems.append(await viewingResolver.card(for: progress))
             }
@@ -586,10 +609,20 @@ public final class HomeViewModel: ObservableObject {
                     localRecommendationsEnabled: localRecommendationsEnabled
                 )
             }.value
+            let catalogContent = await Self.catalogContent(
+                metadataService: metadataService,
+                year: currentYearProvider(),
+                hiddenMediaIDs: hiddenMediaIDs
+            )
+            let loadedSections = content.sections + catalogContent.sections
+            actionMediaLookup = Self.mediaActionLookup(
+                seedItems: visibleItems,
+                mediaItems: visibleLibraryItems + recommendationSections.flatMap(\.items) + catalogContent.mediaItems
+            )
             featuredItems = content.featuredItems
             selectedFeaturedIndex = 0
-            allLoadedSections = content.sections
-            sections = Self.applyHomePreferences(preferences, to: content.sections)
+            allLoadedSections = loadedSections
+            sections = Self.applyHomePreferences(preferences, to: loadedSections)
             state = .loaded
         } catch {
             featuredItems = []
@@ -601,6 +634,7 @@ public final class HomeViewModel: ObservableObject {
             lastMoodCandidates = []
             lastMoodTasteProfile = MoodDiscoveryTasteProfile()
             actionMediaLookup = [:]
+            continueWatchingProgressByMediaID = [:]
             state = .failed(CineFlowError.from(error, fallbackCategory: .metadata).userMessage)
         }
     }
@@ -666,6 +700,96 @@ public final class HomeViewModel: ObservableObject {
         }
     }
 
+    private static func catalogContent(
+        metadataService: (any MetadataServiceProtocol)?,
+        year: Int,
+        hiddenMediaIDs: Set<String>
+    ) async -> HomeCatalogContent {
+        guard let metadataService else {
+            return HomeCatalogContent(sections: [], mediaItems: [])
+        }
+
+        let requests: [HomeCatalogRequest] = [
+            HomeCatalogRequest(sectionKind: .popularMovies, title: "Popular Movies", catalogKind: .popular, mediaKind: .movie),
+            HomeCatalogRequest(sectionKind: .popularSeries, title: "Popular Series", catalogKind: .popular, mediaKind: .series),
+            HomeCatalogRequest(sectionKind: .newMovies, title: "New Movies \(year)", catalogKind: .newByYear(year), mediaKind: .movie),
+            HomeCatalogRequest(sectionKind: .newSeries, title: "New Series \(year)", catalogKind: .newByYear(year), mediaKind: .series),
+            HomeCatalogRequest(sectionKind: .featuredMovies, title: "Featured Movies", catalogKind: .featuredByIMDbRating, mediaKind: .movie),
+            HomeCatalogRequest(sectionKind: .featuredSeries, title: "Featured Series", catalogKind: .featuredByIMDbRating, mediaKind: .series)
+        ]
+
+        let responses = await withTaskGroup(of: HomeCatalogResponse?.self) { group in
+            for (index, request) in requests.enumerated() {
+                group.addTask {
+                    guard let loadedItems = try? await metadataService.catalog(kind: request.catalogKind, mediaKind: request.mediaKind) else {
+                        return nil
+                    }
+                    let visibleItems = uniqueCatalogItems(loadedItems, mediaKind: request.mediaKind, hiddenMediaIDs: hiddenMediaIDs)
+                    guard !visibleItems.isEmpty else { return nil }
+                    return HomeCatalogResponse(
+                        order: index,
+                        section: HomeSection(
+                            kind: request.sectionKind,
+                            title: request.title,
+                            cardStyle: .poster,
+                            items: catalogCards(from: visibleItems, limit: 8)
+                        ),
+                        mediaItems: visibleItems
+                    )
+                }
+            }
+
+            var responses: [HomeCatalogResponse] = []
+            for await response in group {
+                if let response {
+                    responses.append(response)
+                }
+            }
+            return responses.sorted { $0.order < $1.order }
+        }
+
+        return HomeCatalogContent(
+            sections: responses.map(\.section),
+            mediaItems: responses.flatMap(\.mediaItems)
+        )
+    }
+
+    private nonisolated static func uniqueCatalogItems(
+        _ items: [MediaItem],
+        mediaKind: MediaKind,
+        hiddenMediaIDs: Set<String>
+    ) -> [MediaItem] {
+        var seen: Set<String> = []
+        var uniqueItems: [MediaItem] = []
+        for item in items where item.kind == mediaKind && !hiddenMediaIDs.contains(item.id) {
+            guard seen.insert(item.id).inserted else { continue }
+            uniqueItems.append(item)
+        }
+        return uniqueItems
+    }
+
+    private nonisolated static func catalogCards(from items: [MediaItem], limit: Int) -> [CFMediaCardModel] {
+        Array(items.prefix(limit)).enumerated().map { index, item in
+            let genres = item.metadata?.genres ?? []
+            let genreLine = genres.prefix(2).joined(separator: ", ")
+            let metadataParts = [
+                item.displayYear,
+                genreLine.isEmpty ? nil : genreLine,
+                item.metadata?.rating.map { String(format: "%.1f", $0) }
+            ].compactMap { $0 }.filter { !$0.isEmpty }
+            return CFMediaCardModel(
+                id: item.id,
+                title: item.displayTitle,
+                metadata: metadataParts.joined(separator: " · "),
+                badge: item.metadata?.rating.map { String(format: "%.1f", $0) },
+                progress: nil,
+                accentIndex: index,
+                artworkURL: item.bestPosterURL,
+                genres: genres
+            )
+        }
+    }
+
     private static func personalizationLookup(
         seedItems: [HomeSeedItem],
         libraryItems: [MediaItem]
@@ -710,6 +834,16 @@ public final class HomeViewModel: ObservableObject {
         guard let libraryRepository, let item = actionMediaLookup[itemID] else { return }
         guard let list = try? await libraryRepository.defaultList() else { return }
         try? await libraryRepository.add(item, to: list.id)
+    }
+
+    public func removeFromContinueWatching(itemID: String) async {
+        guard let progressRepository else { return }
+        let progress = continueWatchingProgressByMediaID[itemID]
+        try? await progressRepository.clearProgress(
+            mediaID: progress?.mediaID ?? itemID,
+            episodeID: progress?.episodeID
+        )
+        await load()
     }
 
     public func hideTitle(itemID: String) async {
@@ -800,6 +934,24 @@ private struct HomePreparedContent: Sendable {
     let sections: [HomeSection]
 }
 
+private struct HomeCatalogContent: Sendable {
+    let sections: [HomeSection]
+    let mediaItems: [MediaItem]
+}
+
+private struct HomeCatalogRequest: Sendable {
+    let sectionKind: HomeSectionKind
+    let title: String
+    let catalogKind: MetadataCatalogKind
+    let mediaKind: MediaKind
+}
+
+private struct HomeCatalogResponse: Sendable {
+    let order: Int
+    let section: HomeSection
+    let mediaItems: [MediaItem]
+}
+
 private enum HomeContentBuilder {
     static func build(
         items: [HomeSeedItem],
@@ -826,7 +978,8 @@ private enum HomeContentBuilder {
                 overview: item.overview,
                 qualityBadge: item.quality,
                 accentIndex: index,
-                backdropURL: item.backdropURL
+                backdropURL: item.backdropURL,
+                logoURL: item.logoURL
             )
         }
 

@@ -1,5 +1,11 @@
 import Foundation
 
+public enum MetadataCatalogKind: Equatable, Hashable, Sendable {
+    case popular
+    case newByYear(Int)
+    case featuredByIMDbRating
+}
+
 public protocol MetadataServiceProtocol {
     func search(query: String) async throws -> [MediaItem]
     func searchMovies(query: String) async throws -> [MediaItem]
@@ -10,6 +16,7 @@ public protocol MetadataServiceProtocol {
     func seriesDetail(imdbID: String) async throws -> Series
     func seasonDetail(seriesTMDBID: Int, seasonNumber: Int) async throws -> Season
     func episodeDetail(seriesTMDBID: Int, seasonNumber: Int, episodeNumber: Int) async throws -> Episode
+    func catalog(kind: MetadataCatalogKind, mediaKind: MediaKind) async throws -> [MediaItem]
     func popularMovies() async throws -> [MediaItem]
     func popularSeries() async throws -> [MediaItem]
     func trending() async throws -> [MediaItem]
@@ -96,6 +103,17 @@ public extension MetadataServiceProtocol {
 
     func episodeDetail(seriesTMDBID: Int, seasonNumber: Int, episodeNumber: Int) async throws -> Episode {
         throw CoreMetadataServiceError.unsupported
+    }
+
+    func catalog(kind: MetadataCatalogKind, mediaKind: MediaKind) async throws -> [MediaItem] {
+        switch (kind, mediaKind) {
+        case (.popular, .movie):
+            try await popularMovies()
+        case (.popular, .series):
+            try await popularSeries()
+        default:
+            throw CoreMetadataServiceError.unsupported
+        }
     }
 
     func popularMovies() async throws -> [MediaItem] {

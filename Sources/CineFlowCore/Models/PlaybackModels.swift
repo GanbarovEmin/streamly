@@ -93,6 +93,7 @@ public struct PlaybackSelectionContext: Codable, Equatable, Hashable, Sendable {
     public let seasonNumber: Int?
     public let episodeNumber: Int?
     public let episodeID: String?
+    public let logoURL: URL?
 
     public init(
         mediaID: String,
@@ -100,7 +101,8 @@ public struct PlaybackSelectionContext: Codable, Equatable, Hashable, Sendable {
         mediaKind: MediaKind,
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
-        episodeID: String? = nil
+        episodeID: String? = nil,
+        logoURL: URL? = nil
     ) {
         self.mediaID = mediaID
         self.displayTitle = displayTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -110,6 +112,7 @@ public struct PlaybackSelectionContext: Codable, Equatable, Hashable, Sendable {
         self.seasonNumber = seasonNumber
         self.episodeNumber = episodeNumber
         self.episodeID = episodeID
+        self.logoURL = logoURL
     }
 
     public var episodeLabel: String? {

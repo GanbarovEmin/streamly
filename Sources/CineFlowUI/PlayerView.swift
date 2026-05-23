@@ -247,6 +247,8 @@ public struct PlayerView: View {
         let presentation = viewModel.bufferingPresentation
         let displayedProgress = presentation.progress ?? progress
         return VStack(alignment: .leading, spacing: CFSpacing.sm) {
+            bufferingLogoOrTitle(presentation)
+
             HStack(spacing: CFSpacing.sm) {
                 ProgressView()
                     .controlSize(.small)
@@ -305,6 +307,45 @@ public struct PlayerView: View {
                 .stroke(CFColors.separator, lineWidth: CFSeparators.width)
         )
         .cfShadow(.elevated)
+    }
+
+    @ViewBuilder
+    private func bufferingLogoOrTitle(_ presentation: PlayerBufferingPresentation) -> some View {
+        let title = viewModel.status.media?.selectionContext?.displayTitle
+            ?? viewModel.status.media?.title
+            ?? presentation.title
+        if let logoURL = presentation.logoURL {
+            AsyncImage(url: logoURL) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity, minHeight: 58)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: 240, maxHeight: 74, alignment: .leading)
+                        .accessibilityLabel(title)
+                case .failure:
+                    Text(title)
+                        .font(CFTypography.title)
+                        .foregroundStyle(CFColors.textPrimary)
+                        .lineLimit(2)
+                @unknown default:
+                    Text(title)
+                        .font(CFTypography.title)
+                        .foregroundStyle(CFColors.textPrimary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text(title)
+                .font(CFTypography.title)
+                .foregroundStyle(CFColors.textPrimary)
+                .lineLimit(2)
+        }
     }
 
     private func nextEpisodeCard(_ prompt: PlayerNextEpisodePrompt) -> some View {

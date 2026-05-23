@@ -121,7 +121,7 @@ public struct HomeView: View {
             ForEach(viewModel.sections) { section in
                 if section.kind == .moodDiscovery {
                     MoodDiscoveryHomeSection(
-                        title: localizedSectionTitle(section.kind),
+                        title: localizedSectionTitle(section),
                         filters: viewModel.moodFilters,
                         selectedFilter: viewModel.selectedMoodFilter,
                         pick: viewModel.moodPick,
@@ -141,21 +141,24 @@ public struct HomeView: View {
                     )
                 } else if section.items.isEmpty {
                     HomeEmptySection(
-                        title: localizedSectionTitle(section.kind),
-                        message: L10n.format(.emptyInlineMessageFormat, language: selectedLanguage, localizedSectionTitle(section.kind)),
+                        title: localizedSectionTitle(section),
+                        message: L10n.format(.emptyInlineMessageFormat, language: selectedLanguage, localizedSectionTitle(section)),
                         actionTitle: t(.emptyInlineAction)
                     ) {
                         navigationCoordinator.focusSearchField()
                     }
                 } else {
                     MediaCarousel(
-                        title: localizedSectionTitle(section.kind),
+                        title: localizedSectionTitle(section),
                         items: section.items,
                         cardStyle: section.cardStyle,
                         posterWidth: preferredPosterWidth,
                         landscapeWidth: preferredLandscapeWidth,
                         verticalSpacing: viewModel.homePreferences.layoutDensity == .compact ? CFSpacing.sm : CFSpacing.md,
                         menuActions: cardMenuActions(for: section),
+                        dismissAction: section.kind == .continueWatching ? { item in
+                            Task { await viewModel.removeFromContinueWatching(itemID: item.id) }
+                        } : nil,
                         action: { item in
                             if section.kind == .upcomingCalendar {
                                 Task { await viewModel.addUpcomingToWatchlist(itemID: item.id) }
@@ -174,6 +177,15 @@ public struct HomeView: View {
             .task(id: viewModel.artworkPrefetchKey) {
                 await imagePipeline.prefetch(viewModel.prefetchArtworkURLs)
             }
+        }
+    }
+
+    private func localizedSectionTitle(_ section: HomeSection) -> String {
+        switch section.kind {
+        case .popularMovies, .popularSeries, .newMovies, .newSeries, .featuredMovies, .featuredSeries:
+            section.title
+        default:
+            localizedSectionTitle(section.kind)
         }
     }
 
@@ -197,6 +209,14 @@ public struct HomeView: View {
             t(.homeSectionPopularMovies)
         case .popularSeries:
             t(.homeSectionPopularSeries)
+        case .newMovies:
+            "New Movies"
+        case .newSeries:
+            "New Series"
+        case .featuredMovies:
+            "Featured Movies"
+        case .featuredSeries:
+            "Featured Series"
         case .trendingMovies:
             t(.homeSectionTrendingMovies)
         case .trendingSeries:

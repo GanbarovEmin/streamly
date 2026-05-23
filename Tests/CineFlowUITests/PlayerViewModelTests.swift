@@ -971,6 +971,32 @@ final class PlayerViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testBufferingPresentationCarriesSelectionLogoURL() async throws {
+        let logoURL = try XCTUnwrap(URL(string: "https://images.metahub.space/logo/medium/tt0133093/img"))
+        let release = TorrentRelease(
+            id: "release-logo",
+            title: "Release",
+            quality: .fullHD,
+            seeders: 140,
+            availability: 1
+        )
+        let context = PlaybackSelectionContext(
+            mediaID: "imdb:movie:tt0133093",
+            displayTitle: "The Matrix",
+            mediaKind: .movie,
+            logoURL: logoURL
+        )
+        let viewModel = PlayerViewModel(
+            service: BufferingPlaybackService(release: release),
+            mediaSource: PlaybackMediaSource(release: release, selectionContext: context)
+        )
+
+        await viewModel.start()
+
+        XCTAssertEqual(viewModel.bufferingPresentation.logoURL, logoURL)
+    }
+
+    @MainActor
     func testBufferingPresentationShowsLiveTorrentTransferDetails() async throws {
         let release = TorrentRelease(
             id: "release",

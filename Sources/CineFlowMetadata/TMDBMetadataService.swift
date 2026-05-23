@@ -123,6 +123,18 @@ public struct CompositeTMDBCredentialProvider: TMDBCredentialProviding {
     }
 }
 
+public enum TMDBCredentialPolicy {
+    public static func userSupplied(
+        keychainService: any KeychainServiceProtocol,
+        legacySettingsRepository: DatabaseSettingsRepository? = nil
+    ) -> any TMDBCredentialProviding {
+        KeychainTMDBCredentialProvider(
+            keychainService: keychainService,
+            legacySettingsRepository: legacySettingsRepository
+        )
+    }
+}
+
 public final class KeychainTMDBCredentialProvider: TMDBCredentialProviding {
     private let keychainService: any KeychainServiceProtocol
     private let legacySettingsRepository: DatabaseSettingsRepository?

@@ -84,19 +84,9 @@ public struct SeriesDetailView: View {
 
             ZStack(alignment: .topTrailing) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: CFSpacing.xl) {
-                        cinematicSeries(series, reservedRailWidth: railWidth, showsRightRail: false)
-
-                        VStack(alignment: .leading, spacing: CFSpacing.lg) {
-                            tabs
-                            tabContent
-                        }
-                        .padding(.leading, CFSpacing.xxl)
-                        .padding(.trailing, railWidth + CFSpacing.xxl + CFSpacing.xl)
-                        .padding(.bottom, CFSpacing.xxl)
-                    }
+                    cinematicSeries(series, reservedRailWidth: railWidth, showsRightRail: false)
                 }
-                .scrollIndicators(.visible)
+                .scrollIndicators(.hidden)
 
                 seriesRightRail
                     .frame(width: railWidth, height: railHeight)
@@ -172,11 +162,7 @@ public struct SeriesDetailView: View {
     private func seriesMetadataPanel(_ series: SeriesDetail, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 14) {
-                Text(series.title)
-                    .font(compact ? .system(size: 48, weight: .bold, design: .rounded) : CFTypography.heroTitle)
-                    .foregroundStyle(CFColors.textPrimary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.72)
+                seriesLogoOrTitle(series, compact: compact)
 
                 HStack(spacing: 26) {
                     if let episode = viewModel.selectedEpisode {
@@ -191,7 +177,7 @@ public struct SeriesDetailView: View {
             }
 
             seriesMetadataSection(title: "ЖАНРЫ", values: series.genres)
-            seriesMetadataSection(title: "АКТЁРЫ", values: viewModel.cast.prefix(3).map(\.name))
+            seriesCastMetadataSection(title: "АКТЁРЫ", cast: Array(viewModel.cast.prefix(3)))
 
             if let highlight = viewModel.bestReleaseHighlight {
                 DetailReleaseHighlightView(
@@ -240,6 +226,43 @@ public struct SeriesDetailView: View {
                 }
             }
         }
+    }
+
+    private func seriesCastMetadataSection(title: String, cast: [MovieCastMember]) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Text(title)
+                .font(CFTypography.caption)
+                .foregroundStyle(CFColors.textMuted)
+
+            HStack(spacing: 10) {
+                ForEach(cast) { member in
+                    Button {
+                        navigateToPerson(member)
+                    } label: {
+                        Text(member.name)
+                            .font(CFTypography.caption)
+                            .foregroundStyle(CFColors.textPrimary)
+                            .lineLimit(1)
+                            .padding(.horizontal, 16)
+                            .frame(height: 32)
+                            .background(Capsule().fill(CFColors.dockFill))
+                    }
+                    .buttonStyle(.plain)
+                    .help("\(member.name) · \(member.role)")
+                    .cfFocusRing(cornerRadius: CFRadius.pill)
+                }
+            }
+        }
+    }
+
+    private func navigateToPerson(_ member: MovieCastMember) {
+        navigationCoordinator.navigate(to: .personDetail(PersonRoutePayload(
+            id: member.id,
+            name: member.name,
+            role: member.role,
+            profileURL: member.profileURL,
+            sourceMedia: viewModel.mediaItem.map(PersonSourceMedia.init(mediaItem:))
+        )))
     }
 
     @ViewBuilder
@@ -450,62 +473,29 @@ public struct SeriesDetailView: View {
     }
 
     private func seriesActionDock(_ series: SeriesDetail) -> some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: CFSpacing.sm) {
-                DockButton(title: "Трейлер", systemImage: "movieclapper") {
-                    viewModel.selectedTab = .trailers
-                }
-                DockIconButton(systemImage: "folder.badge.plus", title: viewModel.isInLibrary ? "В библиотеке" : "Добавить в библиотеку") {
-                    viewModel.addToLibrary()
-                }
-                DockIconButton(systemImage: "eye", title: "Отметить серию просмотренной") {
-                    if let episode = viewModel.selectedEpisode {
-                        viewModel.playEpisode(id: episode.id)
-                    }
-                }
-                DockIconButton(systemImage: "hand.thumbsup", title: viewModel.continueWatchingTitle) {
-                    viewModel.continueWatching()
-                    if let episode = viewModel.selectedEpisode, episode.isReleased {
-                        playBestSeries(series, episode: episode)
-                    } else {
-                        playSeries(series)
-                    }
-                }
-                DockIconButton(systemImage: "heart", title: "В список") {
-                    viewModel.addToList("Хочу посмотреть")
-                }
-                DockIconButton(systemImage: "star.fill", title: viewModel.userRating.map { "Оценка \($0)/10" } ?? "Оценить") {
-                    viewModel.setUserRating(8)
-                }
-                DockIconButton(systemImage: viewModel.isSeriesTracked ? "bell.badge.fill" : "bell", title: viewModel.isSeriesTracked ? "Tracked Series" : "Track Series") {
-                    Task { await viewModel.setSeriesTracked(!viewModel.isSeriesTracked) }
-                }
-                DockIconButton(systemImage: "play.fill", title: t(.seriesActionWatchBest)) {
-                    if let episode = viewModel.selectedEpisode, episode.isReleased {
-                        playBestSeries(series, episode: episode)
-                    }
-                }
-                DockIconButton(systemImage: "list.bullet.rectangle", title: t(.seriesActionChooseRelease)) {
-                    if viewModel.selectedEpisode?.isReleased == true {
-                        showingEpisodeReleases = true
-                    }
-                }
-                DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(series.title, forType: .string)
-                }
-                DockIconButton(systemImage: "arrow.clockwise", title: "Обновить metadata") {
-                    Task { await viewModel.refreshMetadata() }
-                }
-                DockIconButton(systemImage: "clock.badge.xmark", title: "Убрать из истории") {
-                    Task { await viewModel.removeFromHistory() }
-                }
-                DockIconButton(systemImage: "trash", title: "Очистить cache metadata") {
-                    Task { await viewModel.clearMetadataCacheForItem() }
+        HStack(spacing: CFSpacing.sm) {
+            DockButton(title: "Трейлер", systemImage: "movieclapper") {
+                viewModel.selectedTab = .trailers
+            }
+            DockIconButton(systemImage: "folder.badge.plus", title: viewModel.isInLibrary ? "В библиотеке" : "Добавить в библиотеку") {
+                viewModel.addToLibrary()
+            }
+            DockIconButton(systemImage: "eye", title: "Отметить серию просмотренной") {
+                if let episode = viewModel.selectedEpisode {
+                    viewModel.playEpisode(id: episode.id)
                 }
             }
+            DockIconButton(systemImage: "hand.thumbsup", title: viewModel.userRating.map { "Оценка \($0)/10" } ?? "Оценить") {
+                viewModel.setUserRating(8)
+            }
+            DockIconButton(systemImage: "heart", title: "В список") {
+                viewModel.addToList("Хочу посмотреть")
+            }
+            DockIconButton(systemImage: "square.and.arrow.up", title: "Поделиться") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(series.title, forType: .string)
+            }
         }
-        .scrollIndicators(.hidden)
     }
 
     private func hero(_ series: SeriesDetail) -> some View {
@@ -563,11 +553,7 @@ public struct SeriesDetailView: View {
 
     private func heroCopy(_ series: SeriesDetail, compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 15) {
-            Text(series.title)
-                .font(compact ? .system(size: 40, weight: .bold, design: .rounded) : CFTypography.heroTitle)
-                .foregroundStyle(CFColors.textPrimary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.76)
+            seriesLogoOrTitle(series, compact: compact)
 
             HStack(spacing: CFSpacing.sm) {
                 CFBadge(series.yearRange, tone: .source)
@@ -636,6 +622,41 @@ public struct SeriesDetailView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func seriesLogoOrTitle(_ series: SeriesDetail, compact: Bool) -> some View {
+        let fallbackFont: Font = compact ? .system(size: 48, weight: .bold, design: .rounded) : CFTypography.heroTitle
+        if let logoURL = series.logoURL {
+            AsyncImage(url: logoURL) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: 460, minHeight: compact ? 62 : 82, alignment: .leading)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: compact ? 340 : 460, maxHeight: compact ? 86 : 112, alignment: .leading)
+                        .accessibilityLabel(series.title)
+                case .failure:
+                    seriesTitleText(series.title, font: fallbackFont)
+                @unknown default:
+                    seriesTitleText(series.title, font: fallbackFont)
+                }
+            }
+        } else {
+            seriesTitleText(series.title, font: fallbackFont)
+        }
+    }
+
+    private func seriesTitleText(_ title: String, font: Font) -> some View {
+        Text(title)
+            .font(font)
+            .foregroundStyle(CFColors.textPrimary)
+            .lineLimit(2)
+            .minimumScaleFactor(0.72)
     }
 
     @ViewBuilder
@@ -725,14 +746,15 @@ public struct SeriesDetailView: View {
             mediaKind: .series,
             seasonNumber: episode.seasonNumber,
             episodeNumber: episode.episodeNumber,
-            episodeID: episode.id
+            episodeID: episode.id,
+            logoURL: series.logoURL
         )
     }
 
     private func selectedSeriesPlaybackContext(mediaID: String) -> PlaybackSelectionContext? {
         guard let series = viewModel.series else { return nil }
         guard let episode = viewModel.selectedEpisode else {
-            return PlaybackSelectionContext(mediaID: mediaID, displayTitle: series.title, mediaKind: .series)
+            return PlaybackSelectionContext(mediaID: mediaID, displayTitle: series.title, mediaKind: .series, logoURL: series.logoURL)
         }
         return playbackContext(for: series, episode: episode)
     }
@@ -797,13 +819,7 @@ public struct SeriesDetailView: View {
             } else {
                 ForEach(cast) { member in
                     Button {
-                        navigationCoordinator.navigate(to: .personDetail(PersonRoutePayload(
-                            id: member.id,
-                            name: member.name,
-                            role: member.role,
-                            profileURL: member.profileURL,
-                            sourceMedia: viewModel.mediaItem.map(PersonSourceMedia.init(mediaItem:))
-                        )))
+                        navigateToPerson(member)
                     } label: {
                         HStack(spacing: CFSpacing.md) {
                             Image(systemName: "person.crop.circle")

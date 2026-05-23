@@ -23,18 +23,33 @@ public enum MediaCatalogViewState: Equatable, Sendable {
     case failed(String)
 }
 
+public enum MediaCatalogSource: String, CaseIterable, Identifiable, Equatable, Sendable {
+    case popular
+    case newByYear
+    case featured
+
+    public var id: String { rawValue }
+}
+
 @MainActor
 public final class MediaCatalogViewModel: ObservableObject {
     @Published public private(set) var state: MediaCatalogViewState = .loading
     @Published public private(set) var items: [MediaItem] = []
+    @Published public private(set) var selectedCatalog: MediaCatalogSource = .popular
+    @Published public private(set) var selectedYear: Int
     @Published public var searchQuery = ""
 
     private let kind: MediaCatalogKind
     private let metadataService: any MetadataServiceProtocol
 
-    public init(kind: MediaCatalogKind, metadataService: any MetadataServiceProtocol) {
+    public init(
+        kind: MediaCatalogKind,
+        metadataService: any MetadataServiceProtocol,
+        currentYear: Int = Calendar(identifier: .gregorian).component(.year, from: Date())
+    ) {
         self.kind = kind
         self.metadataService = metadataService
+        selectedYear = currentYear
     }
 
     public var visibleItems: [MediaItem] {
@@ -74,28 +89,54 @@ public final class MediaCatalogViewModel: ObservableObject {
         await load()
     }
 
+    public func selectCatalog(_ catalog: MediaCatalogSource) async {
+        guard selectedCatalog != catalog else { return }
+        selectedCatalog = catalog
+        await load()
+    }
+
+    public func selectYear(_ year: Int) async {
+        let normalizedYear = min(max(year, supportedYearRange.lowerBound), supportedYearRange.upperBound)
+        guard selectedYear != normalizedYear else { return }
+        selectedYear = normalizedYear
+        if selectedCatalog == .newByYear {
+            await load()
+        }
+    }
+
+    public var supportedYearRange: ClosedRange<Int> {
+        1920...Calendar(identifier: .gregorian).component(.year, from: Date())
+    }
+
     private func catalogItems() async throws -> [MediaItem] {
         let primary = try await primaryCatalog()
-        let supplemental = primary.count >= 80
-            ? []
-            : try await metadataService.trending().filter { $0.kind == kind.mediaKind }
-        let groups = [primary, supplemental]
+        let supplemental: [MediaItem]
+        if selectedCatalog == .popular, primary.count < 80 {
+            supplemental = try await metadataService.trending().filter { $0.kind == kind.mediaKind }
+        } else {
+            supplemental = []
+        }
+        return Self.uniqueItems(from: [primary, supplemental], mediaKind: kind.mediaKind)
+    }
 
+    private static func uniqueItems(from groups: [[MediaItem]], mediaKind: MediaKind) -> [MediaItem] {
         var seen: Set<String> = []
         var uniqueItems: [MediaItem] = []
         for item in groups.flatMap({ $0 }) {
-            guard item.kind == kind.mediaKind, seen.insert(item.id).inserted else { continue }
+            guard item.kind == mediaKind, seen.insert(item.id).inserted else { continue }
             uniqueItems.append(item)
         }
         return uniqueItems
     }
 
     private func primaryCatalog() async throws -> [MediaItem] {
-        switch kind {
-        case .movies:
-            try await metadataService.popularMovies()
-        case .series:
-            try await metadataService.popularSeries()
+        switch selectedCatalog {
+        case .popular:
+            try await metadataService.catalog(kind: .popular, mediaKind: kind.mediaKind)
+        case .newByYear:
+            try await metadataService.catalog(kind: .newByYear(selectedYear), mediaKind: kind.mediaKind)
+        case .featured:
+            try await metadataService.catalog(kind: .featuredByIMDbRating, mediaKind: kind.mediaKind)
         }
     }
 

@@ -486,16 +486,24 @@ private struct AutomaticCollectionDefinition {
         self.defaultSort = defaultSort
         self.storyOrderByTitle = storyOrder
         self.matcher = matches ?? { item in
-            let haystack = [
+            let searchableText = [
                 item.displayTitle,
                 item.metadata?.originalTitle,
-                item.metadata?.alternativeTitles.joined(separator: " "),
-                item.metadata?.genres.joined(separator: " ")
+                item.metadata?.alternativeTitles.joined(separator: " ")
             ]
             .compactMap { $0 }
             .joined(separator: " ")
             .lowercased()
-            return keywords.contains { haystack.contains($0.lowercased()) }
+            let searchableTokens = Set(searchableText
+                .split { !$0.isLetter && !$0.isNumber }
+                .map(String.init))
+            return keywords.contains { keyword in
+                let normalizedKeyword = keyword.lowercased()
+                if normalizedKeyword.count <= 2 {
+                    return searchableTokens.contains(normalizedKeyword)
+                }
+                return searchableText.contains(normalizedKeyword)
+            }
         }
     }
 
