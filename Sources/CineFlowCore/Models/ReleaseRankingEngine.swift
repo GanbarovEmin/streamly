@@ -424,16 +424,47 @@ public struct ReleaseRankingEngine: Sendable {
         guard preferences.preferHighSeedersOverHighestQuality else { return 0 }
 
         var penalty = 0.0
-        if release.quality == .ultraHD, release.seeders < 25 {
-            penalty -= 2_200
+        if release.quality == .ultraHD {
+            if release.seeders <= 3 {
+                penalty -= 5_200
+            } else if release.seeders < 10 {
+                penalty -= 3_800
+            } else if release.seeders < 25 {
+                penalty -= 2_600
+            }
+        }
+
+        if release.releaseHealth == .weak, release.seeders < 10 {
+            penalty -= 1_200
         }
 
         guard let sizeBytes = release.sizeBytes else { return penalty }
         let sizeGB = Double(sizeBytes) / 1_000_000_000
+        if preferences.preferredQuality == .auto, release.quality == .ultraHD {
+            penalty -= 10_000
+            if sizeGB >= 30 {
+                penalty -= 18_000
+            } else if sizeGB >= 20 {
+                penalty -= 15_000
+            } else if sizeGB >= 12 {
+                penalty -= 12_000
+            } else if sizeGB >= 8 {
+                penalty -= 8_000
+            }
+        }
+        if preferences.preferredQuality == .auto, release.quality == .fullHD {
+            if sizeGB >= 8 {
+                penalty -= 3_500
+            } else if sizeGB >= 6 {
+                penalty -= 1_800
+            } else if sizeGB <= 4, release.seeders >= 25 {
+                penalty += 900
+            }
+        }
         if sizeGB >= 20, release.seeders < 50 {
-            penalty -= 1_400
+            penalty -= 1_800
         } else if sizeGB >= 8, release.seeders < 10 {
-            penalty -= 900
+            penalty -= 1_200
         }
         return penalty
     }

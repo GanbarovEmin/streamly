@@ -700,7 +700,7 @@ public final class SeriesDetailViewModel: ObservableObject {
 
     @discardableResult
     public func playBestRelease() -> TorrentRelease? {
-        guard let release = bestPlayableRelease?.release else { return nil }
+        guard let release = releases.first?.release else { return nil }
         if let episodeID = selectedEpisode?.id {
             playEpisode(id: episodeID)
         }
@@ -1039,14 +1039,46 @@ public final class SeriesDetailViewModel: ObservableObject {
 
 private extension SeriesDetail {
     func mediaItem() -> MediaItem {
-        let startYear = Int(yearRange.prefix(4))
+        let startYear = Self.firstYear(from: yearRange)
+        let metadata = MediaMetadata(
+            tmdbId: Self.metadataNumericID(from: id),
+            imdbId: Self.imdbID(from: id),
+            title: title,
+            originalTitle: title,
+            overview: overview,
+            year: startYear,
+            genres: genres,
+            rating: Double(rating),
+            posterURL: posterURL,
+            backdropURL: backdropURL,
+            logoURL: logoURL,
+            posterCandidates: posterURL.map { [MetadataArtworkCandidate(url: $0, score: 1)] } ?? [],
+            backdropCandidates: backdropURL.map { [MetadataArtworkCandidate(url: $0, score: 1)] } ?? []
+        )
         return MediaItem(
             id: id,
             title: title,
             kind: .series,
             overview: overview,
             releaseYear: startYear,
-            posterPath: nil
+            posterPath: posterURL?.absoluteString,
+            metadata: metadata
         )
+    }
+
+    static func firstYear(from yearRange: String) -> Int? {
+        yearRange
+            .split(separator: "-", maxSplits: 1)
+            .first
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    }
+
+    static func metadataNumericID(from id: String) -> Int {
+        let digits = id.filter(\.isNumber)
+        return Int(digits) ?? 0
+    }
+
+    static func imdbID(from id: String) -> String? {
+        id.split(separator: ":").last.map(String.init).flatMap { $0.hasPrefix("tt") ? $0 : nil }
     }
 }

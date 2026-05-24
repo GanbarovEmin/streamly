@@ -166,7 +166,7 @@ public struct MainShellState: Equatable, Sendable {
     }
 
     public static let defaultTopControls: [ShellTopControl] = [
-        ShellTopControl(id: "updates", titleKey: .topControlUpdates, systemImage: "arrow.triangle.2.circlepath"),
+        ShellTopControl(id: "refresh", titleKey: .topControlRefresh, systemImage: "arrow.triangle.2.circlepath"),
         ShellTopControl(id: "notifications", titleKey: .topControlNotifications, systemImage: "bell.fill"),
         ShellTopControl(id: "profile", titleKey: .topControlProfile, systemImage: "person.crop.circle.fill")
     ]

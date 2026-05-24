@@ -21,7 +21,7 @@
 "command.playPause" = "Play/Pause";
 "command.backCloseOverlay" = "Back / Close Overlay";
 
-"topControl.updates" = "Updates";
+"topControl.refresh" = "Refresh";
 "topControl.notifications" = "Notifications";
 "topControl.profile" = "Profile";
 "search.placeholder" = "Search movies, series, releases";

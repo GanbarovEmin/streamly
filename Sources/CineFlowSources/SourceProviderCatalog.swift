@@ -22,7 +22,8 @@ public struct SourceProviderCatalog {
 
     public static func providers(
         featureFlags: SourceProviderFeatureFlags = .development,
-        torrentioSettingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore()
+        torrentioSettingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore(),
+        credentialStore: any SourceCredentialStoreProtocol = KeychainSourceCredentialStore()
     ) -> SourceProviderCatalog {
         var providers: [any TorrentSourceProviderProtocol] = []
         if featureFlags.mockProvider {
@@ -35,7 +36,7 @@ public struct SourceProviderCatalog {
             providers.append(RuTrackerSourceProvider())
         }
         if featureFlags.torrentioProvider {
-            providers.append(TorrentioSourceProvider(settingsStore: torrentioSettingsStore))
+            providers.append(TorrentioSourceProvider(settingsStore: torrentioSettingsStore, credentialStore: credentialStore))
         }
         return SourceProviderCatalog(providers: providers)
     }

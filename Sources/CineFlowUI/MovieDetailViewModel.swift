@@ -414,7 +414,7 @@ public final class MovieDetailViewModel: ObservableObject {
 
     @discardableResult
     public func playBestRelease() -> TorrentRelease? {
-        guard let release = bestPlayableRelease?.release else { return nil }
+        guard let release = releases.first?.release else { return nil }
         play(release)
         return release
     }
@@ -498,7 +498,7 @@ public final class MovieDetailViewModel: ObservableObject {
     }
 
     private static func mediaItem(from result: SearchMediaResult) -> MediaItem {
-        MediaItem(
+        return MediaItem(
             id: result.id,
             title: result.title,
             kind: result.kind == .series ? .series : .movie,
@@ -655,13 +655,49 @@ public final class MovieDetailViewModel: ObservableObject {
 
 private extension MovieDetail {
     func mediaItem() -> MediaItem {
-        MediaItem(
+        let metadata = MediaMetadata(
+            tmdbId: Self.metadataNumericID(from: id),
+            imdbId: Self.imdbID(from: id),
+            title: title,
+            originalTitle: originalTitle.isEmpty ? title : originalTitle,
+            overview: overview,
+            year: year > 0 ? year : nil,
+            genres: genres,
+            runtime: Self.runtimeMinutes(from: runtime),
+            rating: Double(imdbRating) ?? Double(tmdbRating),
+            posterURL: posterURL,
+            backdropURL: backdropURL,
+            logoURL: logoURL,
+            posterCandidates: posterURL.map { [MetadataArtworkCandidate(url: $0, score: 1)] } ?? [],
+            backdropCandidates: backdropURL.map { [MetadataArtworkCandidate(url: $0, score: 1)] } ?? []
+        )
+        return MediaItem(
             id: id,
             title: title,
             kind: .movie,
             overview: overview,
-            releaseYear: year,
-            posterPath: nil
+            releaseYear: year > 0 ? year : nil,
+            posterPath: posterURL?.absoluteString,
+            metadata: metadata
         )
+    }
+
+    static func metadataNumericID(from id: String) -> Int {
+        let digits = id.filter(\.isNumber)
+        return Int(digits) ?? 0
+    }
+
+    static func imdbID(from id: String) -> String? {
+        id.split(separator: ":").last.map(String.init).flatMap { $0.hasPrefix("tt") ? $0 : nil }
+    }
+
+    static func runtimeMinutes(from runtime: String) -> Int? {
+        let lowercased = runtime.lowercased()
+        let hours = lowercased.range(of: #"(\d+)\s*h"#, options: .regularExpression)
+            .flatMap { Int(lowercased[$0].filter(\.isNumber)) } ?? 0
+        let minutes = lowercased.range(of: #"(\d+)\s*m"#, options: .regularExpression)
+            .flatMap { Int(lowercased[$0].filter(\.isNumber)) } ?? 0
+        let total = hours * 60 + minutes
+        return total > 0 ? total : nil
     }
 }

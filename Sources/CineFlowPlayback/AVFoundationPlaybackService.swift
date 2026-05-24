@@ -1,5 +1,6 @@
 import AVFoundation
 import CineFlowCore
+import Darwin
 import Foundation
 import Network
 
@@ -60,10 +61,12 @@ public final class AVFoundationPlaybackService: PlaybackServiceProtocol, AVPlaye
         }
 
         let item = AVPlayerItem(url: source.url)
-        let isLocalStreamingSource = source.url.isStreamlyLocalTorrentStreamURL || source.url.isStreamlyLocalHLSBridgePlaylistURL
-        item.preferredForwardBufferDuration = isLocalStreamingSource ? (preferredForwardBufferDuration ?? 2) : 0
+        let isLocalTorrentStream = source.url.isStreamlyLocalTorrentStreamURL
+        let isLocalHLSBridge = source.url.isStreamlyLocalHLSBridgePlaylistURL
+        let isLocalStreamingSource = isLocalTorrentStream || isLocalHLSBridge
+        item.preferredForwardBufferDuration = isLocalStreamingSource ? (preferredForwardBufferDuration ?? (isLocalHLSBridge ? 8 : 2)) : 0
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
-        avPlayer.automaticallyWaitsToMinimizeStalling = !isLocalStreamingSource
+        avPlayer.automaticallyWaitsToMinimizeStalling = !isLocalTorrentStream
         self.durationOverride = durationOverride.flatMap(Self.validDuration)
         self.audioTracksOverride = audioTracks
         self.subtitleTracksOverride = subtitleTracks
@@ -343,9 +346,6 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     private var hlsSubtitleTracks: [SubtitleTrack] = []
     private var selectedAudioTrackId: String?
     private var selectedSubtitleTrackId: String?
-    private let hlsStartupTimeoutSeconds: TimeInterval = 120
-    private let maxHLSStartupAttempts = 6
-
     public init(
         directService: AVFoundationPlaybackService? = nil,
         ffmpegExecutableURL: URL? = FFmpegRuntimeLocator.defaultExecutableURL(),
@@ -412,7 +412,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 selectedAudioTrackId: selectedAudioTrackId,
                 selectedSubtitleTrackId: selectedSubtitleTrackId,
                 autoplay: false,
-                preferredForwardBufferDuration: 1.5
+                preferredForwardBufferDuration: 2.5
             )
             await restartBridgedPlaybackAtBeginning()
             return
@@ -588,7 +588,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             selectedAudioTrackId: selectedAudioTrackId,
             selectedSubtitleTrackId: selectedSubtitleTrackId,
             autoplay: false,
-            preferredForwardBufferDuration: 1.5
+            preferredForwardBufferDuration: 2.5
         )
 
         guard autoplay else { return }
@@ -633,11 +633,15 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         let playlistURL = directoryURL.appendingPathComponent("stream.m3u8")
         let segmentPatternURL = directoryURL.appendingPathComponent("segment_%05d.ts")
         transcodeDirectoryURL = directoryURL
-        let startupDeadline = Date().addingTimeInterval(hlsStartupTimeoutSeconds)
+        let isLocalTorrentStream = source.url.isStreamlyLocalTorrentStreamURL
+        let startupDeadline = Date().addingTimeInterval(
+            Self.hlsStartupTimeoutSeconds(isLocalTorrentStream: isLocalTorrentStream)
+        )
+        let maxAttempts = Self.maxHLSStartupAttempts(isLocalTorrentStream: isLocalTorrentStream)
         var attempt = 0
         var lastStartupError: PlaybackServiceError?
 
-        while Date() < startupDeadline, attempt < maxHLSStartupAttempts {
+        while Date() < startupDeadline, attempt < maxAttempts {
             attempt += 1
             try removeStaleHLSOutputs(in: directoryURL)
 
@@ -650,7 +654,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 segmentPatternURL: segmentPatternURL,
                 startTimeSeconds: startTimeSeconds,
                 selectedAudioTrackId: selectedAudioTrackId,
-                videoMode: videoMode(for: attempt, isLocalTorrentStream: source.url.isStreamlyLocalTorrentStreamURL),
+                videoMode: videoMode(for: attempt, isLocalTorrentStream: isLocalTorrentStream),
                 logPipe: logPipe
             )
 
@@ -686,9 +690,9 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
                 guard shouldRetryTranscodeStartup(
                     after: error,
                     logText: logText,
-                    isLocalTorrentStream: source.url.isStreamlyLocalTorrentStreamURL
+                    isLocalTorrentStream: isLocalTorrentStream
                 ),
-                      attempt < maxHLSStartupAttempts,
+                      attempt < maxAttempts,
                       Date() < startupDeadline
                 else {
                     throw lastStartupError ?? PlaybackServiceError.unsupported(operation: "ffmpeg HLS startup failed")
@@ -715,15 +719,15 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         let process = Process()
         process.executableURL = executableURL
         let isLocalTorrentStream = sourceURL.isStreamlyLocalTorrentStreamURL
-        let readTimeoutMicros = isLocalTorrentStream ? "120000000" : "8000000"
         var arguments = [
             "-hide_banner",
             "-loglevel", "info",
             "-nostdin",
             "-fflags", "+genpts",
-            "-rw_timeout", readTimeoutMicros,
+            "-rw_timeout", Self.hlsReadTimeoutMicros(isLocalTorrentStream: isLocalTorrentStream),
         ]
         arguments += Self.hlsInputProbeArguments(isLocalTorrentStream: isLocalTorrentStream)
+        arguments += Self.hlsInputReadRateArguments(isLocalTorrentStream: isLocalTorrentStream)
         if startTimeSeconds > 0 {
             arguments += ["-ss", Self.ffmpegTimeLabel(startTimeSeconds)]
         }
@@ -768,15 +772,34 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
 
     static func hlsInputProbeArguments(isLocalTorrentStream: Bool) -> [String] {
         [
-            "-probesize", isLocalTorrentStream ? "4194304" : "5000000",
-            "-analyzeduration", isLocalTorrentStream ? "3000000" : "5000000"
+            "-probesize", isLocalTorrentStream ? "1048576" : "5000000",
+            "-analyzeduration", isLocalTorrentStream ? "1500000" : "5000000"
         ]
+    }
+
+    static func hlsInputReadRateArguments(isLocalTorrentStream: Bool) -> [String] {
+        // Local torrent streams are live producers: keep ffmpeg near playback
+        // time after a small startup burst so AVPlayer's event playlist does
+        // not race far ahead and stall.
+        isLocalTorrentStream ? ["-readrate", "1", "-readrate_initial_burst", "12"] : []
+    }
+
+    static func hlsReadTimeoutMicros(isLocalTorrentStream: Bool) -> String {
+        isLocalTorrentStream ? "15000000" : "8000000"
+    }
+
+    static func hlsStartupTimeoutSeconds(isLocalTorrentStream: Bool) -> TimeInterval {
+        isLocalTorrentStream ? 24 : 120
+    }
+
+    static func maxHLSStartupAttempts(isLocalTorrentStream: Bool) -> Int {
+        isLocalTorrentStream ? 2 : 6
     }
 
     private func videoMode(for attempt: Int, isLocalTorrentStream: Bool) -> FFmpegHLSVideoMode {
         if isLocalTorrentStream {
             switch attempt {
-            case 1, 2:
+            case 1:
                 return .hardwareH264
             default:
                 return .softwareH264
@@ -851,6 +874,16 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
         HLSMediaMetadata.parse(ffmpegLog: text)
     }
 
+    static func localTorrentStartupFailureIsFallbackEligible(logText: String) -> Bool {
+        let lowercasedLog = logText.lowercased()
+        return lowercasedLog.contains("server returned 5xx")
+            || lowercasedLog.contains("503")
+            || lowercasedLog.contains("service unavailable")
+            || lowercasedLog.contains("startup_buffer_timeout")
+            || lowercasedLog.contains("buffer_timeout")
+            || lowercasedLog.contains("media_header_unavailable")
+    }
+
     private static func audioOrdinal(from trackId: String?) -> Int? {
         guard let trackId, trackId.hasPrefix("audio:") else { return nil }
         return Int(trackId.dropFirst("audio:".count))
@@ -863,8 +896,7 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
     private func shouldRetryTranscodeStartup(after error: Error, logText: String, isLocalTorrentStream: Bool = false) -> Bool {
         guard matchesTranscodeFailure(error, .exitedEarly) else { return false }
         let lowercasedLog = logText.lowercased()
-        if isLocalTorrentStream,
-           lowercasedLog.contains("server returned 5xx") || lowercasedLog.contains("service unavailable") {
+        if isLocalTorrentStream, Self.localTorrentStartupFailureIsFallbackEligible(logText: logText) {
             return false
         }
         return lowercasedLog.contains("503")
@@ -933,6 +965,10 @@ public final class TranscodingAVPlaybackService: PlaybackServiceProtocol, AVPlay
             if transcodeProcess.isRunning {
                 transcodeProcess.interrupt()
                 await waitForProcessExit(transcodeProcess, timeoutSeconds: 1.25)
+            }
+            if transcodeProcess.isRunning {
+                kill(transcodeProcess.processIdentifier, SIGKILL)
+                await waitForProcessExit(transcodeProcess, timeoutSeconds: 0.75)
             }
         }
         _ = transcodeLogCapture?.stopAndFlush()
@@ -1098,12 +1134,13 @@ private final class LocalHLSFileServer: @unchecked Sendable {
         }
 
         let contentType = contentType(for: fileURL)
+        let headers = cacheHeaders(for: fileURL)
         if let range = byteRange(from: request, size: body.count) {
             let responseBody = method == "HEAD" ? Data() : body.subdata(in: range)
             return httpResponse(
                 status: "206 Partial Content",
                 contentType: contentType,
-                headers: ["Content-Range": "bytes \(range.lowerBound)-\(range.upperBound - 1)/\(body.count)"],
+                headers: headers.merging(["Content-Range": "bytes \(range.lowerBound)-\(range.upperBound - 1)/\(body.count)"]) { _, new in new },
                 body: responseBody,
                 contentLength: range.count
             )
@@ -1112,6 +1149,7 @@ private final class LocalHLSFileServer: @unchecked Sendable {
         return httpResponse(
             status: "200 OK",
             contentType: contentType,
+            headers: headers,
             body: method == "HEAD" ? Data() : body,
             contentLength: body.count
         )
@@ -1135,6 +1173,15 @@ private final class LocalHLSFileServer: @unchecked Sendable {
         default:
             "application/octet-stream"
         }
+    }
+
+    private func cacheHeaders(for url: URL) -> [String: String] {
+        guard url.pathExtension.lowercased() == "m3u8" else { return [:] }
+        return [
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        ]
     }
 
     private func byteRange(from request: String, size: Int) -> Range<Int>? {

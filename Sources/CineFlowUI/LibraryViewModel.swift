@@ -222,16 +222,24 @@ public final class LibraryViewModel: ObservableObject {
 
     private let repository: any LibraryRepositoryProtocol
     private let personalStatsService: (any PersonalStatsServiceProtocol)?
+    private let metadataService: (any MetadataServiceProtocol)?
     private var listItemsByID: [String: [MediaItem]] = [:]
     private var favoriteIDs: Set<String> = []
     private var ratingsByID: [String: Int] = [:]
     private var progressByID: [String: Double] = [:]
     private var watchedAtByID: [String: Date] = [:]
     private var addedAtByID: [String: Date] = [:]
+    private var metadataRepairAttemptedIDs: Set<String> = []
+    private let metadataRepairBatchLimit = 8
 
-    public init(repository: any LibraryRepositoryProtocol, personalStatsService: (any PersonalStatsServiceProtocol)? = nil) {
+    public init(
+        repository: any LibraryRepositoryProtocol,
+        personalStatsService: (any PersonalStatsServiceProtocol)? = nil,
+        metadataService: (any MetadataServiceProtocol)? = nil
+    ) {
         self.repository = repository
         self.personalStatsService = personalStatsService
+        self.metadataService = metadataService
     }
 
     public var isCurrentSectionEmpty: Bool {
@@ -284,6 +292,16 @@ public final class LibraryViewModel: ObservableObject {
             var loadedListItems: [String: [MediaItem]] = [:]
             for list in lists {
                 loadedListItems[list.id] = try await repository.items(in: list.id)
+            }
+            if try await repairPosterlessIMDbItems(listItems: loadedListItems) {
+                items = try await repository.items()
+                favorites = try await repository.favorites()
+                watchedItems = try await repository.watchedItems()
+                ratedItems = try await repository.ratedItems()
+                loadedListItems = [:]
+                for list in lists {
+                    loadedListItems[list.id] = try await repository.items(in: list.id)
+                }
             }
             listItemsByID = loadedListItems
             rebuildLookupTables()
@@ -585,6 +603,78 @@ public final class LibraryViewModel: ObservableObject {
             watchedCount: watchedItems.count,
             ratingCount: ratedItems.count
         )
+    }
+
+    private func repairPosterlessIMDbItems(listItems: [String: [MediaItem]]) async throws -> Bool {
+        guard let metadataService else { return false }
+        let candidates = posterlessIMDbRepairCandidates(listItems: listItems)
+        guard !candidates.isEmpty else { return false }
+
+        var repairedAny = false
+        for item in candidates {
+            metadataRepairAttemptedIDs.insert(item.id)
+            do {
+                let refreshedItem: MediaItem
+                switch imdbRepairTarget(for: item) {
+                case .movie(let imdbID):
+                    refreshedItem = try await metadataService.movieDetail(imdbID: imdbID).mediaItem
+                case .series(let imdbID):
+                    refreshedItem = try await metadataService.seriesDetail(imdbID: imdbID).mediaItem
+                case .none:
+                    continue
+                }
+                guard refreshedItem.bestPosterURL != nil || refreshedItem.bestBackdropURL != nil else {
+                    continue
+                }
+                try await repository.refreshMediaItemMetadata(refreshedItem)
+                repairedAny = true
+            } catch {
+                continue
+            }
+        }
+        return repairedAny
+    }
+
+    private func posterlessIMDbRepairCandidates(listItems: [String: [MediaItem]]) -> [MediaItem] {
+        var result: [MediaItem] = []
+        var seenIDs: Set<String> = []
+        let candidates = items
+            + favorites
+            + watchedItems.map(\.item)
+            + ratedItems.map(\.item)
+            + listItems.values.flatMap { $0 }
+
+        for item in candidates {
+            guard item.bestPosterURL == nil,
+                  imdbRepairTarget(for: item) != nil,
+                  !metadataRepairAttemptedIDs.contains(item.id),
+                  !seenIDs.contains(item.id)
+            else { continue }
+            seenIDs.insert(item.id)
+            result.append(item)
+            if result.count >= metadataRepairBatchLimit {
+                break
+            }
+        }
+        return result
+    }
+
+    private enum IMDbRepairTarget: Equatable {
+        case movie(String)
+        case series(String)
+    }
+
+    private func imdbRepairTarget(for item: MediaItem) -> IMDbRepairTarget? {
+        let parts = item.id.split(separator: ":", omittingEmptySubsequences: true).map(String.init)
+        guard parts.count == 3, parts[0] == "imdb", parts[2].hasPrefix("tt") else { return nil }
+        switch (parts[1], item.kind) {
+        case ("movie", .movie):
+            return .movie(parts[2])
+        case ("series", .series), ("tv", .series):
+            return .series(parts[2])
+        default:
+            return nil
+        }
     }
 
     private func filter(_ baseItems: [MediaItem]) -> [MediaItem] {

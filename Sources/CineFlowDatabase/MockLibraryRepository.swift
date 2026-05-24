@@ -35,6 +35,10 @@ public final class MockLibraryRepository: LibraryRepositoryProtocol {
         upsert(item)
     }
 
+    public func refreshMediaItemMetadata(_ item: MediaItem) async throws {
+        upsert(item)
+    }
+
     public func remove(mediaID: String) async throws {
         storedItems.removeAll { $0.id == mediaID }
         storedFavorites.removeAll { $0.id == mediaID }

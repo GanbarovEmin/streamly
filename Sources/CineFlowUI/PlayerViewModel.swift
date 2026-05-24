@@ -181,7 +181,7 @@ public enum PlayerKeyboardShortcut: Equatable, Sendable {
 
 @MainActor
 public final class PlayerViewModel: ObservableObject {
-    static let startupPlayableBufferTargetBytes: Int64 = 4 * 1024 * 1024
+    static let startupPlayableBufferTargetBytes: Int64 = 1 * 1024 * 1024
 
     @Published public private(set) var status: PlaybackStatus
     @Published public private(set) var errorMessage: String?
@@ -223,6 +223,7 @@ public final class PlayerViewModel: ObservableObject {
     private var nextEpisodeCountdownTask: Task<Void, Never>?
     private var lastTimelinePreviewBucket: Double?
     private var automaticallyTriedFallbackReleaseIDs = Set<String>()
+    private var automaticallyTriedFallbackReleaseIdentities = Set<String>()
     private var subtitleCueCache: [String: [PlayerSubtitleCue]] = [:]
 
     public init(
@@ -258,6 +259,9 @@ public final class PlayerViewModel: ObservableObject {
         self.configuredNextEpisodePrompt = nextEpisodePrompt
         self.debugLogger = debugLogger
         self.status = PlaybackStatus(media: mediaSource, state: .idle)
+        if let release = mediaSource.release {
+            markFallbackReleaseAttempted(release)
+        }
         self.fallbackSuggestion = mediaSource.release.flatMap {
             ReleaseFallbackPlanner.seedWarning(for: $0, in: fallbackReleases, preferences: fallbackPreferences)
         }
@@ -752,6 +756,7 @@ public final class PlayerViewModel: ObservableObject {
 
     public func tryNextBestRelease() async {
         guard let release = fallbackSuggestion?.nextBestRelease?.release else { return }
+        markFallbackReleaseAttempted(release)
         if let fallbackHandler {
             await fallbackHandler(release)
             return
@@ -1429,8 +1434,7 @@ public final class PlayerViewModel: ObservableObject {
         allowAutomaticFallback: Bool
     ) async {
         let cineFlowError = CineFlowError.from(error, fallbackCategory: .playback)
-        if status.state.shouldFailFastInUI,
-           allowAutomaticFallback,
+        if allowAutomaticFallback,
            startAutomaticFallback(reason: .failedToStart, failedStatus: status) {
             await logError(error, subsystem: subsystem, operation: operation)
             return
@@ -1468,18 +1472,15 @@ public final class PlayerViewModel: ObservableObject {
     @discardableResult
     private func startAutomaticFallback(reason: ReleaseFallbackReason, failedStatus: PlaybackStatus) -> Bool {
         guard fallbackHandler != nil,
-              let release = failedStatus.media?.release ?? mediaSource.release,
-              let suggestion = ReleaseFallbackPlanner.suggestion(
-                for: release,
-                in: fallbackReleases,
-                reason: reason,
-                preferences: recoveryFallbackPreferences(for: reason)
-              ),
+              let release = failedStatus.media?.release ?? mediaSource.release
+        else { return false }
+        markFallbackReleaseAttempted(release)
+        guard let suggestion = fallbackSuggestion(for: release, reason: reason),
               let nextRelease = suggestion.nextBestRelease?.release,
-              !automaticallyTriedFallbackReleaseIDs.contains(nextRelease.id)
+              !releaseWasAutomaticallyAttempted(nextRelease)
         else { return false }
 
-        automaticallyTriedFallbackReleaseIDs.insert(nextRelease.id)
+        markFallbackReleaseAttempted(nextRelease)
         fallbackSuggestion = suggestion
         errorMessage = nil
         status = PlaybackStatus(
@@ -1548,20 +1549,16 @@ public final class PlayerViewModel: ObservableObject {
             reason = nil
         }
 
-        guard let reason,
-              let suggestion = ReleaseFallbackPlanner.suggestion(
-                for: release,
-                in: fallbackReleases,
-                reason: reason,
-                preferences: recoveryFallbackPreferences(for: reason)
-              )
+        guard let reason else { return }
+        markFallbackReleaseAttempted(release)
+        guard let suggestion = fallbackSuggestion(for: release, reason: reason)
         else { return }
 
         fallbackSuggestion = suggestion
         if fallbackHandler != nil,
            let nextRelease = suggestion.nextBestRelease?.release,
-           !automaticallyTriedFallbackReleaseIDs.contains(nextRelease.id) {
-            automaticallyTriedFallbackReleaseIDs.insert(nextRelease.id)
+           !releaseWasAutomaticallyAttempted(nextRelease) {
+            markFallbackReleaseAttempted(nextRelease)
             self.status = PlaybackStatus(
                 media: status.media,
                 state: .retrying,
@@ -1600,6 +1597,28 @@ public final class PlayerViewModel: ObservableObject {
                 ]
             )
         }
+    }
+
+    private func fallbackSuggestion(for release: TorrentRelease, reason: ReleaseFallbackReason) -> ReleaseFallbackSuggestion? {
+        let releases = fallbackReleases.filter {
+            $0.id == release.id || !releaseWasAutomaticallyAttempted($0)
+        }
+        return ReleaseFallbackPlanner.suggestion(
+            for: release,
+            in: releases,
+            reason: reason,
+            preferences: recoveryFallbackPreferences(for: reason)
+        )
+    }
+
+    private func releaseWasAutomaticallyAttempted(_ release: TorrentRelease) -> Bool {
+        automaticallyTriedFallbackReleaseIDs.contains(release.id)
+            || automaticallyTriedFallbackReleaseIdentities.contains(ReleaseFallbackPlanner.playbackIdentity(for: release))
+    }
+
+    private func markFallbackReleaseAttempted(_ release: TorrentRelease) {
+        automaticallyTriedFallbackReleaseIDs.insert(release.id)
+        automaticallyTriedFallbackReleaseIdentities.insert(ReleaseFallbackPlanner.playbackIdentity(for: release))
     }
 
     private func recoveryFallbackPreferences(for reason: ReleaseFallbackReason) -> RankingPreferences {

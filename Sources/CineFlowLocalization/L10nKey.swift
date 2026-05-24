@@ -32,7 +32,7 @@ public extension L10nKey {
     static let commandPlayPause = Self(rawValue: "command.playPause")
     static let commandBackCloseOverlay = Self(rawValue: "command.backCloseOverlay")
 
-    static let topControlUpdates = Self(rawValue: "topControl.updates")
+    static let topControlRefresh = Self(rawValue: "topControl.refresh")
     static let topControlNotifications = Self(rawValue: "topControl.notifications")
     static let topControlProfile = Self(rawValue: "topControl.profile")
     static let searchPlaceholder = Self(rawValue: "search.placeholder")

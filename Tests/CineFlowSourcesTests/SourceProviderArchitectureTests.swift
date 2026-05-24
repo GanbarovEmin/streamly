@@ -40,6 +40,43 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertTrue(result.sourceErrors.isEmpty)
     }
 
+    func testAggregatorPreservesDirectStreamMetadataWhenNormalizingProviderResults() async throws {
+        let directURL = URL(string: "https://cached.example/Project.Hail.Mary.2026.1080p.mkv")!
+        let source = ControlledTorrentSourceProvider(
+            sourceId: "cached",
+            displayName: "Cached Source",
+            outcomes: [
+                .success([
+                    TorrentRelease(
+                        id: "cached-direct",
+                        sourceId: "cached",
+                        sourceName: "Torrentio Cached",
+                        title: "Project Hail Mary 1080p",
+                        directStreamURL: directURL,
+                        quality: .fullHD,
+                        seeders: 0,
+                        preferredFileIndex: 3,
+                        availability: 1
+                    )
+                ])
+            ]
+        )
+        let manager = SourceManager(
+            providers: [source],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+
+        let result = try await TorrentSearchAggregator(sourceManager: manager).search(query: "tt12042730")
+        let release = try XCTUnwrap(result.rankedReleases.first?.release)
+
+        XCTAssertEqual(release.sourceId, "cached")
+        XCTAssertEqual(release.sourceName, "Torrentio Cached")
+        XCTAssertEqual(release.directStreamURL, directURL)
+        XCTAssertEqual(release.preferredFileIndex, 3)
+        XCTAssertEqual(release.releaseHealth, .excellent)
+    }
+
     func testAggregatorTimesOutOneSourceRetriesSafelyAndKeepsOtherResults() async throws {
         let slow = ControlledTorrentSourceProvider(
             sourceId: "slow",
@@ -191,7 +228,7 @@ final class SourceProviderArchitectureTests: XCTestCase {
 
         XCTAssertEqual(
             url.path,
-            "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=10/stream/movie/tt0133093.json"
+            "/providers=rutor,rutracker|sort=seeders|language=russian|qualityfilter=scr,cam|limit=10/stream/movie/tt0133093.json"
         )
     }
 
@@ -206,7 +243,46 @@ final class SourceProviderArchitectureTests: XCTestCase {
 
         XCTAssertEqual(
             url.path,
-            "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=5/stream/series/tt0944947:1:1.json"
+            "/sort=seeders|language=russian|qualityfilter=scr,cam|limit=5/stream/series/tt0944947:1:1.json"
+        )
+    }
+
+    func testTorrentioSettingsMigratesLegacyTwoProviderDefaultsToReliableDefaults() throws {
+        let legacyJSON = """
+        {
+          "providers": ["rutor", "rutracker"],
+          "priorityLanguage": "russian",
+          "excludedQualities": ["scr", "cam"],
+          "resultLimit": 10
+        }
+        """
+
+        let settings = try JSONDecoder().decode(TorrentioSettings.self, from: Data(legacyJSON.utf8))
+
+        XCTAssertEqual(settings.providers, TorrentioProviderOption.allCases)
+        XCTAssertEqual(settings.sortMode, .seeders)
+        XCTAssertEqual(settings.resultLimit, 50)
+    }
+
+    func testTorrentioConfigurationURLBuilderSupportsDebridCredentials() throws {
+        let settings = TorrentioSettings(
+            sortMode: .seeders,
+            resultLimit: 100,
+            debridProvider: .realDebrid,
+            debridOptions: [.hideDownloadLinks]
+        )
+        let credentials = SourceCredentials(username: "realdebrid", token: "rd-token")
+
+        let url = try TorrentioConfigurationURLBuilder().streamURL(
+            type: .movie,
+            id: "tt0133093",
+            settings: settings,
+            credentials: credentials
+        )
+
+        XCTAssertEqual(
+            url.path,
+            "/sort=seeders|language=russian|qualityfilter=scr,cam|limit=100|debridoptions=nodownloadlinks|realdebrid=rd-token/stream/movie/tt0133093.json"
         )
     }
 
@@ -218,7 +294,7 @@ final class SourceProviderArchitectureTests: XCTestCase {
             urlBuilder: TorrentioConfigurationURLBuilder(baseURL: URL(string: "https://torrentio.example")!)
         )
         TorrentioMockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.url?.path, "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=3/stream/series/tt0944947:1:1.json")
+            XCTAssertEqual(request.url?.path, "/sort=seeders|language=russian|qualityfilter=scr,cam|limit=3/stream/series/tt0944947:1:1.json")
             return (200, #"{"streams":[{"title":"Game of Thrones S01E01 1080p\n👤 42 💾 4.2 GB ⚙️ Rutracker","infoHash":"abcdef1234567890abcdef1234567890abcdef12","fileIdx":0}]}"#)
         }
 
@@ -270,6 +346,54 @@ final class SourceProviderArchitectureTests: XCTestCase {
         XCTAssertTrue(release.magnetURI?.contains("xt=urn:btih:61065ea115b7cc3e8db9fb5ab1f6f327f08bd1c9") == true)
         XCTAssertTrue(release.magnetURI?.contains("tr=http%3A%2F%2Fbt4.t-ru.org%2Fann%3Fmagnet") == true)
         XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce") == true)
+    }
+
+    func testTorrentioStreamWithoutSourcesStillAddsPublicTrackers() throws {
+        let json = """
+        {
+          "streams": [
+            {
+              "title": "Project Hail Mary 2026 1080p\\n👤 1621 💾 2.72 GB ⚙️ 1337x",
+              "infoHash": "d6ecf1ac0937e505330aed486f4980be1df9bbb8",
+              "fileIdx": 0,
+              "sources": []
+            }
+          ]
+        }
+        """
+        let response = try JSONDecoder().decode(StremioStreamResponse.self, from: Data(json.utf8))
+
+        let release = try XCTUnwrap(TorrentioStreamMapper().releases(from: response, mediaID: "tt12042730").first)
+
+        XCTAssertEqual(release.sourceName, "1337x")
+        XCTAssertTrue(release.magnetURI?.contains("xt=urn:btih:d6ecf1ac0937e505330aed486f4980be1df9bbb8") == true)
+        XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce") == true)
+        XCTAssertTrue(release.magnetURI?.contains("tr=udp%3A%2F%2Ftracker.qu.ax%3A6969%2Fannounce") == true)
+    }
+
+    func testTorrentioDirectStreamResponseNormalizesIntoCachedRelease() throws {
+        let json = """
+        {
+          "streams": [
+            {
+              "name": "Torrentio Cached",
+              "title": "Project Hail Mary 2026 1080p WEB-DL\\n👤 0 💾 7.2 GB",
+              "url": "https://cached.example/Project.Hail.Mary.2026.1080p.mkv"
+            }
+          ]
+        }
+        """
+        let response = try JSONDecoder().decode(StremioStreamResponse.self, from: Data(json.utf8))
+
+        let release = try XCTUnwrap(TorrentioStreamMapper().releases(from: response, mediaID: "tt12042730").first)
+
+        XCTAssertTrue(release.id.hasPrefix("torrentio:tt12042730:direct:"))
+        XCTAssertEqual(release.sourceName, "Torrentio Cached")
+        XCTAssertEqual(release.directStreamURL, URL(string: "https://cached.example/Project.Hail.Mary.2026.1080p.mkv"))
+        XCTAssertNil(release.magnetURI)
+        XCTAssertEqual(release.quality, .fullHD)
+        XCTAssertEqual(release.releaseHealth, .excellent)
+        XCTAssertEqual(release.rankScore, 100_000)
     }
 
     func testTorrentioStreamWithoutFileIndexLetsPlaybackSelectBestMediaFile() throws {

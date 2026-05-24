@@ -78,6 +78,51 @@ final class PlaybackAutoSourceResolverTests: XCTestCase {
         XCTAssertEqual(activeProviderIDs, ["torrentio"])
     }
 
+    func testResolverRanksAutoPlaybackTowardHealthySmall1080pRelease() async throws {
+        let recorder = QueryRecorder()
+        let large4K = torrentRelease(
+            id: "torrentio:project-hail-mary:large-4k",
+            title: "Project Hail Mary 2160p 31GB",
+            quality: .ultraHD,
+            seeders: 800,
+            sizeBytes: 31_000_000_000
+        )
+        let healthy1080p = torrentRelease(
+            id: "torrentio:project-hail-mary:psa-1080p",
+            title: "Project Hail Mary 1080p PSA",
+            quality: .fullHD,
+            seeders: 1_600,
+            sizeBytes: 2_700_000_000
+        )
+        let manager = SourceManager(
+            providers: [
+                RecordingTorrentProvider(
+                    sourceId: "torrentio",
+                    defaultIsEnabled: true,
+                    expectedQuery: "tt12042730",
+                    releases: [large4K, healthy1080p],
+                    recorder: recorder
+                )
+            ],
+            settingsStore: InMemorySourceSettingsStore(),
+            credentialStore: InMemorySourceCredentialStore()
+        )
+        let resolver = PlaybackAutoSourceResolver(
+            metadataService: ResolverMetadataService(),
+            sourceManager: manager,
+            diagnosticsService: CoreMockDiagnosticsService()
+        )
+
+        let resolution = await resolver.resolveBestRelease(
+            mediaID: "imdb:movie:tt12042730",
+            selectionContext: nil,
+            rankingPreferences: RankingPreferences(preferHighSeedersOverHighestQuality: true)
+        )
+
+        XCTAssertEqual(resolution?.release.id, healthy1080p.id)
+        XCTAssertEqual(resolution?.fallbackReleases.map(\.id), [healthy1080p.id, large4K.id])
+    }
+
     func testResolverBuildsSeriesEpisodeQueryWhenPlayerHasOnlySeriesID() async throws {
         let recorder = QueryRecorder()
         let release = torrentRelease(id: "torrentio:got-s1e1", title: "Game of Thrones S01E01")
@@ -111,15 +156,22 @@ final class PlaybackAutoSourceResolverTests: XCTestCase {
         XCTAssertEqual(recordedQueries, ["tt0944947:1:1"])
     }
 
-    private func torrentRelease(id: String, title: String) -> TorrentRelease {
+    private func torrentRelease(
+        id: String,
+        title: String,
+        quality: ReleaseQuality = .ultraHD,
+        seeders: Int = 120,
+        sizeBytes: Int64? = nil
+    ) -> TorrentRelease {
         TorrentRelease(
             id: id,
             sourceId: "torrentio",
             sourceName: "Torrentio",
             title: title,
             magnetURI: "magnet:?xt=urn:btih:abcdef1234567890abcdef1234567890abcdef12",
-            quality: .ultraHD,
-            seeders: 120
+            quality: quality,
+            seeders: seeders,
+            sizeBytes: sizeBytes
         )
     }
 }
@@ -143,16 +195,49 @@ private struct RecordingTorrentProvider: TorrentSourceProviderProtocol {
     let isEnabled = true
     let defaultIsEnabled: Bool
     let expectedQuery: String
-    let release: TorrentRelease
+    let releases: [TorrentRelease]
     let recorder: QueryRecorder
+
+    init(
+        sourceId: String,
+        defaultIsEnabled: Bool,
+        expectedQuery: String,
+        release: TorrentRelease,
+        recorder: QueryRecorder
+    ) {
+        self.init(
+            sourceId: sourceId,
+            defaultIsEnabled: defaultIsEnabled,
+            expectedQuery: expectedQuery,
+            releases: [release],
+            recorder: recorder
+        )
+    }
+
+    init(
+        sourceId: String,
+        defaultIsEnabled: Bool,
+        expectedQuery: String,
+        releases: [TorrentRelease],
+        recorder: QueryRecorder
+    ) {
+        self.sourceId = sourceId
+        self.defaultIsEnabled = defaultIsEnabled
+        self.expectedQuery = expectedQuery
+        self.releases = releases
+        self.recorder = recorder
+    }
 
     func search(query: String, filters: TorrentSourceSearchFilters) async throws -> [TorrentRelease] {
         await recorder.record(query)
-        return query == expectedQuery ? [release] : []
+        return query == expectedQuery ? releases : []
     }
 
     func fetchDetails(releaseId: String) async throws -> TorrentReleaseDetails {
-        TorrentReleaseDetails(release: release, description: nil)
+        guard let release = releases.first(where: { $0.id == releaseId }) ?? releases.first else {
+            throw SourceProviderError.releaseNotFound(sourceId: sourceId, releaseId: releaseId)
+        }
+        return TorrentReleaseDetails(release: release, description: nil)
     }
 
     func validateSession() async throws -> SourceAuthenticationStatus {

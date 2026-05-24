@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 import Foundation
 @testable import CineFlowCore
@@ -16,7 +17,42 @@ final class ShellNavigationTests: XCTestCase {
         let state = MainShellState()
 
         XCTAssertEqual(state.selectedRoute, .home)
-        XCTAssertEqual(state.topControls.map { L10n.string($0.titleKey, language: .en) }, ["Updates", "Notifications", "Profile"])
+        XCTAssertEqual(state.topControls.map { L10n.string($0.titleKey, language: .en) }, ["Refresh", "Notifications", "Profile"])
+        XCTAssertEqual(state.topControls.first?.id, "refresh")
+    }
+
+    @MainActor
+    func testRefreshActionIncrementsRequestWithoutNavigatingToSettings() {
+        let coordinator = NavigationCoordinator()
+        let previousRefreshID = coordinator.refreshRequestID
+
+        coordinator.requestRefresh()
+
+        XCTAssertGreaterThan(coordinator.refreshRequestID, previousRefreshID)
+        XCTAssertEqual(coordinator.currentRoute, .home)
+        XCTAssertNotEqual(coordinator.currentRoute, .settingsSection(id: SettingsSectionID.updates.rawValue))
+    }
+
+    @MainActor
+    func testWindowZoomFrameResolverExpandsAndRestoresVisibleFrame() {
+        let visibleFrame = NSRect(x: 0, y: 25, width: 1440, height: 875)
+        let originalFrame = NSRect(x: 120, y: 120, width: 1180, height: 760)
+
+        let expanded = AppWindowZoomController.toggledFrame(
+            currentFrame: originalFrame,
+            visibleFrame: visibleFrame,
+            storedFrame: nil
+        )
+        XCTAssertEqual(expanded.frame, visibleFrame)
+        XCTAssertEqual(expanded.storedFrame, originalFrame)
+
+        let restored = AppWindowZoomController.toggledFrame(
+            currentFrame: visibleFrame,
+            visibleFrame: visibleFrame,
+            storedFrame: originalFrame
+        )
+        XCTAssertEqual(restored.frame, originalFrame)
+        XCTAssertNil(restored.storedFrame)
     }
 
     func testSidebarFooterUsesCompactVersionCopyInsteadOfRuntimeStatus() {

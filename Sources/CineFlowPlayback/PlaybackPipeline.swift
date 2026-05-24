@@ -14,6 +14,15 @@ public struct DefaultPlaybackStreamAvailabilityChecker: PlaybackStreamAvailabili
     public init() {}
 
     public func check(_ url: URL, timeoutSeconds: TimeInterval = 8) async -> PlaybackStreamAvailability {
+        if url.isStreamlyLocalTorrentStreamURL {
+            return await rangedAvailabilityCheck(
+                url,
+                timeoutSeconds: max(timeoutSeconds, 13),
+                rangeHeader: "bytes=0-4095",
+                requireBody: true
+            )
+        }
+
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return .available
         }
@@ -32,22 +41,43 @@ public struct DefaultPlaybackStreamAvailabilityChecker: PlaybackStreamAvailabili
             }
             return .unavailable(reason: "HTTP \(httpResponse.statusCode)")
         } catch {
-            var fallbackRequest = URLRequest(url: url)
-            fallbackRequest.httpMethod = "GET"
-            fallbackRequest.setValue("bytes=0-1", forHTTPHeaderField: "Range")
-            fallbackRequest.timeoutInterval = timeoutSeconds
+            return await rangedAvailabilityCheck(
+                url,
+                timeoutSeconds: timeoutSeconds,
+                rangeHeader: "bytes=0-1",
+                requireBody: false
+            )
+        }
+    }
 
-            do {
-                let (_, response) = try await URLSession.shared.data(for: fallbackRequest)
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    return .available
-                }
-                return (200..<400).contains(httpResponse.statusCode)
-                    ? .available
-                    : .unavailable(reason: "HTTP \(httpResponse.statusCode)")
-            } catch {
-                return .unavailable(reason: String(describing: error))
+    private func rangedAvailabilityCheck(
+        _ url: URL,
+        timeoutSeconds: TimeInterval,
+        rangeHeader: String,
+        requireBody: Bool
+    ) async -> PlaybackStreamAvailability {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(rangeHeader, forHTTPHeaderField: "Range")
+        request.timeoutInterval = timeoutSeconds
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return .available
             }
+            guard (200..<400).contains(httpResponse.statusCode) else {
+                let detail = String(data: data.prefix(160), encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let reason = detail.isEmpty ? "HTTP \(httpResponse.statusCode)" : "HTTP \(httpResponse.statusCode): \(detail)"
+                return .unavailable(reason: reason)
+            }
+            if requireBody && data.isEmpty {
+                return .unavailable(reason: "empty range response")
+            }
+            return .available
+        } catch {
+            return .unavailable(reason: String(describing: error))
         }
     }
 }
@@ -98,6 +128,7 @@ public struct PlaybackPipelineRequest: Sendable {
     public let fileSelectionTimeoutSeconds: TimeInterval
     public let streamURLTimeoutSeconds: TimeInterval
     public let availabilityTimeoutSeconds: TimeInterval
+    public let parallelSwarmProbeTimeoutSeconds: TimeInterval
     public let rankingPreferences: RankingPreferences
 
     public init(
@@ -108,10 +139,11 @@ public struct PlaybackPipelineRequest: Sendable {
         bandwidthLimits: TorrentBandwidthLimits = .unlimited,
         maxAutomaticFallbacks: Int = 2,
         torrentStartTimeoutSeconds: TimeInterval = 10,
-        metadataTimeoutSeconds: TimeInterval = 35,
+        metadataTimeoutSeconds: TimeInterval = 16,
         fileSelectionTimeoutSeconds: TimeInterval = 10,
-        streamURLTimeoutSeconds: TimeInterval = 5,
+        streamURLTimeoutSeconds: TimeInterval = 9,
         availabilityTimeoutSeconds: TimeInterval = 8,
+        parallelSwarmProbeTimeoutSeconds: TimeInterval = 7,
         rankingPreferences: RankingPreferences = RankingPreferences()
     ) {
         self.mediaID = mediaID
@@ -125,6 +157,7 @@ public struct PlaybackPipelineRequest: Sendable {
         self.fileSelectionTimeoutSeconds = max(1, fileSelectionTimeoutSeconds)
         self.streamURLTimeoutSeconds = max(1, streamURLTimeoutSeconds)
         self.availabilityTimeoutSeconds = max(1, availabilityTimeoutSeconds)
+        self.parallelSwarmProbeTimeoutSeconds = max(1, parallelSwarmProbeTimeoutSeconds)
         self.rankingPreferences = rankingPreferences
     }
 }
@@ -149,12 +182,15 @@ public struct PlaybackPipelineAttempt: Equatable, Sendable {
 }
 
 public enum PlaybackPipelineResult: Equatable, Sendable {
-    case ready(PlaybackMediaSource, TorrentSession, [PlaybackPipelineAttempt])
+    case ready(PlaybackMediaSource, TorrentSession?, [PlaybackPipelineAttempt])
     case needsMediaFileSelection(TorrentSession, TorrentRelease, [TorrentMediaFileOption], [PlaybackPipelineAttempt])
     case failed(CineFlowError, ReleaseFallbackSuggestion?, [PlaybackPipelineAttempt])
 }
 
 public actor PlaybackPipeline {
+    private static let swarmProbeBatchSize = 6
+    private static let swarmProbeSoloCandidateCount = 4
+
     private let torrentEngine: any TorrentEngineProtocol
     private let availabilityChecker: any PlaybackStreamAvailabilityChecking
     private let debugLogger: PlaybackDebugLogger
@@ -174,19 +210,61 @@ public actor PlaybackPipeline {
 
     public func resolve(_ request: PlaybackPipelineRequest) async -> PlaybackPipelineResult {
         let candidates = candidateReleases(for: request)
-        var attempts: [PlaybackPipelineAttempt] = []
+        let directCandidates = candidates.filter { $0.directStreamURL != nil }
+        let torrentCandidates = candidates.filter { $0.directStreamURL == nil }
+
+        var initialAttempts: [PlaybackPipelineAttempt] = []
+        if !directCandidates.isEmpty {
+            let directResult = await resolveSequentially(
+                request: request,
+                candidates: directCandidates,
+                initialAttempts: initialAttempts
+            )
+            switch directResult {
+            case .ready, .needsMediaFileSelection:
+                return directResult
+            case .failed(_, _, let attempts):
+                initialAttempts = attempts
+                guard !torrentCandidates.isEmpty else {
+                    return directResult
+                }
+            }
+        }
+
+        if torrentCandidates.count > 1 {
+            return await resolveWithParallelSwarmProbes(
+                request: request,
+                candidates: torrentCandidates,
+                initialAttempts: initialAttempts
+            )
+        }
+
+        return await resolveSequentially(
+            request: request,
+            candidates: torrentCandidates,
+            initialAttempts: initialAttempts
+        )
+    }
+
+    private func resolveSequentially(
+        request: PlaybackPipelineRequest,
+        candidates: [TorrentRelease],
+        initialAttempts: [PlaybackPipelineAttempt] = []
+    ) async -> PlaybackPipelineResult {
+        var attempts = initialAttempts
 
         for (index, release) in candidates.enumerated() {
             if Task.isCancelled {
                 return .failed(cancelledError(), nil, attempts)
             }
+            let attemptNumber = initialAttempts.count + index + 1
 
-            if index > 0 {
+            if index > 0 || !initialAttempts.isEmpty {
                 await log(
                     "fallback.retry",
                     request: request,
                     release: release,
-                    metadata: ["attempt": "\(index + 1)"]
+                    metadata: ["attempt": "\(attemptNumber)"]
                 )
             }
 
@@ -195,7 +273,7 @@ public actor PlaybackPipeline {
                 request: request,
                 release: release,
                 metadata: [
-                    "attempt": "\(index + 1)",
+                    "attempt": "\(attemptNumber)",
                     "seeders": "\(release.seeders)",
                     "quality": release.qualityLabel
                 ]
@@ -205,9 +283,12 @@ public actor PlaybackPipeline {
             do {
                 let resolved = try await resolveRelease(release, request: request)
                 if let mediaSelection = resolved.mediaSelection, mediaSelection.requiresManualConfirmation {
+                    guard let session = resolved.session else {
+                        throw PlaybackServiceError.unsupported(operation: "direct stream cannot require file selection")
+                    }
                     attempts.append(PlaybackPipelineAttempt(release: release, state: .ready))
                     return .needsMediaFileSelection(
-                        resolved.session,
+                        session,
                         release,
                         mediaSelection.manualOptions,
                         attempts
@@ -263,12 +344,307 @@ public actor PlaybackPipeline {
         return .failed(finalError, suggestion, attempts)
     }
 
+    private func resolveWithParallelSwarmProbes(
+        request: PlaybackPipelineRequest,
+        candidates: [TorrentRelease],
+        initialAttempts: [PlaybackPipelineAttempt] = []
+    ) async -> PlaybackPipelineResult {
+        let attemptOffset = initialAttempts.count
+        var attempts = initialAttempts
+
+        var batchStart = 0
+        while batchStart < candidates.count {
+            let batchSize = batchStart < Self.swarmProbeSoloCandidateCount ? 1 : Self.swarmProbeBatchSize
+            let batchEnd = min(batchStart + batchSize, candidates.count)
+            let batchCandidates = Array(candidates[batchStart..<batchEnd])
+            let probeResults = await probeSwarmCandidates(
+                batchCandidates,
+                request: request,
+                attemptOffset: attemptOffset,
+                baseIndex: batchStart
+            )
+            let successes = probeResults.compactMap { result -> SwarmProbeSuccess? in
+                guard case .success(let success) = result else { return nil }
+                return success
+            }
+            let probeFailures = Dictionary(
+                uniqueKeysWithValues: probeResults.compactMap { result -> (Int, PlaybackPipelineAttempt)? in
+                    guard case .failure(let failure) = result else { return nil }
+                    return (
+                        failure.index,
+                        PlaybackPipelineAttempt(
+                            release: failure.release,
+                            state: .failed(reason: failure.reason),
+                            error: failure.error
+                        )
+                    )
+                }
+            )
+            var appendedFailureIndexes = Set<Int>()
+            var reusableSuccesses = successes.sorted { lhs, rhs in lhs.index < rhs.index }
+
+            for success in successes.sorted(by: { lhs, rhs in lhs.index < rhs.index }) {
+                reusableSuccesses.removeAll { $0.session.id == success.session.id }
+                appendProbeFailures(
+                    before: success.index,
+                    probeFailures: probeFailures,
+                    appendedIndexes: &appendedFailureIndexes,
+                    attempts: &attempts
+                )
+
+                if Task.isCancelled {
+                    try? await torrentEngine.remove(sessionId: success.session.id, deleteFiles: false)
+                    await cleanupProbeSuccesses(reusableSuccesses)
+                    return .failed(cancelledError(), nil, attempts)
+                }
+
+                await log(
+                    "source.selected",
+                    request: request,
+                    release: success.release,
+                    metadata: [
+                        "attempt": "\(attemptOffset + success.index + 1)",
+                        "seeders": "\(success.release.seeders)",
+                        "quality": success.release.qualityLabel,
+                        "probe": "parallel"
+                    ]
+                )
+
+                let startDate = Date()
+                do {
+                    let resolved = try await resolvePreparedRelease(
+                        success.release,
+                        session: success.session,
+                        files: success.files,
+                        request: request
+                    )
+                    if let mediaSelection = resolved.mediaSelection, mediaSelection.requiresManualConfirmation {
+                        guard let session = resolved.session else {
+                            throw PlaybackServiceError.unsupported(operation: "direct stream cannot require file selection")
+                        }
+                        attempts.append(PlaybackPipelineAttempt(release: success.release, state: .ready))
+                        await cleanupProbeSuccesses(reusableSuccesses)
+                        return .needsMediaFileSelection(
+                            session,
+                            success.release,
+                            mediaSelection.manualOptions,
+                            attempts
+                        )
+                    }
+
+                    attempts.append(
+                        PlaybackPipelineAttempt(
+                            release: success.release,
+                            state: .ready,
+                            resolvedURL: resolved.source.url
+                        )
+                    )
+                    await log(
+                        "stream.ready",
+                        request: request,
+                        release: success.release,
+                        metadata: [
+                            "durationMs": "\(elapsedMilliseconds(since: startDate))",
+                            "streamURL": debugURL(resolved.source.url),
+                            "urlScheme": resolved.source.url.scheme ?? "file",
+                            "probe": "parallel"
+                        ]
+                    )
+                    await cleanupProbeSuccesses(reusableSuccesses)
+                    return .ready(resolved.source, resolved.session, attempts)
+                } catch {
+                    let cineFlowError = categorize(error)
+                    attempts.append(
+                        PlaybackPipelineAttempt(
+                            release: success.release,
+                            state: .failed(reason: String(describing: error)),
+                            error: cineFlowError
+                        )
+                    )
+                    await log(
+                        "stream.failed",
+                        request: request,
+                        release: success.release,
+                        metadata: [
+                            "durationMs": "\(elapsedMilliseconds(since: startDate))",
+                            "category": cineFlowError.category.rawValue,
+                            "reason": cineFlowError.technicalDescription,
+                            "probe": "parallel"
+                        ]
+                    )
+                    try? await torrentEngine.remove(sessionId: success.session.id, deleteFiles: false)
+                }
+            }
+
+            appendProbeFailures(
+                before: Int.max,
+                probeFailures: probeFailures,
+                appendedIndexes: &appendedFailureIndexes,
+                attempts: &attempts
+            )
+            await cleanupProbeSuccesses(reusableSuccesses)
+            batchStart = batchEnd
+        }
+
+        let finalError = attempts.last?.error ?? CineFlowError.defaultPlaybackPipelineFailure
+        let suggestion = fallbackSuggestion(
+            request: request,
+            failedRelease: attempts.last?.release ?? request.primaryRelease,
+            attemptedIDs: Set(attempts.map(\.release.id))
+        )
+        return .failed(finalError, suggestion, attempts)
+    }
+
+    private func cleanupProbeSuccesses(_ successes: [SwarmProbeSuccess]) async {
+        for success in successes {
+            try? await torrentEngine.remove(sessionId: success.session.id, deleteFiles: false)
+        }
+    }
+
+    private func appendProbeFailures(
+        before index: Int,
+        probeFailures: [Int: PlaybackPipelineAttempt],
+        appendedIndexes: inout Set<Int>,
+        attempts: inout [PlaybackPipelineAttempt]
+    ) {
+        for failureIndex in probeFailures.keys.sorted() where failureIndex < index && !appendedIndexes.contains(failureIndex) {
+            if let attempt = probeFailures[failureIndex] {
+                attempts.append(attempt)
+                appendedIndexes.insert(failureIndex)
+            }
+        }
+    }
+
+    private func probeSwarmCandidates(
+        _ candidates: [TorrentRelease],
+        request: PlaybackPipelineRequest,
+        attemptOffset: Int,
+        baseIndex: Int = 0
+    ) async -> [SwarmProbeResult] {
+        await withTaskGroup(of: SwarmProbeResult.self) { group in
+            for (index, release) in candidates.enumerated() {
+                let globalIndex = baseIndex + index
+                group.addTask {
+                    await self.probeSwarmCandidate(
+                        release,
+                        index: globalIndex,
+                        request: request,
+                        attemptOffset: attemptOffset
+                    )
+                }
+            }
+
+            var results: [SwarmProbeResult] = []
+            for await result in group {
+                results.append(result)
+            }
+            return results.sorted { lhs, rhs in lhs.index < rhs.index }
+        }
+    }
+
+    private func probeSwarmCandidate(
+        _ release: TorrentRelease,
+        index: Int,
+        request: PlaybackPipelineRequest,
+        attemptOffset: Int
+    ) async -> SwarmProbeResult {
+        let startDate = Date()
+        var startedSession: TorrentSession?
+        do {
+            try validate(release)
+            await log(
+                "swarm.probe.start",
+                request: request,
+                release: release,
+                metadata: [
+                    "attempt": "\(attemptOffset + index + 1)",
+                    "seeders": "\(release.seeders)",
+                    "quality": release.qualityLabel
+                ]
+            )
+
+            let engine = torrentEngine
+            let session = try await withTimeout(seconds: request.torrentStartTimeoutSeconds, operationName: "torrent.start") {
+                try await engine.startStreaming(release)
+            }
+            startedSession = session
+            await log(
+                "torrent.session.started",
+                request: request,
+                release: release,
+                metadata: ["sessionID": session.id, "probe": "parallel"]
+            )
+
+            try await withTimeout(seconds: request.fileSelectionTimeoutSeconds, operationName: "setBandwidthLimits") {
+                try await engine.setBandwidthLimits(sessionId: session.id, request.bandwidthLimits)
+            }
+
+            let files = try await withTimeout(seconds: request.metadataTimeoutSeconds, operationName: "torrent.metadata.fileList") {
+                try await engine.getFileList(sessionId: session.id)
+            }
+            let status = try? await withTimeout(seconds: min(2, request.metadataTimeoutSeconds), operationName: "torrent.status") {
+                try await engine.getStatus(sessionId: session.id)
+            }
+            await log(
+                "torrent.metadata.ready",
+                request: request,
+                release: release,
+                metadata: metadataPayload(sessionID: session.id, files: files, status: status)
+                    .merging(["probe": "parallel"]) { _, new in new }
+            )
+
+            return .success(
+                SwarmProbeSuccess(
+                    index: index,
+                    release: release,
+                    session: session,
+                    files: files,
+                    status: status
+                )
+            )
+        } catch {
+            if let startedSession {
+                try? await torrentEngine.remove(sessionId: startedSession.id, deleteFiles: false)
+                await log(
+                    "torrent.session.cleaned",
+                    request: request,
+                    release: release,
+                    metadata: ["sessionID": startedSession.id, "reason": "probe.failure"]
+                )
+            }
+            let cineFlowError = categorize(error)
+            await log(
+                "stream.failed",
+                request: request,
+                release: release,
+                metadata: [
+                    "durationMs": "\(elapsedMilliseconds(since: startDate))",
+                    "category": cineFlowError.category.rawValue,
+                    "reason": cineFlowError.technicalDescription,
+                    "probe": "parallel"
+                ]
+            )
+            return .failure(
+                SwarmProbeFailure(
+                    index: index,
+                    release: release,
+                    reason: String(describing: error),
+                    error: cineFlowError
+                )
+            )
+        }
+    }
+
     private func resolveRelease(
         _ release: TorrentRelease,
         request: PlaybackPipelineRequest
     ) async throws -> ResolvedPlaybackSource {
         try validate(release)
         await log("stream.resolve.start", request: request, release: release)
+
+        if let directStreamURL = release.directStreamURL {
+            return try await resolveDirectRelease(release, directStreamURL: directStreamURL, request: request)
+        }
 
         let engine = torrentEngine
         var startedSession: TorrentSession?
@@ -293,23 +669,87 @@ public actor PlaybackPipeline {
         let status = try? await withTimeout(seconds: min(2, request.metadataTimeoutSeconds), operationName: "torrent.status") {
             try await engine.getStatus(sessionId: session.id)
         }
-        var metadataPayload = ["sessionID": session.id, "fileCount": "\(files.count)"]
-        if let status {
-            metadataPayload["torrentState"] = String(describing: status.state)
-            metadataPayload["peersCount"] = "\(status.health.connectedPeers)"
-            metadataPayload["seedersCount"] = "\(status.health.seeders)"
-            metadataPayload["leechersCount"] = "\(status.health.leechers)"
-            metadataPayload["bufferedBytes"] = "\(status.progress.bufferedBytes)"
-            metadataPayload["downloadSpeedBytesPerSecond"] = "\(status.progress.downloadSpeedBytesPerSecond)"
-        } else {
-            metadataPayload["peersCount"] = "unknown"
-        }
         await log(
             "torrent.metadata.ready",
             request: request,
             release: release,
-            metadata: metadataPayload
+            metadata: metadataPayload(sessionID: session.id, files: files, status: status)
         )
+
+        return try await resolvePreparedRelease(
+            release,
+            session: session,
+            files: files,
+            request: request
+        )
+        } catch {
+            if let startedSession {
+                try? await engine.remove(sessionId: startedSession.id, deleteFiles: false)
+                await log(
+                    "torrent.session.cleaned",
+                    request: request,
+                    release: release,
+                    metadata: ["sessionID": startedSession.id, "reason": "resolve.failure"]
+                )
+            }
+            throw error
+        }
+    }
+
+    private func resolveDirectRelease(
+        _ release: TorrentRelease,
+        directStreamURL: URL,
+        request: PlaybackPipelineRequest
+    ) async throws -> ResolvedPlaybackSource {
+        guard directStreamURL.isCineFlowPlayableMediaURL else {
+            throw PlaybackServiceError.invalidMediaURL
+        }
+        await log(
+            "stream.url.ready",
+            request: request,
+            release: release,
+            metadata: [
+                "streamURL": debugURL(directStreamURL),
+                "urlScheme": directStreamURL.scheme ?? "file",
+                "source": "direct"
+            ]
+        )
+        await log(
+            "stream.availability.start",
+            request: request,
+            release: release,
+            metadata: ["urlScheme": directStreamURL.scheme ?? "file", "source": "direct"]
+        )
+        let availability = await availabilityChecker.check(
+            directStreamURL,
+            timeoutSeconds: request.availabilityTimeoutSeconds
+        )
+        switch availability {
+        case .available:
+            break
+        case .unavailable(let reason):
+            throw PlaybackServiceError.unsupported(operation: "direct stream availability check failed: \(reason)")
+        }
+
+        let source = PlaybackMediaSource(
+            id: request.selectionContext?.episodeID ?? request.mediaID,
+            title: request.selectionContext?.displayTitle ?? release.title,
+            url: directStreamURL,
+            release: release,
+            qualityLabel: release.qualityLabel,
+            sourceName: release.sourceName,
+            selectionContext: request.selectionContext
+        )
+        return ResolvedPlaybackSource(source: source, session: nil, mediaSelection: nil)
+    }
+
+    private func resolvePreparedRelease(
+        _ release: TorrentRelease,
+        session: TorrentSession,
+        files: [TorrentFile],
+        request: PlaybackPipelineRequest
+    ) async throws -> ResolvedPlaybackSource {
+        let engine = torrentEngine
         let selection = try await ensureMediaFileSelected(
             session: session,
             release: release,
@@ -335,35 +775,26 @@ public actor PlaybackPipeline {
             ]
         )
 
-        if streamingURL.isStreamlyLocalTorrentStreamURL {
-            await log(
-                "stream.availability.skipped",
-                request: request,
-                release: release,
-                metadata: [
-                    "sessionID": session.id,
-                    "reason": "local_torrent_stream",
-                    "streamURL": debugURL(streamingURL),
-                    "urlScheme": streamingURL.scheme ?? "file"
-                ]
-            )
-        } else {
-            await log(
-                "stream.availability.start",
-                request: request,
-                release: release,
-                metadata: ["urlScheme": streamingURL.scheme ?? "file"]
-            )
-            let availability = await availabilityChecker.check(
-                streamingURL,
-                timeoutSeconds: request.availabilityTimeoutSeconds
-            )
-            switch availability {
-            case .available:
-                break
-            case .unavailable(let reason):
-                throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
-            }
+        await log(
+            "stream.availability.start",
+            request: request,
+            release: release,
+            metadata: [
+                "sessionID": session.id,
+                "streamURL": debugURL(streamingURL),
+                "urlScheme": streamingURL.scheme ?? "file",
+                "source": streamingURL.isStreamlyLocalTorrentStreamURL ? "local_torrent_stream" : "remote_stream"
+            ]
+        )
+        let availability = await availabilityChecker.check(
+            streamingURL,
+            timeoutSeconds: request.availabilityTimeoutSeconds
+        )
+        switch availability {
+        case .available:
+            break
+        case .unavailable(let reason):
+            throw PlaybackServiceError.unsupported(operation: "stream availability check failed: \(reason)")
         }
 
         let source = PlaybackMediaSource(
@@ -376,18 +807,6 @@ public actor PlaybackPipeline {
             selectionContext: request.selectionContext
         )
         return ResolvedPlaybackSource(source: source, session: session, mediaSelection: selection)
-        } catch {
-            if let startedSession {
-                try? await engine.remove(sessionId: startedSession.id, deleteFiles: false)
-                await log(
-                    "torrent.session.cleaned",
-                    request: request,
-                    release: release,
-                    metadata: ["sessionID": startedSession.id, "reason": "resolve.failure"]
-                )
-            }
-            throw error
-        }
     }
 
     private func ensureMediaFileSelected(
@@ -481,9 +900,83 @@ public actor PlaybackPipeline {
     }
 
     private func validate(_ release: TorrentRelease) throws {
-        guard release.magnetURI != nil || release.torrentFileURL != nil else {
+        guard release.magnetURI != nil || release.torrentFileURL != nil || release.directStreamURL != nil else {
             throw TorrentEngineError.invalidTorrentFile
         }
+    }
+
+    private func validateSwarmAvailability(_ status: TorrentStatus) throws {
+        guard status.health.seeders == 0,
+              status.health.availability < 1,
+              status.progress.bufferedBytes == 0
+        else { return }
+
+        throw TorrentEngineError.unsupported(
+            operation: "swarm_unavailable:seeders=0,availability=\(String(format: "%.3f", status.health.availability)),peers=\(status.health.connectedPeers)"
+        )
+    }
+
+    private func waitForUsableSwarmStatus(
+        sessionID: String,
+        request: PlaybackPipelineRequest
+    ) async throws -> TorrentStatus {
+        let engine = torrentEngine
+        let deadline = Date().addingTimeInterval(request.parallelSwarmProbeTimeoutSeconds)
+        var lastStatus: TorrentStatus?
+        var lastError: Error?
+
+        while true {
+            do {
+                let status = try await withTimeout(seconds: min(2, request.parallelSwarmProbeTimeoutSeconds), operationName: "torrent.status") {
+                    try await engine.getStatus(sessionId: sessionID)
+                }
+                lastStatus = status
+                do {
+                    try validateSwarmAvailability(status)
+                    return status
+                } catch {
+                    lastError = error
+                }
+            } catch {
+                lastError = error
+            }
+
+            if Date() >= deadline {
+                if let lastError {
+                    throw lastError
+                }
+                if let lastStatus {
+                    try validateSwarmAvailability(lastStatus)
+                    return lastStatus
+                }
+                throw PlaybackPipelineTimeoutError(
+                    operationName: "torrent.swarmProbe",
+                    timeoutSeconds: request.parallelSwarmProbeTimeoutSeconds
+                )
+            }
+
+            try await Task.sleep(nanoseconds: 750_000_000)
+        }
+    }
+
+    private func metadataPayload(
+        sessionID: String,
+        files: [TorrentFile],
+        status: TorrentStatus?
+    ) -> [String: String] {
+        var payload = ["sessionID": sessionID, "fileCount": "\(files.count)"]
+        if let status {
+            payload["torrentState"] = String(describing: status.state)
+            payload["peersCount"] = "\(status.health.connectedPeers)"
+            payload["seedersCount"] = "\(status.health.seeders)"
+            payload["leechersCount"] = "\(status.health.leechers)"
+            payload["availability"] = String(format: "%.3f", status.health.availability)
+            payload["bufferedBytes"] = "\(status.progress.bufferedBytes)"
+            payload["downloadSpeedBytesPerSecond"] = "\(status.progress.downloadSpeedBytesPerSecond)"
+        } else {
+            payload["peersCount"] = "unknown"
+        }
+        return payload
     }
 
     private func candidateReleases(for request: PlaybackPipelineRequest) -> [TorrentRelease] {
@@ -493,10 +986,9 @@ public actor PlaybackPipeline {
             .map(\.release)
 
         var unique: [TorrentRelease] = [primary]
-        var seen = Set([primary.id])
-        for release in rankedFallbacks where !seen.contains(release.id) {
+        var seen = Set([ReleaseFallbackPlanner.playbackIdentity(for: primary)])
+        for release in rankedFallbacks where seen.insert(ReleaseFallbackPlanner.playbackIdentity(for: release)).inserted {
             unique.append(release)
-            seen.insert(release.id)
         }
 
         return Array(unique.prefix(1 + request.maxAutomaticFallbacks))
@@ -507,7 +999,15 @@ public actor PlaybackPipeline {
         failedRelease: TorrentRelease,
         attemptedIDs: Set<String>
     ) -> ReleaseFallbackSuggestion? {
-        let remaining = request.fallbackReleases.filter { !attemptedIDs.contains($0.id) }
+        let attemptedIdentities = Set(
+            request.fallbackReleases
+                .filter { attemptedIDs.contains($0.id) }
+                .map { ReleaseFallbackPlanner.playbackIdentity(for: $0) }
+        )
+        let remaining = request.fallbackReleases.filter {
+            !attemptedIDs.contains($0.id)
+                && !attemptedIdentities.contains(ReleaseFallbackPlanner.playbackIdentity(for: $0))
+        }
         guard !remaining.isEmpty else { return nil }
         return ReleaseFallbackPlanner.suggestion(
             for: failedRelease,
@@ -610,8 +1110,37 @@ public actor PlaybackPipeline {
 
 private struct ResolvedPlaybackSource: Sendable {
     let source: PlaybackMediaSource
-    let session: TorrentSession
+    let session: TorrentSession?
     let mediaSelection: TorrentMediaFileSelection?
+}
+
+private enum SwarmProbeResult: Sendable {
+    case success(SwarmProbeSuccess)
+    case failure(SwarmProbeFailure)
+
+    var index: Int {
+        switch self {
+        case .success(let success):
+            success.index
+        case .failure(let failure):
+            failure.index
+        }
+    }
+}
+
+private struct SwarmProbeSuccess: Sendable {
+    let index: Int
+    let release: TorrentRelease
+    let session: TorrentSession
+    let files: [TorrentFile]
+    let status: TorrentStatus?
+}
+
+private struct SwarmProbeFailure: Sendable {
+    let index: Int
+    let release: TorrentRelease
+    let reason: String
+    let error: CineFlowError
 }
 
 private struct PlaybackPipelineTimeoutError: Error, CustomStringConvertible, Sendable {

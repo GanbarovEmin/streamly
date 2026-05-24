@@ -187,18 +187,21 @@ public final class SettingsViewModel: ObservableObject {
     @Published public private(set) var updateStatus: UpdateStatus = .idle
     @Published public private(set) var tmdbCredentialSummary = TMDBCredentialSummary()
     @Published public private(set) var torrentioSettings = TorrentioSettings.defaults
+    @Published public private(set) var torrentioDebridTokenConfigured = false
     @Published public private(set) var lastUpdateCheckedAt: Date?
     @Published public private(set) var diagnosticsExport: String?
     @Published public private(set) var libraryImportPreview: LibraryImportPreview?
     @Published public private(set) var operationMessage: String?
     @Published public private(set) var isBusy = false
     @Published public var backupBeforeLibraryImport = true
+    @Published public var torrentioDebridTokenInput = ""
 
     public let about: SettingsAboutInfo
 
     private let environment: AppEnvironment
     private let sourceManager: SourceManager?
     private let torrentioSettingsStore: any TorrentioSettingsStoreProtocol
+    private let torrentioCredentialStore: any SourceCredentialStoreProtocol
     private let torrentioURLBuilder: TorrentioConfigurationURLBuilder
     private let fileManager: FileManager
     private let cacheBaseURL: URL
@@ -208,6 +211,7 @@ public final class SettingsViewModel: ObservableObject {
         environment: AppEnvironment,
         sourceManager: SourceManager? = nil,
         torrentioSettingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore(),
+        torrentioCredentialStore: (any SourceCredentialStoreProtocol)? = nil,
         torrentioURLBuilder: TorrentioConfigurationURLBuilder = TorrentioConfigurationURLBuilder(),
         fileManager: FileManager = .default,
         cacheBaseURL: URL? = nil,
@@ -216,6 +220,13 @@ public final class SettingsViewModel: ObservableObject {
         self.environment = environment
         self.sourceManager = sourceManager
         self.torrentioSettingsStore = torrentioSettingsStore
+        if let torrentioCredentialStore {
+            self.torrentioCredentialStore = torrentioCredentialStore
+        } else if let keychainService = environment.keychainService {
+            self.torrentioCredentialStore = KeychainSourceCredentialStore(keychainService: keychainService)
+        } else {
+            self.torrentioCredentialStore = InMemorySourceCredentialStore()
+        }
         self.torrentioURLBuilder = torrentioURLBuilder
         self.fileManager = fileManager
         self.cacheBaseURL = cacheBaseURL ?? Self.defaultCacheBaseURL(fileManager: fileManager)
@@ -223,7 +234,17 @@ public final class SettingsViewModel: ObservableObject {
     }
 
     public var torrentioConfiguredManifestURL: URL? {
-        try? torrentioURLBuilder.manifestURL(settings: torrentioSettings)
+        try? torrentioURLBuilder.manifestURL(
+            settings: torrentioSettings,
+            credentials: torrentioPreviewCredentials
+        )
+    }
+
+    private var torrentioPreviewCredentials: SourceCredentials? {
+        guard torrentioSettings.debridProvider != .none else { return nil }
+        let token = torrentioDebridTokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return nil }
+        return SourceCredentials(username: torrentioSettings.debridProvider.rawValue, token: token)
     }
 
     public var hiddenRecommendationItems: [HiddenRecommendationItem] {
@@ -239,6 +260,7 @@ public final class SettingsViewModel: ObservableObject {
         lastUpdateCheckedAt = await environment.updateService.lastCheckedAt
         await refreshTMDBCredentialSummary()
         await refreshTorrentioSettings()
+        await refreshTorrentioDebridCredentials()
         await refreshSources()
         await refreshCacheSummary()
         await refreshCachedSubtitles()
@@ -670,6 +692,11 @@ public final class SettingsViewModel: ObservableObject {
         await persistTorrentioSettings()
     }
 
+    public func updateTorrentioSortMode(_ sortMode: TorrentioSortMode) async {
+        torrentioSettings.sortMode = sortMode
+        await persistTorrentioSettings()
+    }
+
     public func updateTorrentioExcludedQuality(_ quality: TorrentioExcludedQuality, isExcluded: Bool) async {
         var qualities = torrentioSettings.excludedQualities
         if isExcluded {
@@ -686,8 +713,75 @@ public final class SettingsViewModel: ObservableObject {
         await persistTorrentioSettings()
     }
 
+    public func updateTorrentioSizeLimit(_ limit: String) async {
+        let trimmed = limit.trimmingCharacters(in: .whitespacesAndNewlines)
+        torrentioSettings.sizeLimit = trimmed.isEmpty ? nil : trimmed
+        await persistTorrentioSettings()
+    }
+
+    public func updateTorrentioDebridProvider(_ provider: TorrentioDebridProvider) async {
+        torrentioSettings.debridProvider = provider
+        torrentioDebridTokenInput = ""
+        if provider == .none {
+            try? await torrentioCredentialStore.deleteCredentials(for: "torrentio")
+            torrentioDebridTokenConfigured = false
+        } else {
+            torrentioDebridTokenConfigured = false
+        }
+        await persistTorrentioSettings()
+    }
+
+    public func updateTorrentioDebridOption(_ option: TorrentioDebridOption, isSelected: Bool) async {
+        var options = torrentioSettings.debridOptions
+        if isSelected {
+            options.append(option)
+        } else {
+            options.removeAll { $0 == option }
+        }
+        torrentioSettings.debridOptions = unique(options)
+        await persistTorrentioSettings()
+    }
+
+    public func saveTorrentioDebridToken() async {
+        guard torrentioSettings.debridProvider != .none else {
+            operationMessage = "Choose a debrid provider first."
+            return
+        }
+        let token = torrentioDebridTokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            operationMessage = "Debrid token is empty."
+            return
+        }
+
+        do {
+            _ = try await torrentioCredentialStore.save(
+                credentials: SourceCredentials(username: torrentioSettings.debridProvider.rawValue, token: token),
+                for: "torrentio"
+            )
+            torrentioDebridTokenConfigured = true
+            torrentioDebridTokenInput = ""
+            operationMessage = "Torrentio debrid token saved securely."
+        } catch {
+            await handleSettingsError(error, operation: "torrentio.debrid.save", category: .source, metadata: ["sourceID": "torrentio"])
+        }
+    }
+
+    public func clearTorrentioDebridToken() async {
+        do {
+            try await torrentioCredentialStore.deleteCredentials(for: "torrentio")
+            torrentioDebridTokenConfigured = false
+            torrentioDebridTokenInput = ""
+            operationMessage = "Torrentio debrid token cleared."
+        } catch {
+            await handleSettingsError(error, operation: "torrentio.debrid.clear", category: .source, metadata: ["sourceID": "torrentio"])
+        }
+    }
+
     public func resetTorrentioSettings() async {
         torrentioSettings = .defaults
+        torrentioDebridTokenInput = ""
+        torrentioDebridTokenConfigured = false
+        try? await torrentioCredentialStore.deleteCredentials(for: "torrentio")
         await persistTorrentioSettings()
     }
 
@@ -1118,6 +1212,22 @@ public final class SettingsViewModel: ObservableObject {
         } catch {
             torrentioSettings = .defaults
             await handleSettingsError(error, operation: "refreshTorrentioSettings", category: .source, metadata: ["sourceID": "torrentio"])
+        }
+    }
+
+    private func refreshTorrentioDebridCredentials() async {
+        guard torrentioSettings.debridProvider != .none else {
+            torrentioDebridTokenConfigured = false
+            torrentioDebridTokenInput = ""
+            return
+        }
+        do {
+            let credentials = try await torrentioCredentialStore.credentials(for: "torrentio")
+            torrentioDebridTokenConfigured = credentials?.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            torrentioDebridTokenInput = ""
+        } catch {
+            torrentioDebridTokenConfigured = false
+            await handleSettingsError(error, operation: "torrentio.debrid.refresh", category: .source, metadata: ["sourceID": "torrentio"])
         }
     }
 

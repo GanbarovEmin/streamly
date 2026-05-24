@@ -65,5 +65,9 @@ public struct AppWindowRootView: View {
                 minimumSize: CGSize(width: 1200, height: 760)
             )
         )
+        .overlay(alignment: .top) {
+            WindowZoomGestureArea()
+                .frame(height: 8)
+        }
     }
 }

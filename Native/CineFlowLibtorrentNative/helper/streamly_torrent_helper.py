@@ -31,11 +31,15 @@ PRIORITY_MAP = {
     2: 4,
     3: 7,
 }
-STREAM_CHUNK_BYTES = 1024 * 1024
-INITIAL_STREAM_BYTES = 16 * 1024 * 1024
+STREAM_CHUNK_BYTES = 256 * 1024
+STARTUP_PREBUFFER_BYTES = 1 * 1024 * 1024
+INITIAL_STREAM_BYTES = 2 * 1024 * 1024
 BACKGROUND_BUFFER_WINDOW_BYTES = 128 * 1024 * 1024
-STREAM_RANGE_TIMEOUT_SECONDS = 120.0
+METADATA_TIMEOUT_SECONDS = 8.0
+STARTUP_BUFFER_TIMEOUT_SECONDS = 12.0
+STREAM_RANGE_TIMEOUT_SECONDS = 18.0
 STREAMING_PIECE_PRIORITY = 7
+BACKGROUND_FILE_PRIORITY = 7
 HELPER_PID_FILE_PREFIX = ".streamly-helper-"
 HELPER_PID_FILE_SUFFIX = ".pid"
 
@@ -76,6 +80,7 @@ class TorrentEntry:
     streaming_url: str | None = None
     download_limit_bytes_per_second: int | None = None
     upload_limit_bytes_per_second: int | None = None
+    max_buffered_bytes: int = 0
     background_thread: threading.Thread | None = None
     background_stop: threading.Event | None = None
 
@@ -228,6 +233,8 @@ class TorrentRuntime:
                     or not self.file_start_is_materialized(entry, selected_index)
                 ):
                     buffered_bytes = 0
+            entry.max_buffered_bytes = max(entry.max_buffered_bytes, buffered_bytes)
+            buffered_bytes = entry.max_buffered_bytes
         return {
             "sessionId": handle_id,
             "state": self.state_name(entry, status),
@@ -284,11 +291,12 @@ class TorrentRuntime:
             self.stop_background_download(entry)
         storage = entry.handle.torrent_file().files()
         priorities = [0] * storage.num_files()
-        priorities[index] = 7
+        priorities[index] = BACKGROUND_FILE_PRIORITY
         entry.handle.prioritize_files(priorities)
         entry.handle.set_sequential_download(True)
         entry.selected_file_id = str(index)
         entry.sequential = True
+        entry.max_buffered_bytes = 0
         self.prioritize_file_start(entry, index)
         self.ensure_background_download(entry, index)
 
@@ -307,7 +315,7 @@ class TorrentRuntime:
         priorities = list(entry.handle.file_priorities())
         while len(priorities) <= index:
             priorities.append(0)
-        priorities[index] = PRIORITY_MAP.get(priority, 4)
+        priorities[index] = BACKGROUND_FILE_PRIORITY if entry.selected_file_id == str(index) and priority > 0 else PRIORITY_MAP.get(priority, 4)
         entry.handle.prioritize_files(priorities)
         if entry.selected_file_id == str(index) and priority > 0:
             entry.handle.set_sequential_download(True)
@@ -352,7 +360,7 @@ class TorrentRuntime:
             raise RuntimeError("session_not_found")
         return entry
 
-    def wait_for_metadata(self, entry: TorrentEntry, timeout: float = 30.0) -> None:
+    def wait_for_metadata(self, entry: TorrentEntry, timeout: float = METADATA_TIMEOUT_SECONDS) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
             if entry.handle.has_metadata():
@@ -367,21 +375,40 @@ class TorrentRuntime:
     def wait_for_file_bytes(self, entry: TorrentEntry, file_index: int, byte_count: int, timeout: float = STREAM_RANGE_TIMEOUT_SECONDS) -> None:
         self.wait_for_file_range(entry, file_index, 0, max(0, byte_count - 1), timeout)
 
+    def wait_for_startup_buffer(self, entry: TorrentEntry, file_index: int) -> None:
+        size = self.file_size(entry, file_index)
+        if size <= 0:
+            return
+        end = min(size - 1, STARTUP_PREBUFFER_BYTES - 1)
+        self.prioritize_file_start(entry, file_index)
+        self.wait_for_file_range(entry, file_index, 0, end, STARTUP_BUFFER_TIMEOUT_SECONDS)
+        path, _ = self.file_path(entry, file_index)
+        self.wait_for_materialized_media_header(path)
+
     def wait_for_file_range(self, entry: TorrentEntry, file_index: int, start: int, end: int, timeout: float = STREAM_RANGE_TIMEOUT_SECONDS) -> None:
         first_piece, last_piece = self.piece_range(entry, file_index, start, end)
+        deadline = time.time() + timeout
         last_progress_at = time.time()
         last_have_count = -1
         self.prioritize_piece_window(entry, first_piece, last_piece)
         while True:
+            if self.file_range_is_readable(entry, file_index, start, end):
+                self.flush_download_cache(entry)
+                return
             have_count = sum(1 for piece in range(first_piece, last_piece + 1) if entry.handle.have_piece(piece))
             if have_count == last_piece - first_piece + 1:
                 self.flush_download_cache(entry)
-                return
+                if self.file_range_is_readable(entry, file_index, start, end):
+                    return
             if have_count > last_have_count:
                 last_have_count = have_count
                 last_progress_at = time.time()
-            if time.time() - last_progress_at > timeout:
-                raise RuntimeError("buffer_timeout:no_progress")
+            now = time.time()
+            if now >= deadline:
+                timeout_name = "startup_buffer_timeout" if start == 0 else "buffer_timeout"
+                raise RuntimeError(f"{timeout_name}:{have_count}/{last_piece - first_piece + 1}")
+            if now - last_progress_at > timeout:
+                raise RuntimeError(f"buffer_timeout:no_progress:{have_count}/{last_piece - first_piece + 1}")
             entry.handle.set_sequential_download(True)
             self.prioritize_piece_window(entry, first_piece, last_piece)
             time.sleep(0.2)
@@ -389,8 +416,45 @@ class TorrentRuntime:
 
     def file_range_is_available(self, entry: TorrentEntry, file_index: int, start: int, end: int) -> bool:
         try:
+            if self.file_range_is_readable(entry, file_index, start, end):
+                return True
             first_piece, last_piece = self.piece_range(entry, file_index, start, end)
             return all(entry.handle.have_piece(piece) for piece in range(first_piece, last_piece + 1))
+        except Exception:
+            return False
+
+    def file_range_is_readable(self, entry: TorrentEntry, file_index: int | None, start: int, end: int) -> bool:
+        if not self.file_range_is_materialized(entry, file_index, start, end):
+            return False
+        if start == 0:
+            return self.file_start_is_materialized(entry, file_index)
+        return True
+
+    def file_range_is_materialized(self, entry: TorrentEntry, file_index: int | None, start: int, end: int) -> bool:
+        if file_index is None or end < start:
+            return False
+        try:
+            path, size = self.file_path(entry, file_index)
+            if size <= 0 or not path.exists() or start >= size:
+                return False
+            bounded_end = min(end, size - 1)
+            if hasattr(os, "SEEK_DATA") and hasattr(os, "SEEK_HOLE"):
+                fd = os.open(path, os.O_RDONLY)
+                try:
+                    data_start = os.lseek(fd, start, os.SEEK_DATA)
+                    if data_start > start:
+                        return False
+                    hole_start = os.lseek(fd, start, os.SEEK_HOLE)
+                    return hole_start > bounded_end
+                finally:
+                    os.close(fd)
+
+            with path.open("rb") as file:
+                file.seek(start)
+                data = file.read(min(64 * 1024, bounded_end - start + 1))
+            return bool(data) and any(byte != 0 for byte in data)
+        except OSError:
+            return False
         except Exception:
             return False
 
@@ -402,6 +466,13 @@ class TorrentRuntime:
         last_piece = first_piece + int((request.start + request.length - 1) // piece_length)
         return first_piece, max(first_piece, last_piece)
 
+    def piece_limited_chunk_end(self, entry: TorrentEntry, file_index: int, start: int, end: int) -> int:
+        torrent_info = entry.handle.torrent_file()
+        request = torrent_info.map_file(file_index, max(0, start), 1)
+        piece_length = max(1, int(torrent_info.piece_length()))
+        remaining_in_piece = max(1, piece_length - int(request.start))
+        return min(end, start + STREAM_CHUNK_BYTES - 1, start + remaining_in_piece - 1)
+
     def prioritize_piece_window(self, entry: TorrentEntry, first_piece: int, last_piece: int) -> None:
         try:
             entry.handle.resume()
@@ -410,7 +481,10 @@ class TorrentRuntime:
                     entry.handle.piece_priority(piece, STREAMING_PIECE_PRIORITY)
                 except Exception:
                     pass
-                entry.handle.set_piece_deadline(piece, offset * 50)
+                try:
+                    entry.handle.set_piece_deadline(piece, offset * 50, lt.deadline_flags_t.alert_when_available)
+                except TypeError:
+                    entry.handle.set_piece_deadline(piece, offset * 50)
         except Exception:
             return
 
@@ -425,10 +499,16 @@ class TorrentRuntime:
 
     def prioritize_file_start(self, entry: TorrentEntry, file_index: int) -> None:
         try:
-            storage = entry.handle.torrent_file().files()
+            torrent_info = entry.handle.torrent_file()
+            storage = torrent_info.files()
             size = int(storage.file_size(file_index))
             if size <= 0:
                 return
+            priorities = [0] * storage.num_files()
+            priorities[file_index] = BACKGROUND_FILE_PRIORITY
+            entry.handle.prioritize_files(priorities)
+            entry.handle.set_sequential_download(True)
+            entry.handle.resume()
             end = min(size - 1, INITIAL_STREAM_BYTES - 1)
             first_piece, last_piece = self.piece_range(entry, file_index, 0, end)
             self.prioritize_piece_window(entry, first_piece, last_piece)
@@ -442,7 +522,7 @@ class TorrentRuntime:
         entry.background_stop = stop_event
 
         def worker() -> None:
-            while not stop_event.wait(1.0):
+            while not stop_event.wait(0.5):
                 try:
                     if self.shutdown_requested.is_set():
                         return
@@ -453,7 +533,7 @@ class TorrentRuntime:
                         continue
 
                     priorities = [0] * entry.handle.torrent_file().files().num_files()
-                    priorities[file_index] = 7
+                    priorities[file_index] = BACKGROUND_FILE_PRIORITY
                     entry.handle.prioritize_files(priorities)
                     entry.handle.set_sequential_download(True)
                     entry.handle.resume()
@@ -463,8 +543,12 @@ class TorrentRuntime:
                     if downloaded >= size:
                         return
 
-                    window_start = min(contiguous, max(0, size - 1))
-                    window_end = min(size - 1, window_start + BACKGROUND_BUFFER_WINDOW_BYTES - 1)
+                    if contiguous < STARTUP_PREBUFFER_BYTES:
+                        window_start = 0
+                        window_end = min(size - 1, INITIAL_STREAM_BYTES - 1)
+                    else:
+                        window_start = min(contiguous, max(0, size - 1))
+                        window_end = min(size - 1, window_start + BACKGROUND_BUFFER_WINDOW_BYTES - 1)
                     first_piece, last_piece = self.piece_range(entry, file_index, window_start, window_end)
                     self.prioritize_piece_window(entry, first_piece, last_piece)
                 except Exception:
@@ -539,9 +623,44 @@ class TorrentRuntime:
                 piece_end = piece_start + piece_length
                 contribution = max(0, min(piece_end, file_global_end) - max(piece_start, file_global_start))
                 loaded += contribution
-            return min(size, int(loaded))
+            materialized = self.contiguous_materialized_file_progress(entry, file_index)
+            downloaded = self.file_progress(entry, file_index)
+            materialized_downloaded = min(downloaded, materialized) if materialized > 0 else 0
+            return min(size, max(int(loaded), materialized_downloaded))
         except Exception:
-            return self.file_progress(entry, file_index)
+            materialized = self.contiguous_materialized_file_progress(entry, file_index)
+            downloaded = self.file_progress(entry, file_index)
+            return min(downloaded, materialized) if materialized > 0 else downloaded
+
+    def contiguous_materialized_file_progress(self, entry: TorrentEntry, file_index: int | None) -> int:
+        if file_index is None:
+            return 0
+        try:
+            path, size = self.file_path(entry, file_index)
+            if size <= 0 or not path.exists():
+                return 0
+            if hasattr(os, "SEEK_DATA") and hasattr(os, "SEEK_HOLE"):
+                fd = os.open(path, os.O_RDONLY)
+                try:
+                    data_start = os.lseek(fd, 0, os.SEEK_DATA)
+                    if data_start > 0:
+                        return 0
+                    return min(size, int(os.lseek(fd, 0, os.SEEK_HOLE)))
+                finally:
+                    os.close(fd)
+
+            loaded = 0
+            with path.open("rb") as file:
+                while loaded < size:
+                    data = file.read(64 * 1024)
+                    if not data or not any(byte != 0 for byte in data):
+                        break
+                    loaded += len(data)
+            return min(size, loaded)
+        except OSError:
+            return 0
+        except Exception:
+            return 0
 
     def file_start_is_materialized(self, entry: TorrentEntry, file_index: int | None) -> bool:
         if file_index is None:
@@ -556,7 +675,7 @@ class TorrentRuntime:
         except Exception:
             return False
 
-    def wait_for_materialized_media_header(self, path: Path, timeout: float = 5.0) -> None:
+    def wait_for_materialized_media_header(self, path: Path, timeout: float = 1.5) -> None:
         deadline = time.time() + timeout
         while True:
             try:
@@ -656,8 +775,9 @@ class TorrentRuntime:
     ) -> None:
         length = max(0, end - start + 1)
         if not headers_only and length > 0:
-            first_chunk_end = min(end, start + STREAM_CHUNK_BYTES - 1)
-            self.wait_for_file_range(entry, file_index, start, first_chunk_end)
+            first_chunk_end = self.piece_limited_chunk_end(entry, file_index, start, end)
+            timeout = STARTUP_BUFFER_TIMEOUT_SECONDS if start == 0 else STREAM_RANGE_TIMEOUT_SECONDS
+            self.wait_for_file_range(entry, file_index, start, first_chunk_end, timeout)
             if start == 0:
                 self.wait_for_materialized_media_header(path)
 
@@ -673,8 +793,9 @@ class TorrentRuntime:
         with path.open("rb") as file:
             offset = start
             while offset <= end:
-                chunk_end = min(end, offset + STREAM_CHUNK_BYTES - 1)
-                self.wait_for_file_range(entry, file_index, offset, chunk_end)
+                chunk_end = self.piece_limited_chunk_end(entry, file_index, offset, end)
+                timeout = STARTUP_BUFFER_TIMEOUT_SECONDS if offset == 0 else STREAM_RANGE_TIMEOUT_SECONDS
+                self.wait_for_file_range(entry, file_index, offset, chunk_end, timeout)
                 if offset == 0:
                     self.wait_for_materialized_media_header(path)
                 file.seek(offset)

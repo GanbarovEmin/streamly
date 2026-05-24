@@ -21,7 +21,7 @@
 "command.playPause" = "Воспроизведение/пауза";
 "command.backCloseOverlay" = "Назад / закрыть слой";
 
-"topControl.updates" = "Обновления";
+"topControl.refresh" = "Обновить";
 "topControl.notifications" = "Уведомления";
 "topControl.profile" = "Профиль";
 "search.placeholder" = "Поиск фильмов, сериалов, релизов";

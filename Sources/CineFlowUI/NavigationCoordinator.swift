@@ -72,6 +72,10 @@ public final class NavigationCoordinator: ObservableObject {
         searchFocusRequestID += 1
     }
 
+    public func requestRefresh() {
+        refreshRequestID += 1
+    }
+
     public func togglePlayPause() {
         guard case .player = currentRoute else { return }
         isPlayerPaused.toggle()
@@ -90,7 +94,7 @@ public final class NavigationCoordinator: ObservableObject {
         case .a:
             selectSidebarRoute(.library)
         case .r:
-            refreshRequestID += 1
+            requestRefresh()
         }
     }
 }

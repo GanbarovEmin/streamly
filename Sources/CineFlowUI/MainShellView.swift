@@ -117,8 +117,8 @@ public struct MainShellView: View {
             if showsNotificationCenter {
                 Task { await notificationCenterViewModel.refresh() }
             }
-        case "updates":
-            navigationCoordinator.navigate(to: .settingsSection(id: SettingsSectionID.updates.rawValue))
+        case "refresh":
+            navigationCoordinator.requestRefresh()
         case "profile":
             navigationCoordinator.selectSidebarRoute(.settings)
         default:

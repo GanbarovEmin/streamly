@@ -25,7 +25,8 @@ struct PlaybackAutoSourceResolver {
 
     func resolveBestRelease(
         mediaID: String,
-        selectionContext: PlaybackSelectionContext?
+        selectionContext: PlaybackSelectionContext?,
+        rankingPreferences: RankingPreferences = RankingPreferences(preferHighSeedersOverHighestQuality: true)
     ) async -> PlaybackAutoSourceResolution? {
         do {
             try await ensureTorrentioEnabledForPlayback()
@@ -48,6 +49,7 @@ struct PlaybackAutoSourceResolver {
 
             let result = try await TorrentSearchAggregator(
                 sourceManager: sourceManager,
+                rankingEngine: ReleaseRankingEngine(preferences: rankingPreferences),
                 diagnosticsService: diagnosticsService
             ).search(query: query.id)
             let releases = result.rankedReleases.map(\.release)

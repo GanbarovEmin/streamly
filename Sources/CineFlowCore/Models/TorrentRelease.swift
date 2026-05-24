@@ -88,6 +88,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
     public let title: String
     public let magnetURI: String?
     public let torrentFileURL: URL?
+    public let directStreamURL: URL?
     public let quality: ReleaseQuality
     public let codec: VideoCodec
     public let hdr: HDRFormat
@@ -109,6 +110,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
         title: String,
         magnetURI: String? = nil,
         torrentFileURL: URL? = nil,
+        directStreamURL: URL? = nil,
         quality: ReleaseQuality,
         codec: VideoCodec = .unknown,
         hdr: HDRFormat = .unknown,
@@ -129,6 +131,7 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
         self.title = title
         self.magnetURI = magnetURI
         self.torrentFileURL = torrentFileURL
+        self.directStreamURL = directStreamURL
         self.quality = quality
         self.codec = codec
         self.hdr = hdr
@@ -165,6 +168,9 @@ public struct TorrentRelease: Identifiable, Codable, Equatable, Hashable, Sendab
     }
 
     public var releaseHealth: ReleaseHealth {
+        if directStreamURL != nil || availability.map({ $0 >= 1 }) == true {
+            return .excellent
+        }
         guard seeders >= 0 else { return .unknown }
         if seeders == 0 { return .noSeeders }
 

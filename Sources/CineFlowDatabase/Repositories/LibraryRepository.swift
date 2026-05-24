@@ -32,6 +32,12 @@ public final class DatabaseLibraryRepository: LibraryRepositoryProtocol {
         try await mediaRepository.item(id: id)
     }
 
+    public func refreshMediaItemMetadata(_ item: MediaItem) async throws {
+        try databaseManager.write { db in
+            try mediaRepository.upsert(item, in: db)
+        }
+    }
+
     public func libraryEntries() async throws -> [LibraryItem] {
         try databaseManager.read { db in
             try Row.fetchAll(

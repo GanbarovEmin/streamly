@@ -244,6 +244,7 @@ final class SettingsViewModelTests: XCTestCase {
 
     func testTorrentioSettingsLoadPersistAndExposeConfiguredManifestURL() async throws {
         let torrentioSettingsStore = InMemoryTorrentioSettingsStore()
+        let credentialStore = InMemorySourceCredentialStore()
         let viewModel = SettingsViewModel(
             environment: AppEnvironment(
                 metadataService: CoreMockMetadataService(),
@@ -255,32 +256,49 @@ final class SettingsViewModelTests: XCTestCase {
                 diagnosticsService: CoreMockDiagnosticsService(),
                 updateService: CoreMockUpdateService()
             ),
-            torrentioSettingsStore: torrentioSettingsStore
+            torrentioSettingsStore: torrentioSettingsStore,
+            torrentioCredentialStore: credentialStore
         )
 
         await viewModel.load()
 
-        XCTAssertEqual(viewModel.torrentioSettings.providers, [.rutor, .rutracker])
+        XCTAssertEqual(viewModel.torrentioSettings.providers, TorrentioProviderOption.allCases)
+        XCTAssertEqual(viewModel.torrentioSettings.sortMode, .seeders)
         XCTAssertEqual(viewModel.torrentioSettings.priorityLanguage, .russian)
         XCTAssertEqual(viewModel.torrentioSettings.excludedQualities, [.screener, .cam])
         XCTAssertEqual(
             viewModel.torrentioConfiguredManifestURL?.path,
-            "/providers=rutor,rutracker|language=russian|qualityfilter=scr,cam|limit=10/manifest.json"
+            "/sort=seeders|language=russian|qualityfilter=scr,cam|limit=50/manifest.json"
         )
 
         await viewModel.updateTorrentioProvider(.rutor, isSelected: false)
+        await viewModel.updateTorrentioSortMode(.qualitySize)
         await viewModel.updateTorrentioPriorityLanguage(.none)
         await viewModel.updateTorrentioExcludedQuality(.fourK, isExcluded: true)
         await viewModel.updateTorrentioResultLimit(25)
+        await viewModel.updateTorrentioSizeLimit("15GB")
+        await viewModel.updateTorrentioDebridProvider(.realDebrid)
+        viewModel.torrentioDebridTokenInput = "rd-token"
+        await viewModel.saveTorrentioDebridToken()
+        viewModel.torrentioDebridTokenInput = "rd-token"
 
         let saved = try await torrentioSettingsStore.settings()
-        XCTAssertEqual(saved.providers, [.rutracker])
+        let storedCredentials = try await credentialStore.credentials(for: "torrentio")
+        XCTAssertEqual(saved.providers, TorrentioProviderOption.allCases.filter { $0 != .rutor })
+        XCTAssertEqual(saved.sortMode, .qualitySize)
         XCTAssertEqual(saved.priorityLanguage, .none)
         XCTAssertEqual(saved.excludedQualities, [.screener, .cam, .fourK])
         XCTAssertEqual(saved.resultLimit, 25)
+        XCTAssertEqual(saved.sizeLimit, "15GB")
+        XCTAssertEqual(saved.debridProvider, .realDebrid)
+        XCTAssertEqual(storedCredentials?.token, "rd-token")
+        let expectedProviders = TorrentioProviderOption.allCases
+            .filter { $0 != .rutor }
+            .map(\.rawValue)
+            .joined(separator: ",")
         XCTAssertEqual(
             viewModel.torrentioConfiguredManifestURL?.path,
-            "/providers=rutracker|qualityfilter=scr,cam,4k|limit=25/manifest.json"
+            "/providers=\(expectedProviders)|sort=qualitysize|qualityfilter=scr,cam,4k|limit=25|sizefilter=15GB|debridoptions=nodownloadlinks|realdebrid=rd-token/manifest.json"
         )
     }
 

@@ -70,7 +70,8 @@ public struct ContentContainerView: View {
         ))
         _libraryViewModel = StateObject(wrappedValue: LibraryViewModel(
             repository: environment.libraryRepository,
-            personalStatsService: environment.personalStatsService
+            personalStatsService: environment.personalStatsService,
+            metadataService: environment.metadataService
         ))
         _moviesCatalogViewModel = StateObject(wrappedValue: MediaCatalogViewModel(
             kind: .movies,
@@ -565,6 +566,8 @@ private struct PlayerRouteView: View {
     @State private var activeFallbackReleases: [TorrentRelease] = []
     @State private var activeSelectionContext: PlaybackSelectionContext?
     @State private var attemptedPlaybackReleaseIDs = Set<String>()
+    @State private var attemptedPlaybackReleaseIdentities = Set<String>()
+    @State private var automaticRouteFallbackAttempts = 0
     @StateObject private var sessionCoordinator = PlaybackSessionCoordinator()
 
     var body: some View {
@@ -599,7 +602,7 @@ private struct PlayerRouteView: View {
                     actionTitle: suggestion?.nextBestRelease == nil ? t(.playerMissingSourceAction) : t(.playerFallbackTryNext),
                     action: {
                         if let release = suggestion?.nextBestRelease?.release {
-                            Task { await loadTorrentRelease(release) }
+                            Task { await loadTorrentRelease(release, persistReleaseSelectionOnReady: true) }
                         } else {
                             onExit()
                         }
@@ -624,7 +627,7 @@ private struct PlayerRouteView: View {
                         fallbackReleases: playableFallbackReleases(for: source.release),
                         fallbackPreferences: rankingPreferences,
                         fallbackHandler: { release in
-                            await loadTorrentRelease(release)
+                            await loadTorrentRelease(release, persistReleaseSelectionOnReady: true)
                         },
                         nextEpisodePrompt: nextEpisodePrompt
                     ),
@@ -683,6 +686,8 @@ private struct PlayerRouteView: View {
         activeSelectionContext = selectionContext
         activeFallbackReleases = fallbackReleases
         attemptedPlaybackReleaseIDs.removeAll()
+        attemptedPlaybackReleaseIdentities.removeAll()
+        automaticRouteFallbackAttempts = 0
 
         if let release {
             await loadTorrentRelease(release)
@@ -696,6 +701,12 @@ private struct PlayerRouteView: View {
             mediaID: mediaID,
             reason: "local.source.load"
         )
+        let appSettings = await environment.settingsRepository.appSettings
+        let subtitleLanguages = await environment.settingsRepository.subtitleLanguagePriority
+        rankingPreferences = appSettings.playback.rankingPreferences(
+            preferredSubtitleLanguages: subtitleLanguages,
+            supportsHDR: true
+        )
 
         if sourceID == nil,
            let sourceManager,
@@ -703,7 +714,11 @@ private struct PlayerRouteView: View {
             metadataService: environment.metadataService,
             sourceManager: sourceManager,
             diagnosticsService: environment.diagnosticsService
-           ).resolveBestRelease(mediaID: mediaID, selectionContext: selectionContext) {
+           ).resolveBestRelease(
+            mediaID: mediaID,
+            selectionContext: selectionContext,
+            rankingPreferences: rankingPreferences
+           ) {
             guard sessionCoordinator.isCurrent(requestID) else { return }
             activeSelectionContext = resolution.selectionContext
             activeFallbackReleases = resolution.fallbackReleases
@@ -774,23 +789,24 @@ private struct PlayerRouteView: View {
 
     private func playableFallbackReleases(for currentRelease: TorrentRelease?) -> [TorrentRelease] {
         effectiveFallbackReleases.filter { release in
-            release.id == currentRelease?.id || !attemptedPlaybackReleaseIDs.contains(release.id)
+            release.id == currentRelease?.id || !releaseWasAttempted(release)
         }
     }
 
     private func loadTorrentRelease(
         _ release: TorrentRelease,
         fallbackReleases overrideFallbackReleases: [TorrentRelease]? = nil,
-        selectionContext overrideSelectionContext: PlaybackSelectionContext? = nil
+        selectionContext overrideSelectionContext: PlaybackSelectionContext? = nil,
+        persistReleaseSelectionOnReady: Bool = false
     ) async {
         let baseFallbackReleases = overrideFallbackReleases ?? effectiveFallbackReleases
         let resolvedFallbackReleases = baseFallbackReleases.filter {
-            $0.id == release.id || !attemptedPlaybackReleaseIDs.contains($0.id)
+            $0.id == release.id || !releaseWasAttempted($0)
         }
         let resolvedSelectionContext = overrideSelectionContext ?? effectiveSelectionContext
         activeFallbackReleases = resolvedFallbackReleases
         activeSelectionContext = resolvedSelectionContext
-        attemptedPlaybackReleaseIDs.insert(release.id)
+        recordAttemptedPlaybackReleases([release])
 
         let requestID = await sessionCoordinator.beginNewSession(
             torrentEngine: environment.torrentEngine,
@@ -821,7 +837,8 @@ private struct PlayerRouteView: View {
                 primaryRelease: release,
                 fallbackReleases: resolvedFallbackReleases,
                 bandwidthLimits: appSettings.storage.torrentBandwidthLimits,
-                maxAutomaticFallbacks: 2,
+                maxAutomaticFallbacks: min(25, max(5, resolvedFallbackReleases.count - 1)),
+                parallelSwarmProbeTimeoutSeconds: 12,
                 rankingPreferences: preferences
             )
         )
@@ -830,16 +847,37 @@ private struct PlayerRouteView: View {
 
         switch result {
         case .ready(let source, let session, let attempts):
-            attemptedPlaybackReleaseIDs.formUnion(attempts.map(\.release.id))
-            sessionCoordinator.activate(session)
+            recordAttemptedPlaybackReleases(attempts.map(\.release))
+            if let session {
+                sessionCoordinator.activate(session)
+            }
+            if persistReleaseSelectionOnReady {
+                UserDefaultsReleaseSelectionStore().setReleaseID(source.release?.id ?? release.id, for: mediaID)
+            }
             state = .ready(source, session)
         case .needsMediaFileSelection(let session, let release, let options, let attempts):
-            attemptedPlaybackReleaseIDs.formUnion(attempts.map(\.release.id))
+            recordAttemptedPlaybackReleases(attempts.map(\.release))
             sessionCoordinator.activate(session)
             state = .chooseMediaFile(session, release, options)
         case .failed(let error, let suggestion, let attempts):
-            attemptedPlaybackReleaseIDs.formUnion(attempts.map(\.release.id))
-            state = .torrentFailed(error.userMessage, suggestion ?? fallbackSuggestion(for: release, reason: .failedToStart))
+            recordAttemptedPlaybackReleases(attempts.map(\.release))
+            let routeSuggestion = suggestion ?? fallbackSuggestion(for: release, reason: .failedToStart)
+            if let recovery = await automaticFallbackRecovery(
+                after: release,
+                suggestion: routeSuggestion,
+                fallbackReleases: resolvedFallbackReleases,
+                selectionContext: resolvedSelectionContext,
+                preferences: preferences
+            ) {
+                await loadTorrentRelease(
+                    recovery.release,
+                    fallbackReleases: recovery.fallbackReleases,
+                    selectionContext: recovery.selectionContext,
+                    persistReleaseSelectionOnReady: true
+                )
+                return
+            }
+            state = .torrentFailed(error.userMessage, routeSuggestion)
             await environment.diagnosticsService.log(
                 error,
                 operation: "player.route.torrent",
@@ -937,10 +975,107 @@ private struct PlayerRouteView: View {
     private func fallbackSuggestion(for release: TorrentRelease, reason: ReleaseFallbackReason) -> ReleaseFallbackSuggestion? {
         ReleaseFallbackPlanner.suggestion(
             for: release,
-            in: effectiveFallbackReleases,
+            in: effectiveFallbackReleases.filter { $0.id == release.id || !releaseWasAttempted($0) },
             reason: reason,
             preferences: rankingPreferences
         )
+    }
+
+    private struct AutomaticFallbackRecovery {
+        let release: TorrentRelease
+        let fallbackReleases: [TorrentRelease]
+        let selectionContext: PlaybackSelectionContext?
+    }
+
+    private func automaticFallbackRecovery(
+        after failedRelease: TorrentRelease,
+        suggestion: ReleaseFallbackSuggestion?,
+        fallbackReleases: [TorrentRelease],
+        selectionContext: PlaybackSelectionContext?,
+        preferences: RankingPreferences
+    ) async -> AutomaticFallbackRecovery? {
+        guard automaticRouteFallbackAttempts < 8 else { return nil }
+
+        if let nextRelease = suggestion?.nextBestRelease?.release,
+           !releaseWasAttempted(nextRelease) {
+            automaticRouteFallbackAttempts += 1
+            await logAutomaticFallback(from: failedRelease, to: nextRelease, source: "routeSuggestion")
+            return AutomaticFallbackRecovery(
+                release: nextRelease,
+                fallbackReleases: fallbackReleases,
+                selectionContext: selectionContext
+            )
+        }
+
+        guard let sourceManager,
+              let resolution = await PlaybackAutoSourceResolver(
+                metadataService: environment.metadataService,
+                sourceManager: sourceManager,
+                diagnosticsService: environment.diagnosticsService
+              ).resolveBestRelease(
+                mediaID: mediaID,
+                selectionContext: selectionContext,
+                rankingPreferences: preferences
+              )
+        else {
+            return nil
+        }
+
+        let recoveredFallbacks = uniquePlaybackReleases(
+            [resolution.release] + resolution.fallbackReleases + fallbackReleases
+        )
+        let rankedRecoveredFallbacks = ReleaseRankingEngine(preferences: preferences)
+            .rank(recoveredFallbacks)
+            .map(\.release)
+        guard let nextRelease = rankedRecoveredFallbacks.first(where: { !releaseWasAttempted($0) }) else {
+            return nil
+        }
+
+        automaticRouteFallbackAttempts += 1
+        let recoveredContext = resolution.selectionContext ?? selectionContext
+        await logAutomaticFallback(from: failedRelease, to: nextRelease, source: "freshAutoSource")
+        return AutomaticFallbackRecovery(
+            release: nextRelease,
+            fallbackReleases: recoveredFallbacks,
+            selectionContext: recoveredContext
+        )
+    }
+
+    private func uniquePlaybackReleases(_ releases: [TorrentRelease]) -> [TorrentRelease] {
+        var seen = Set<String>()
+        var result: [TorrentRelease] = []
+        for release in releases where seen.insert(ReleaseFallbackPlanner.playbackIdentity(for: release)).inserted {
+            result.append(release)
+        }
+        return result
+    }
+
+    private func logAutomaticFallback(from failedRelease: TorrentRelease, to nextRelease: TorrentRelease, source: String) async {
+        await environment.diagnosticsService.log(
+            level: .info,
+            subsystem: .playback,
+            message: "Trying another playback release automatically.",
+            metadata: [
+                "operation": "player.route.fallback.auto",
+                "mediaID": mediaID,
+                "releaseID": failedRelease.id,
+                "fallbackReleaseID": nextRelease.id,
+                "source": source,
+                "attempt": "\(automaticRouteFallbackAttempts + 1)"
+            ]
+        )
+    }
+
+    private func releaseWasAttempted(_ release: TorrentRelease) -> Bool {
+        attemptedPlaybackReleaseIDs.contains(release.id)
+            || attemptedPlaybackReleaseIdentities.contains(ReleaseFallbackPlanner.playbackIdentity(for: release))
+    }
+
+    private func recordAttemptedPlaybackReleases(_ releases: [TorrentRelease]) {
+        for release in releases {
+            attemptedPlaybackReleaseIDs.insert(release.id)
+            attemptedPlaybackReleaseIdentities.insert(ReleaseFallbackPlanner.playbackIdentity(for: release))
+        }
     }
 
     private func logFallbackFailure(release: TorrentRelease, reason: ReleaseFallbackReason, error: Error? = nil) async {

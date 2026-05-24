@@ -169,6 +169,29 @@ final class SeriesDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSavedSeriesKeepsPosterBackdropRatingAndGenreMetadata() async throws {
+        let repository = MovieDetailInMemoryLibraryRepository()
+        let viewModel = SeriesDetailViewModel(
+            seriesID: "imdb:series:tt0944947",
+            provider: PosterSeriesDetailProvider(),
+            libraryRepository: repository
+        )
+        await viewModel.load()
+
+        viewModel.addToLibrary()
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        let items = try await repository.items()
+        let item = try XCTUnwrap(items.first)
+        XCTAssertEqual(item.id, "imdb:series:tt0944947")
+        XCTAssertEqual(item.bestPosterURL?.absoluteString, "https://images.example.com/got-poster.jpg")
+        XCTAssertEqual(item.bestBackdropURL?.absoluteString, "https://images.example.com/got-backdrop.jpg")
+        XCTAssertEqual(item.releaseYear, 2011)
+        XCTAssertEqual(item.metadata?.genres, ["Drama", "Fantasy"])
+        XCTAssertEqual(item.metadata?.rating, 9.2)
+    }
+
+    @MainActor
     func testSeriesRatingPersistsThroughLibraryRepository() async throws {
         let repository = MovieDetailInMemoryLibraryRepository()
         let viewModel = SeriesDetailViewModel(
@@ -435,6 +458,33 @@ private struct SparseSeriesDetailProvider: SeriesDetailProviderProtocol {
                 genres: [],
                 overview: "",
                 backdropAccentIndex: 0
+            ),
+            seasons: [],
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progressByEpisodeID: [:],
+            lastWatchedEpisodeID: nil
+        )
+    }
+}
+
+private struct PosterSeriesDetailProvider: SeriesDetailProviderProtocol {
+    func seriesDetail(id: String) async throws -> SeriesDetailResponse? {
+        SeriesDetailResponse(
+            series: SeriesDetail(
+                id: id,
+                title: "Game of Thrones",
+                yearRange: "2011-2019",
+                seasonsCount: 8,
+                rating: "9.2",
+                genres: ["Drama", "Fantasy"],
+                overview: "Noble families fight for control.",
+                backdropAccentIndex: 1,
+                posterURL: URL(string: "https://images.example.com/got-poster.jpg"),
+                backdropURL: URL(string: "https://images.example.com/got-backdrop.jpg"),
+                logoURL: URL(string: "https://images.example.com/got-logo.png")
             ),
             seasons: [],
             releases: [],

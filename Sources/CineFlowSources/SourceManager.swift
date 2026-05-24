@@ -47,7 +47,8 @@ public actor SourceManager {
         SourceManager(
             providers: SourceProviderCatalog.providers(
                 featureFlags: featureFlags,
-                torrentioSettingsStore: torrentioSettingsStore
+                torrentioSettingsStore: torrentioSettingsStore,
+                credentialStore: credentialStore
             ).makeProviders(),
             settingsStore: settingsStore,
             credentialStore: credentialStore

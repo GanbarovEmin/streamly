@@ -44,14 +44,39 @@ public struct ReleaseFallbackSuggestion: Equatable, Sendable {
 }
 
 public enum ReleaseFallbackPlanner {
+    public static func playbackIdentity(for release: TorrentRelease) -> String {
+        if let magnetURI = release.magnetURI,
+           let components = URLComponents(string: magnetURI),
+           let exactTopic = components.queryItems?.first(where: { $0.name == "xt" })?.value {
+            let hash = exactTopic
+                .replacingOccurrences(of: "urn:btih:", with: "", options: [.caseInsensitive])
+                .lowercased()
+            if !hash.isEmpty {
+                return "btih:\(hash):file:\(release.preferredFileIndex.map(String.init) ?? "auto")"
+            }
+        }
+
+        if let torrentFileURL = release.torrentFileURL {
+            return "torrent-file:\(torrentFileURL.standardizedFileURL.path):file:\(release.preferredFileIndex.map(String.init) ?? "auto")"
+        }
+
+        if let directStreamURL = release.directStreamURL {
+            return "direct-stream:\(directStreamURL.absoluteString)"
+        }
+
+        return "release-id:\(release.id)"
+    }
+
     public static func suggestion(
         for selectedRelease: TorrentRelease,
         in releases: [TorrentRelease],
         reason: ReleaseFallbackReason,
         preferences: RankingPreferences = RankingPreferences()
     ) -> ReleaseFallbackSuggestion? {
+        var seenIdentities: Set<String> = [playbackIdentity(for: selectedRelease)]
         let candidates = ReleaseRankingEngine(preferences: preferences)
             .rank(releases.filter { $0.id != selectedRelease.id })
+            .filter { seenIdentities.insert(playbackIdentity(for: $0.release)).inserted }
 
         guard !candidates.isEmpty else { return nil }
         return ReleaseFallbackSuggestion(

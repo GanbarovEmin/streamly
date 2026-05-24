@@ -91,6 +91,20 @@ final class NativeLibtorrentBridgeTests: XCTestCase {
         }
     }
 
+    func testNativeBridgePreservesStreamingURLErrorReason() async throws {
+        let abi = FakeNativeLibtorrentABI(
+            streamingURLError: .unsupported(operation: "startup_buffer_timeout:0/1")
+        )
+        let bridge = NativeLibtorrentBridge(abi: abi)
+
+        do {
+            _ = try await bridge.streamingURL(handle: "native-handle")
+            XCTFail("Expected native streaming URL failure to preserve helper reason.")
+        } catch TorrentEngineError.unsupported(let operation) {
+            XCTAssertEqual(operation, "startup_buffer_timeout:0/1")
+        }
+    }
+
     func testNativeBridgeCanStartRealMagnetWhenIntegrationEnvironmentIsProvided() async throws {
         guard let magnet = ProcessInfo.processInfo.environment["CINEFLOW_NATIVE_LIBTORRENT_TEST_MAGNET"],
               !magnet.isEmpty else {
@@ -143,9 +157,11 @@ final class NativeLibtorrentBridgeTests: XCTestCase {
 private final class FakeNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Sendable {
     var calls: [String] = []
     private let selectFileError: TorrentEngineError?
+    private let streamingURLError: TorrentEngineError?
 
-    init(selectFileError: TorrentEngineError? = nil) {
+    init(selectFileError: TorrentEngineError? = nil, streamingURLError: TorrentEngineError? = nil) {
         self.selectFileError = selectFileError
+        self.streamingURLError = streamingURLError
     }
 
     func createEngine(storagePath: String) throws -> NativeLibtorrentEngineHandle {
@@ -245,6 +261,9 @@ private final class FakeNativeLibtorrentABI: NativeLibtorrentABI, @unchecked Sen
 
     func streamingURL(engine: NativeLibtorrentEngineHandle, handle: String) throws -> URL {
         calls.append("streamingURL:\(handle)")
+        if let streamingURLError {
+            throw streamingURLError
+        }
         return URL(string: "http://127.0.0.1:49152/stream/native-handle/0")!
     }
 }

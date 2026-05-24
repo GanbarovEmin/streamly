@@ -127,6 +127,8 @@ public actor NativeLibtorrentBridge: LibtorrentBridgeProtocol {
             return try abi.streamingURL(engine: try engineHandle(), handle: handle)
         } catch let error as TorrentEngineError where error == .libtorrentUnavailable {
             throw error
+        } catch let error as TorrentEngineError {
+            throw error
         } catch {
             throw TorrentEngineError.streamingURLUnavailable(sessionId: handle)
         }

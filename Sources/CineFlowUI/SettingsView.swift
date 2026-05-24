@@ -400,7 +400,7 @@ public struct SettingsView: View {
                 Text("Providers")
                     .font(CFTypography.caption)
                     .foregroundStyle(CFColors.textMuted)
-                HStack(spacing: CFSpacing.sm) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: CFSpacing.sm)], alignment: .leading, spacing: CFSpacing.sm) {
                     ForEach(TorrentioProviderOption.allCases) { provider in
                         Toggle(provider.displayName, isOn: Binding(
                             get: { viewModel.torrentioSettings.providers.contains(provider) },
@@ -409,6 +409,16 @@ public struct SettingsView: View {
                     }
                 }
             }
+
+            Picker("Sort", selection: Binding(
+                get: { viewModel.torrentioSettings.sortMode },
+                set: { value in Task { await viewModel.updateTorrentioSortMode(value) } }
+            )) {
+                ForEach(TorrentioSortMode.allCases) { sortMode in
+                    Text(sortMode.displayName).tag(sortMode)
+                }
+            }
+            .pickerStyle(.segmented)
 
             Picker("Priority language", selection: Binding(
                 get: { viewModel.torrentioSettings.priorityLanguage },
@@ -435,13 +445,60 @@ public struct SettingsView: View {
             }
 
             Stepper(
-                "Max results: \(viewModel.torrentioSettings.resultLimit ?? 10)",
+                "Max results: \(viewModel.torrentioSettings.resultLimit ?? 50)",
                 value: Binding(
-                    get: { viewModel.torrentioSettings.resultLimit ?? 10 },
+                    get: { viewModel.torrentioSettings.resultLimit ?? 50 },
                     set: { value in Task { await viewModel.updateTorrentioResultLimit(value) } }
                 ),
-                in: 1...50
+                in: 1...100
             )
+
+            TextField(
+                "Size limit, e.g. 15GB",
+                text: Binding(
+                    get: { viewModel.torrentioSettings.sizeLimit ?? "" },
+                    set: { value in Task { await viewModel.updateTorrentioSizeLimit(value) } }
+                )
+            )
+            .textFieldStyle(.roundedBorder)
+
+            VStack(alignment: .leading, spacing: CFSpacing.sm) {
+                Picker("Cached streams", selection: Binding(
+                    get: { viewModel.torrentioSettings.debridProvider },
+                    set: { value in Task { await viewModel.updateTorrentioDebridProvider(value) } }
+                )) {
+                    ForEach(TorrentioDebridProvider.allCases) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+
+                if viewModel.torrentioSettings.debridProvider != .none {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: CFSpacing.sm)], alignment: .leading, spacing: CFSpacing.sm) {
+                        ForEach(TorrentioDebridOption.allCases) { option in
+                            Toggle(option.displayName, isOn: Binding(
+                                get: { viewModel.torrentioSettings.debridOptions.contains(option) },
+                                set: { value in Task { await viewModel.updateTorrentioDebridOption(option, isSelected: value) } }
+                            ))
+                        }
+                    }
+
+                    HStack(spacing: CFSpacing.sm) {
+                        SecureField("Debrid API token", text: $viewModel.torrentioDebridTokenInput)
+                            .textFieldStyle(.roundedBorder)
+                        SecondaryButton("Save", systemImage: "key") {
+                            Task { await viewModel.saveTorrentioDebridToken() }
+                        }
+                        .disabled(viewModel.torrentioDebridTokenInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        SecondaryButton("Clear", systemImage: "trash") {
+                            Task { await viewModel.clearTorrentioDebridToken() }
+                        }
+                    }
+
+                    Text(viewModel.torrentioDebridTokenConfigured ? "Debrid token saved. Cached/direct streams will be preferred before P2P." : "No debrid token saved. Streamly will use live P2P swarms only.")
+                        .font(CFTypography.caption)
+                        .foregroundStyle(CFColors.textMuted)
+                }
+            }
 
             HStack(alignment: .center, spacing: CFSpacing.sm) {
                 Text(viewModel.torrentioConfiguredManifestURL == nil ? "Манифест источника недоступен" : "Манифест источника собран и готов для копирования")

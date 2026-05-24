@@ -2,17 +2,155 @@ import CineFlowCore
 import Foundation
 
 public enum TorrentioProviderOption: String, Codable, CaseIterable, Identifiable, Sendable {
+    case yts
+    case eztv
+    case rarbg
+    case one337x = "1337x"
+    case thePirateBay = "thepiratebay"
+    case kickassTorrents = "kickasstorrents"
+    case torrentGalaxy = "torrentgalaxy"
+    case magnetDL = "magnetdl"
+    case horribleSubs = "horriblesubs"
+    case nyaaSi = "nyaasi"
+    case tokyoTosho = "tokyotosho"
+    case aniDex = "anidex"
     case rutor
     case rutracker
+    case comando
+    case bluDV = "bludv"
+    case micoLeaoDublado = "micoleaodublado"
+    case torrent9
+    case ilCorSaRoNeRo = "ilcorsaronero"
+    case mejorTorrent = "mejortorrent"
+    case wolfmax4k
+    case cinecalidad
+    case bestTorrents = "besttorrents"
 
     public var id: String { rawValue }
 
     public var displayName: String {
         switch self {
+        case .yts:
+            "YTS"
+        case .eztv:
+            "EZTV"
+        case .rarbg:
+            "RARBG"
+        case .one337x:
+            "1337x"
+        case .thePirateBay:
+            "ThePirateBay"
+        case .kickassTorrents:
+            "KickassTorrents"
+        case .torrentGalaxy:
+            "TorrentGalaxy"
+        case .magnetDL:
+            "MagnetDL"
+        case .horribleSubs:
+            "HorribleSubs"
+        case .nyaaSi:
+            "NyaaSi"
+        case .tokyoTosho:
+            "TokyoTosho"
+        case .aniDex:
+            "AniDex"
         case .rutor:
             "Rutor"
         case .rutracker:
             "RuTracker"
+        case .comando:
+            "Comando"
+        case .bluDV:
+            "BluDV"
+        case .micoLeaoDublado:
+            "MicoLeaoDublado"
+        case .torrent9:
+            "Torrent9"
+        case .ilCorSaRoNeRo:
+            "ilCorSaRoNeRo"
+        case .mejorTorrent:
+            "MejorTorrent"
+        case .wolfmax4k:
+            "Wolfmax4k"
+        case .cinecalidad:
+            "Cinecalidad"
+        case .bestTorrents:
+            "BestTorrents"
+        }
+    }
+}
+
+public enum TorrentioSortMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case quality
+    case qualitySize = "qualitysize"
+    case seeders
+    case size
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .quality:
+            "Quality"
+        case .qualitySize:
+            "Quality + size"
+        case .seeders:
+            "Seeders"
+        case .size:
+            "Size"
+        }
+    }
+}
+
+public enum TorrentioDebridProvider: String, Codable, CaseIterable, Identifiable, Sendable {
+    case none
+    case realDebrid = "realdebrid"
+    case premiumize
+    case allDebrid = "alldebrid"
+    case debridLink = "debridlink"
+    case easyDebrid = "easydebrid"
+    case offcloud
+    case torBox = "torbox"
+    case putIO = "putio"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .none:
+            "None"
+        case .realDebrid:
+            "RealDebrid"
+        case .premiumize:
+            "Premiumize"
+        case .allDebrid:
+            "AllDebrid"
+        case .debridLink:
+            "DebridLink"
+        case .easyDebrid:
+            "EasyDebrid"
+        case .offcloud:
+            "Offcloud"
+        case .torBox:
+            "TorBox"
+        case .putIO:
+            "Put.io"
+        }
+    }
+}
+
+public enum TorrentioDebridOption: String, Codable, CaseIterable, Identifiable, Sendable {
+    case hideDownloadLinks = "nodownloadlinks"
+    case hideCatalog = "nocatalog"
+
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .hideDownloadLinks:
+            "Cached streams only"
+        case .hideCatalog:
+            "Hide debrid catalog"
         }
     }
 }
@@ -66,27 +204,88 @@ public enum TorrentioExcludedQuality: String, Codable, CaseIterable, Identifiabl
 
 public struct TorrentioSettings: Codable, Equatable, Sendable {
     public var providers: [TorrentioProviderOption]
+    public var sortMode: TorrentioSortMode
     public var priorityLanguage: TorrentioPriorityLanguage
     public var excludedQualities: [TorrentioExcludedQuality]
     public var resultLimit: Int?
+    public var sizeLimit: String?
+    public var debridProvider: TorrentioDebridProvider
+    public var debridOptions: [TorrentioDebridOption]
 
     public init(
-        providers: [TorrentioProviderOption] = [.rutor, .rutracker],
+        providers: [TorrentioProviderOption] = TorrentioProviderOption.allCases,
+        sortMode: TorrentioSortMode = .seeders,
         priorityLanguage: TorrentioPriorityLanguage = .russian,
         excludedQualities: [TorrentioExcludedQuality] = [.screener, .cam],
-        resultLimit: Int? = 10
+        resultLimit: Int? = 50,
+        sizeLimit: String? = nil,
+        debridProvider: TorrentioDebridProvider = .none,
+        debridOptions: [TorrentioDebridOption] = [.hideDownloadLinks]
     ) {
         self.providers = Self.unique(providers)
+        self.sortMode = sortMode
         self.priorityLanguage = priorityLanguage
         self.excludedQualities = Self.unique(excludedQualities)
         self.resultLimit = resultLimit.map { min(max($0, 1), 999) }
+        self.sizeLimit = Self.normalizedSizeLimit(sizeLimit)
+        self.debridProvider = debridProvider
+        self.debridOptions = Self.unique(debridOptions)
     }
 
     public static let defaults = TorrentioSettings()
 
+    private enum CodingKeys: String, CodingKey {
+        case providers
+        case sortMode
+        case priorityLanguage
+        case excludedQualities
+        case resultLimit
+        case sizeLimit
+        case debridProvider
+        case debridOptions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedProviders = try container.decodeIfPresent([TorrentioProviderOption].self, forKey: .providers)
+        let decodedResultLimit = try container.decodeIfPresent(Int.self, forKey: .resultLimit)
+        let hasModernSort = container.contains(.sortMode)
+        let looksLikeLegacyDefault = !hasModernSort
+            && decodedProviders == [.rutor, .rutracker]
+            && (decodedResultLimit == nil || decodedResultLimit == 10)
+
+        self.init(
+            providers: looksLikeLegacyDefault ? TorrentioProviderOption.allCases : (decodedProviders ?? TorrentioSettings.defaults.providers),
+            sortMode: try container.decodeIfPresent(TorrentioSortMode.self, forKey: .sortMode) ?? TorrentioSettings.defaults.sortMode,
+            priorityLanguage: try container.decodeIfPresent(TorrentioPriorityLanguage.self, forKey: .priorityLanguage) ?? TorrentioSettings.defaults.priorityLanguage,
+            excludedQualities: try container.decodeIfPresent([TorrentioExcludedQuality].self, forKey: .excludedQualities) ?? TorrentioSettings.defaults.excludedQualities,
+            resultLimit: looksLikeLegacyDefault ? TorrentioSettings.defaults.resultLimit : decodedResultLimit,
+            sizeLimit: try container.decodeIfPresent(String.self, forKey: .sizeLimit),
+            debridProvider: try container.decodeIfPresent(TorrentioDebridProvider.self, forKey: .debridProvider) ?? .none,
+            debridOptions: try container.decodeIfPresent([TorrentioDebridOption].self, forKey: .debridOptions) ?? TorrentioSettings.defaults.debridOptions
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(providers, forKey: .providers)
+        try container.encode(sortMode, forKey: .sortMode)
+        try container.encode(priorityLanguage, forKey: .priorityLanguage)
+        try container.encode(excludedQualities, forKey: .excludedQualities)
+        try container.encodeIfPresent(resultLimit, forKey: .resultLimit)
+        try container.encodeIfPresent(sizeLimit, forKey: .sizeLimit)
+        try container.encode(debridProvider, forKey: .debridProvider)
+        try container.encode(debridOptions, forKey: .debridOptions)
+    }
+
     private static func unique<Value: Hashable>(_ values: [Value]) -> [Value] {
         var seen = Set<Value>()
         return values.filter { seen.insert($0).inserted }
+    }
+
+    private static func normalizedSizeLimit(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -151,24 +350,36 @@ public struct TorrentioConfigurationURLBuilder: Sendable {
         return components.url ?? URL(fileURLWithPath: "/")
     }
 
-    public func manifestURL(settings: TorrentioSettings) throws -> URL {
-        try configuredURL(settings: settings, suffix: "manifest.json")
+    public func manifestURL(settings: TorrentioSettings, credentials: SourceCredentials? = nil) throws -> URL {
+        try configuredURL(settings: settings, credentials: credentials, suffix: "manifest.json")
     }
 
-    public func streamURL(type: TorrentioStreamType, id: String, settings: TorrentioSettings) throws -> URL {
+    public func streamURL(
+        type: TorrentioStreamType,
+        id: String,
+        settings: TorrentioSettings,
+        credentials: SourceCredentials? = nil
+    ) throws -> URL {
         guard id.range(of: #"^[A-Za-z0-9:_-]+$"#, options: .regularExpression) != nil else {
             throw SourceProviderError.providerUnavailable(sourceId: "torrentio", reason: "Unsupported Stremio stream id.")
         }
-        return try configuredURL(settings: settings, suffix: "stream/\(type.rawValue)/\(id).json")
+        return try configuredURL(settings: settings, credentials: credentials, suffix: "stream/\(type.rawValue)/\(id).json")
     }
 
-    public func configurationPath(settings: TorrentioSettings) -> String {
-        let providers = settings.providers.map(\.rawValue).joined(separator: ",")
+    public func configurationPath(settings: TorrentioSettings, credentials: SourceCredentials? = nil) -> String {
+        let selectedProviders = settings.providers
+        let providers = selectedProviders.count == TorrentioProviderOption.allCases.count
+            ? ""
+            : selectedProviders.map(\.rawValue).joined(separator: ",")
         let excludedQualities = settings.excludedQualities.map(\.rawValue).joined(separator: ",")
+        let debridToken = credentials?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
         var segments: [String] = []
 
         if !providers.isEmpty {
             segments.append("providers=\(providers)")
+        }
+        if settings.sortMode != .quality {
+            segments.append("sort=\(settings.sortMode.rawValue)")
         }
         if settings.priorityLanguage != .none {
             segments.append("language=\(settings.priorityLanguage.rawValue)")
@@ -179,13 +390,23 @@ public struct TorrentioConfigurationURLBuilder: Sendable {
         if let resultLimit = settings.resultLimit {
             segments.append("limit=\(min(max(resultLimit, 1), 999))")
         }
+        if let sizeLimit = settings.sizeLimit {
+            segments.append("sizefilter=\(sizeLimit)")
+        }
+        if settings.debridProvider != .none, let debridToken, !debridToken.isEmpty {
+            let debridOptions = settings.debridOptions.map(\.rawValue).joined(separator: ",")
+            if !debridOptions.isEmpty {
+                segments.append("debridoptions=\(debridOptions)")
+            }
+            segments.append("\(settings.debridProvider.rawValue)=\(debridToken)")
+        }
 
         return segments.joined(separator: "|")
     }
 
-    private func configuredURL(settings: TorrentioSettings, suffix: String) throws -> URL {
+    private func configuredURL(settings: TorrentioSettings, credentials: SourceCredentials?, suffix: String) throws -> URL {
         let root = baseURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let configurationPath = configurationPath(settings: settings)
+        let configurationPath = configurationPath(settings: settings, credentials: credentials)
         let urlString: String
         if configurationPath.isEmpty {
             urlString = "\(root)/\(suffix)"
@@ -242,6 +463,24 @@ public struct StremioStreamBehaviorHints: Decodable, Equatable, Sendable {
 }
 
 public struct TorrentioStreamMapper: Sendable {
+    private static let defaultPublicTrackers = [
+        "udp://tracker.opentrackr.org:1337/announce",
+        "udp://open.demonii.com:1337/announce",
+        "udp://wepzone.net:6969/announce",
+        "udp://vito-tracker.space:6969/announce",
+        "udp://vito-tracker.duckdns.org:6969/announce",
+        "udp://udp.tracker.projectk.org:23333/announce",
+        "udp://tracker.tryhackx.org:6969/announce",
+        "udp://tracker.t-1.org:6969/announce",
+        "udp://tracker.srv00.com:6969/announce",
+        "udp://tracker.qu.ax:6969/announce",
+        "udp://tracker.plx.im:6969/announce",
+        "udp://tracker.opentorrent.top:6969/announce",
+        "udp://tracker.gmi.gd:6969/announce",
+        "udp://tracker.ducks.party:1984/announce",
+        "udp://tracker.bittor.pw:1337/announce"
+    ]
+
     public init() {}
 
     public func releases(from response: StremioStreamResponse, mediaID: String) -> [TorrentRelease] {
@@ -249,9 +488,17 @@ public struct TorrentioStreamMapper: Sendable {
     }
 
     private func release(from stream: StremioStream, mediaID: String) -> TorrentRelease? {
-        guard let infoHash = stream.infoHash?.trimmedNonEmpty else { return nil }
+        let infoHash = stream.infoHash?.trimmedNonEmpty
+        let directStreamURL = stream.url?.isCineFlowPlayableMediaURL == true ? stream.url : nil
+        guard infoHash != nil || directStreamURL != nil else { return nil }
         let fileIndexIdentifier = stream.fileIdx.map(String.init) ?? "auto"
-        let title = stream.behaviorHints?.filename?.trimmedNonEmpty ?? stream.title?.firstLine ?? stream.name?.firstLine ?? infoHash
+        let title = stream.behaviorHints?.filename?.trimmedNonEmpty
+            ?? stream.title?.firstLine
+            ?? stream.name?.firstLine
+            ?? infoHash
+            ?? directStreamURL?.lastPathComponent.trimmedNonEmpty
+            ?? directStreamURL?.host
+            ?? "Torrentio Stream"
         let searchText = [
             stream.name,
             stream.title,
@@ -260,22 +507,34 @@ public struct TorrentioStreamMapper: Sendable {
         ]
         .compactMap { $0 }
         .joined(separator: " ")
+        let parsedSeeders = seeders(from: stream.title)
+        let releaseID: String
+        if let infoHash {
+            releaseID = "torrentio:\(mediaID):\(infoHash):\(fileIndexIdentifier)"
+        } else if let directStreamURL {
+            releaseID = "torrentio:\(mediaID):direct:\(stableIdentifier(for: directStreamURL.absoluteString))"
+        } else {
+            return nil
+        }
 
         return TorrentRelease(
-            id: "torrentio:\(mediaID):\(infoHash):\(fileIndexIdentifier)",
+            id: releaseID,
             sourceId: "torrentio",
-            sourceName: providerName(from: stream.title) ?? "Torrentio",
+            sourceName: providerName(from: stream.title) ?? (directStreamURL == nil ? "Torrentio" : "Torrentio Cached"),
             title: title,
-            magnetURI: magnetURI(infoHash: infoHash, displayName: title, sources: stream.sources ?? []),
+            magnetURI: infoHash.map { magnetURI(infoHash: $0, displayName: title, sources: stream.sources ?? []) },
+            directStreamURL: directStreamURL,
             quality: quality(from: searchText),
             codec: codec(from: searchText),
             hdr: hdr(from: searchText),
             audioLanguages: languageCodes(from: searchText),
             subtitleLanguages: languageCodes(from: searchText),
-            seeders: seeders(from: stream.title),
+            seeders: parsedSeeders,
             leechers: 0,
             sizeBytes: sizeBytes(from: stream.title),
-            preferredFileIndex: stream.fileIdx
+            preferredFileIndex: stream.fileIdx,
+            availability: directStreamURL == nil ? nil : 1,
+            rankScore: directStreamURL == nil ? nil : 100_000 + Double(parsedSeeders)
         )
     }
 
@@ -290,12 +549,11 @@ public struct TorrentioStreamMapper: Sendable {
                 guard source.hasPrefix("tracker:") else { return nil }
                 return String(source.dropFirst("tracker:".count)).trimmedNonEmpty
             }
-            .uniqued()
+            + Self.defaultPublicTrackers
 
-        for tracker in trackers {
-            if let encodedTracker = tracker.percentEncodedForMagnet {
-                parts.append("tr=\(encodedTracker)")
-            }
+        for tracker in trackers.uniqued() {
+            guard let encodedTracker = tracker.percentEncodedForMagnet else { continue }
+            parts.append("tr=\(encodedTracker)")
         }
 
         return parts.joined(separator: "&")
@@ -412,6 +670,15 @@ public struct TorrentioStreamMapper: Sendable {
             return String(text[range])
         }
     }
+
+    private func stableIdentifier(for value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
 }
 
 public struct TorrentioSourceProvider: TorrentSourceProviderProtocol {
@@ -422,17 +689,20 @@ public struct TorrentioSourceProvider: TorrentSourceProviderProtocol {
     public let defaultIsEnabled = true
 
     private let settingsStore: any TorrentioSettingsStoreProtocol
+    private let credentialStore: any SourceCredentialStoreProtocol
     private let session: URLSession
     private let urlBuilder: TorrentioConfigurationURLBuilder
     private let mapper: TorrentioStreamMapper
 
     public init(
         settingsStore: any TorrentioSettingsStoreProtocol = UserDefaultsTorrentioSettingsStore(),
+        credentialStore: any SourceCredentialStoreProtocol = KeychainSourceCredentialStore(),
         session: URLSession = .shared,
         urlBuilder: TorrentioConfigurationURLBuilder = TorrentioConfigurationURLBuilder(),
         mapper: TorrentioStreamMapper = TorrentioStreamMapper()
     ) {
         self.settingsStore = settingsStore
+        self.credentialStore = credentialStore
         self.session = session
         self.urlBuilder = urlBuilder
         self.mapper = mapper
@@ -445,8 +715,9 @@ public struct TorrentioSourceProvider: TorrentSourceProviderProtocol {
         }
 
         let settings = try await settingsStore.settings()
+        let credentials = try await credentials(for: settings)
         let streamType: TorrentioStreamType = stremioID.contains(":") ? .series : .movie
-        let url = try urlBuilder.streamURL(type: streamType, id: stremioID, settings: settings)
+        let url = try urlBuilder.streamURL(type: streamType, id: stremioID, settings: settings, credentials: credentials)
         let response: StremioStreamResponse = try await fetch(url)
         return mapper.releases(from: response, mediaID: stremioID).filtered(by: filters)
     }
@@ -457,9 +728,15 @@ public struct TorrentioSourceProvider: TorrentSourceProviderProtocol {
 
     public func validateSession() async throws -> SourceAuthenticationStatus {
         let settings = try await settingsStore.settings()
-        let manifestURL = try urlBuilder.manifestURL(settings: settings)
+        let credentials = try await credentials(for: settings)
+        let manifestURL = try urlBuilder.manifestURL(settings: settings, credentials: credentials)
         let _: StremioManifestResponse = try await fetch(manifestURL)
         return .notRequired
+    }
+
+    private func credentials(for settings: TorrentioSettings) async throws -> SourceCredentials? {
+        guard settings.debridProvider != .none else { return nil }
+        return try await credentialStore.credentials(for: sourceId)
     }
 
     private func fetch<Response: Decodable>(_ url: URL) async throws -> Response {

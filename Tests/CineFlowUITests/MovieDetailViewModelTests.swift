@@ -200,6 +200,29 @@ final class MovieDetailViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSavedMovieKeepsPosterBackdropRatingAndGenreMetadata() async throws {
+        let repository = MovieDetailInMemoryLibraryRepository()
+        let viewModel = MovieDetailViewModel(
+            mediaID: "imdb:movie:tt12042730",
+            provider: PosterMovieDetailProvider(),
+            libraryRepository: repository
+        )
+        await viewModel.load()
+
+        viewModel.addToLibrary()
+        try await Task.sleep(nanoseconds: 20_000_000)
+
+        let items = try await repository.items()
+        let item = try XCTUnwrap(items.first)
+        XCTAssertEqual(item.id, "imdb:movie:tt12042730")
+        XCTAssertEqual(item.bestPosterURL?.absoluteString, "https://images.example.com/project-hail-mary-poster.jpg")
+        XCTAssertEqual(item.bestBackdropURL?.absoluteString, "https://images.example.com/project-hail-mary-backdrop.jpg")
+        XCTAssertEqual(item.releaseYear, 2026)
+        XCTAssertEqual(item.metadata?.genres, ["Adventure", "Sci-Fi"])
+        XCTAssertEqual(item.metadata?.rating, 8.7)
+    }
+
+    @MainActor
     func testRemoveFromHistoryClearsMovieProgressWithoutRemovingLibraryState() async throws {
         let repository = MovieDetailInMemoryLibraryRepository()
         let viewModel = MovieDetailViewModel(
@@ -428,6 +451,33 @@ private struct SparseMovieDetailProvider: MovieDetailProviderProtocol {
                 imdbRating: "",
                 overview: "",
                 backdropAccentIndex: 0
+            ),
+            releases: [],
+            trailers: [],
+            similar: [],
+            cast: [],
+            progress: nil
+        )
+    }
+}
+
+private struct PosterMovieDetailProvider: MovieDetailProviderProtocol {
+    func movieDetail(id: String) async throws -> MovieDetailResponse? {
+        MovieDetailResponse(
+            movie: MovieDetail(
+                id: id,
+                title: "Project Hail Mary",
+                originalTitle: "Project Hail Mary",
+                year: 2026,
+                runtime: "2h 20m",
+                genres: ["Adventure", "Sci-Fi"],
+                tmdbRating: "8.4",
+                imdbRating: "8.7",
+                overview: "A lone astronaut must save Earth.",
+                backdropAccentIndex: 4,
+                posterURL: URL(string: "https://images.example.com/project-hail-mary-poster.jpg"),
+                backdropURL: URL(string: "https://images.example.com/project-hail-mary-backdrop.jpg"),
+                logoURL: URL(string: "https://images.example.com/project-hail-mary-logo.png")
             ),
             releases: [],
             trailers: [],

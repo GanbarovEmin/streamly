@@ -186,6 +186,7 @@ private extension TorrentRelease {
             title: title,
             magnetURI: magnetURI,
             torrentFileURL: torrentFileURL,
+            directStreamURL: directStreamURL,
             quality: quality,
             codec: codec,
             hdr: hdr,
@@ -196,6 +197,7 @@ private extension TorrentRelease {
             sizeBytes: sizeBytes,
             uploadDate: uploadDate,
             trustedUploader: trustedUploader,
+            preferredFileIndex: preferredFileIndex,
             availability: availability,
             rankScore: rankScore
         )

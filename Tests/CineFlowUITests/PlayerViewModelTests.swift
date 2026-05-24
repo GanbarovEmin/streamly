@@ -1045,7 +1045,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertTrue(presentation.message.contains("50%"))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Download speed:") && $0.contains("/s") }))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("GB") && $0.contains("(10%)") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer:") && $0.contains("4.0 MB") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer:") && $0.contains("1.0 MB") }))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Full file ETA:") }))
         XCTAssertFalse((presentation.primaryDetails + presentation.advancedDetails).contains(where: { $0.contains("unavailable") }))
 
@@ -1104,7 +1104,7 @@ final class PlayerViewModelTests: XCTestCase {
         XCTAssertEqual(presentation.message, "Waiting for playable pieces")
         XCTAssertFalse(presentation.message.contains("10%"))
         XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Loaded:") && $0.contains("(10%)") }))
-        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer: 0 B / 4.0 MB") }))
+        XCTAssertTrue(presentation.primaryDetails.contains(where: { $0.contains("Playable start buffer: 0 B / 1.0 MB") }))
     }
 
     @MainActor

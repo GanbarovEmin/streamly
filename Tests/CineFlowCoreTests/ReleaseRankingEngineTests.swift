@@ -164,6 +164,39 @@ final class ReleaseRankingEngineTests: XCTestCase {
         XCTAssertFalse(suggestion?.candidates.contains(where: { $0.release.id == selected.id }) == true)
     }
 
+    func testFallbackPlannerSkipsDuplicateMagnetHashCandidates() {
+        let selected = TorrentRelease(
+            id: "selected-0",
+            title: "Selected",
+            magnetURI: "magnet:?xt=urn:btih:duplicatehash",
+            quality: .ultraHD,
+            seeders: 700
+        )
+        let duplicate = TorrentRelease(
+            id: "selected-auto",
+            title: "Selected duplicate",
+            magnetURI: "magnet:?xt=urn:btih:duplicatehash",
+            quality: .ultraHD,
+            seeders: 700
+        )
+        let nextUnique = TorrentRelease(
+            id: "next-1080p",
+            title: "Next 1080p",
+            magnetURI: "magnet:?xt=urn:btih:nextuniquehash",
+            quality: .fullHD,
+            seeders: 120
+        )
+
+        let suggestion = ReleaseFallbackPlanner.suggestion(
+            for: selected,
+            in: [selected, duplicate, nextUnique],
+            reason: .failedToStart
+        )
+
+        XCTAssertEqual(suggestion?.nextBestRelease?.release.id, nextUnique.id)
+        XCTAssertEqual(suggestion?.candidates.map(\.release.id), [nextUnique.id])
+    }
+
     func testMediaFileSelectorPrefersExplicitIndexThenLargestRealVideo() {
         let releaseWithPreferredFile = release(
             id: "preferred",
@@ -252,6 +285,170 @@ final class ReleaseRankingEngineTests: XCTestCase {
         let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
 
         XCTAssertEqual(ranked.first?.release.id, "got-1080p-more-seeders")
+        XCTAssertTrue(ranked.last?.reasons.contains(.startupRiskPenalty) == true)
+    }
+
+    func testAutoPlaybackDemotesWeakLowSeeder4KBelowHealthy1080p() {
+        let releases = [
+            release(
+                id: "matrix-2160p-three-seeders",
+                quality: .ultraHD,
+                codec: .hevc,
+                hdr: .dolbyVision,
+                seeders: 3,
+                sizeGB: 13,
+                audioLanguages: ["ru", "en"],
+                subtitleLanguages: ["ru"]
+            ),
+            release(
+                id: "matrix-1080p-healthy",
+                quality: .fullHD,
+                codec: .h264,
+                hdr: .none,
+                seeders: 180,
+                sizeGB: 6.5,
+                audioLanguages: ["ru", "en"],
+                subtitleLanguages: ["ru"]
+            )
+        ]
+        let preferences = RankingPreferences(
+            preferredAudioLanguages: ["ru"],
+            preferredSubtitleLanguages: ["ru"],
+            supportsHDR: true,
+            preferredQuality: .auto,
+            preferHighSeedersOverHighestQuality: true
+        )
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.map(\.release.id), ["matrix-1080p-healthy", "matrix-2160p-three-seeders"])
+        XCTAssertTrue(ranked.last?.reasons.contains(.startupRiskPenalty) == true)
+    }
+
+    func testAutoPlaybackDemotesHuge4KBelowHealthy1080pEvenWithManyReportedSeeders() {
+        let releases = [
+            release(
+                id: "project-hail-mary-2160p-33gb",
+                quality: .ultraHD,
+                codec: .hevc,
+                hdr: .dolbyVision,
+                seeders: 734,
+                sizeGB: 33.6,
+                audioLanguages: ["ru", "en"],
+                subtitleLanguages: ["ru"]
+            ),
+            release(
+                id: "project-hail-mary-1080p-healthy",
+                quality: .fullHD,
+                codec: .h264,
+                hdr: .none,
+                seeders: 423,
+                sizeGB: 5.2,
+                audioLanguages: ["ru", "en"],
+                subtitleLanguages: ["ru"]
+            )
+        ]
+        let preferences = RankingPreferences(
+            preferredAudioLanguages: ["ru"],
+            preferredSubtitleLanguages: ["ru"],
+            supportsHDR: true,
+            preferredQuality: .auto,
+            preferHighSeedersOverHighestQuality: true
+        )
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.map(\.release.id), ["project-hail-mary-1080p-healthy", "project-hail-mary-2160p-33gb"])
+        XCTAssertTrue(ranked.last?.reasons.contains(.startupRiskPenalty) == true)
+    }
+
+    func testAutoPlaybackPrefersSmallHealthyProjectHailMary1080pForFastStartup() {
+        let releases = [
+            release(
+                id: "torrentio:tt12042730:1f5081fb83839dce4c025cb828d7c7558f03df47:0",
+                quality: .fullHD,
+                codec: .h264,
+                hdr: .none,
+                seeders: 1_906,
+                sizeGB: 9.1,
+                audioLanguages: ["en"],
+                subtitleLanguages: ["en"]
+            ),
+            release(
+                id: "torrentio:tt12042730:1e2879d1917ed68b00b4b2842c5de11f5b0a17fe:4",
+                quality: .ultraHD,
+                codec: .h265,
+                hdr: .none,
+                seeders: 1_680,
+                sizeGB: 10.69,
+                audioLanguages: ["en"],
+                subtitleLanguages: ["en"]
+            ),
+            release(
+                id: "torrentio:tt12042730:d6ecf1ac0937e505330aed486f4980be1df9bbb8:0",
+                quality: .fullHD,
+                codec: .hevc,
+                hdr: .none,
+                seeders: 1_621,
+                sizeGB: 2.72,
+                audioLanguages: ["en"],
+                subtitleLanguages: ["en"]
+            )
+        ]
+        let preferences = RankingPreferences(
+            preferredQuality: .auto,
+            preferHighSeedersOverHighestQuality: true
+        )
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.first?.release.id, "torrentio:tt12042730:d6ecf1ac0937e505330aed486f4980be1df9bbb8:0")
+        XCTAssertTrue(ranked.first?.reasons.contains(.startupRiskPenalty) == true)
+        XCTAssertGreaterThan(ranked[0].score, ranked[1].score)
+    }
+
+    func testAutoPlaybackKeepsVeryLarge4KBelowSmall1080pFallbacksEvenWithMoreReportedSeeders() {
+        let releases = [
+            release(
+                id: "torrentio:tt12042730:792b3577fed6dd95dbb03f5f0972e821230b834f:0",
+                quality: .ultraHD,
+                codec: .h265,
+                hdr: .none,
+                seeders: 2_484,
+                sizeGB: 23.33,
+                audioLanguages: ["en"],
+                subtitleLanguages: ["en"]
+            ),
+            release(
+                id: "torrentio:tt12042730:f72a9cf2b79020a2fa1c8fb6f646fd384905efe9:0",
+                quality: .fullHD,
+                codec: .h264,
+                hdr: .none,
+                seeders: 954,
+                sizeGB: 2.35,
+                audioLanguages: ["en"],
+                subtitleLanguages: ["en"]
+            ),
+            release(
+                id: "torrentio:tt12042730:e9b05de28f91baa6bac63278f9e42ed1828da3af:0",
+                quality: .fullHD,
+                codec: .hevc,
+                hdr: .none,
+                seeders: 850,
+                sizeGB: 2.98,
+                audioLanguages: ["en"],
+                subtitleLanguages: ["en"]
+            )
+        ]
+        let preferences = RankingPreferences(
+            preferredQuality: .auto,
+            preferHighSeedersOverHighestQuality: true
+        )
+
+        let ranked = ReleaseRankingEngine(preferences: preferences).rank(releases)
+
+        XCTAssertEqual(ranked.map(\.release.quality), [.fullHD, .fullHD, .ultraHD])
+        XCTAssertEqual(ranked.last?.release.id, "torrentio:tt12042730:792b3577fed6dd95dbb03f5f0972e821230b834f:0")
         XCTAssertTrue(ranked.last?.reasons.contains(.startupRiskPenalty) == true)
     }
 

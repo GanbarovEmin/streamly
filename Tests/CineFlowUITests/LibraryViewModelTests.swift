@@ -136,6 +136,44 @@ final class LibraryViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadRepairsPosterlessIMDbItemsWithoutChangingLibraryTimestamp() async throws {
+        let posterURL = try XCTUnwrap(URL(string: "https://images.example.com/project-hail-mary-poster.jpg"))
+        let backdropURL = try XCTUnwrap(URL(string: "https://images.example.com/project-hail-mary-backdrop.jpg"))
+        let posterlessMovie = Self.movie(id: "imdb:movie:tt12042730", title: "Project Hail Mary", year: 2026)
+        let originalAddedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let repository = InMemoryLibraryRepository(
+            items: [posterlessMovie],
+            libraryEntries: [
+                CineFlowCore.LibraryItem(mediaID: posterlessMovie.id, addedAt: originalAddedAt)
+            ]
+        )
+        let metadataService = LibraryMetadataRepairService(items: [
+            "tt12042730": Self.movie(
+                id: posterlessMovie.id,
+                title: "Project Hail Mary",
+                year: 2026,
+                genres: ["Adventure", "Sci-Fi"],
+                metadataRating: 8.7,
+                posterURL: posterURL,
+                backdropURL: backdropURL
+            )
+        ])
+        let viewModel = LibraryViewModel(repository: repository, metadataService: metadataService)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.items.first?.bestPosterURL, posterURL)
+        XCTAssertEqual(viewModel.items.first?.bestBackdropURL, backdropURL)
+        XCTAssertEqual(viewModel.items.first?.metadata?.genres, ["Adventure", "Sci-Fi"])
+        let entries = try await repository.libraryEntries()
+        XCTAssertEqual(entries.first?.addedAt, originalAddedAt)
+        let refreshedIDs = await repository.metadataRefreshIDs()
+        let requestedIMDbIDs = await metadataService.movieIMDbIDs()
+        XCTAssertEqual(refreshedIDs, [posterlessMovie.id])
+        XCTAssertEqual(requestedIMDbIDs, ["tt12042730"])
+    }
+
+    @MainActor
     func testAdvancedFiltersSavedViewsAndSortingKeepLargeLibraryManageable() async throws {
         let matrix = Self.movie(
             id: "tmdb:movie:603",
@@ -306,7 +344,9 @@ final class LibraryViewModelTests: XCTestCase {
         year: Int,
         genres: [String] = [],
         metadataRating: Double? = nil,
-        quality: ReleaseQuality = .unknown
+        quality: ReleaseQuality = .unknown,
+        posterURL: URL? = nil,
+        backdropURL: URL? = nil
     ) -> MediaItem {
         MediaItem(
             id: id,
@@ -314,7 +354,7 @@ final class LibraryViewModelTests: XCTestCase {
             kind: .movie,
             overview: "Fixture",
             releaseYear: year,
-            posterPath: nil,
+            posterPath: posterURL?.absoluteString,
             metadata: MediaMetadata(
                 tmdbId: abs(id.hashValue % 100_000),
                 title: title,
@@ -322,7 +362,9 @@ final class LibraryViewModelTests: XCTestCase {
                 overview: "Fixture",
                 year: year,
                 genres: genres,
-                rating: metadataRating
+                rating: metadataRating,
+                posterURL: posterURL,
+                backdropURL: backdropURL
             ),
             torrentReleases: quality == .unknown ? [] : [
                 TorrentRelease(id: "\(id):release", title: title, quality: quality, seeders: 40)
@@ -336,7 +378,9 @@ final class LibraryViewModelTests: XCTestCase {
         year: Int,
         genres: [String] = [],
         metadataRating: Double? = nil,
-        quality: ReleaseQuality = .unknown
+        quality: ReleaseQuality = .unknown,
+        posterURL: URL? = nil,
+        backdropURL: URL? = nil
     ) -> MediaItem {
         MediaItem(
             id: id,
@@ -344,7 +388,7 @@ final class LibraryViewModelTests: XCTestCase {
             kind: .series,
             overview: "Fixture",
             releaseYear: year,
-            posterPath: nil,
+            posterPath: posterURL?.absoluteString,
             metadata: MediaMetadata(
                 tmdbId: abs(id.hashValue % 100_000),
                 title: title,
@@ -352,7 +396,9 @@ final class LibraryViewModelTests: XCTestCase {
                 overview: "Fixture",
                 year: year,
                 genres: genres,
-                rating: metadataRating
+                rating: metadataRating,
+                posterURL: posterURL,
+                backdropURL: backdropURL
             ),
             torrentReleases: quality == .unknown ? [] : [
                 TorrentRelease(id: "\(id):release", title: title, quality: quality, seeders: 40)
@@ -368,6 +414,7 @@ private actor InMemoryLibraryRepository: LibraryRepositoryProtocol {
     private var watchedMediaItems: [WatchedMediaItem] = []
     private var ratedMediaItems: [RatedMediaItem] = []
     private var storedLists: [UserList] = []
+    private var refreshedMediaItemIDs: [String] = []
 
     init(
         items: [MediaItem],
@@ -391,6 +438,15 @@ private actor InMemoryLibraryRepository: LibraryRepositoryProtocol {
 
     func add(_ item: MediaItem) async throws {
         upsert(item)
+    }
+
+    func refreshMediaItemMetadata(_ item: MediaItem) async throws {
+        refreshedMediaItemIDs.append(item.id)
+        upsert(item)
+    }
+
+    func metadataRefreshIDs() -> [String] {
+        refreshedMediaItemIDs
     }
 
     func remove(mediaID: String) async throws {
@@ -536,5 +592,30 @@ private struct InMemoryPersonalStatsService: PersonalStatsServiceProtocol {
 
     func personalStats(referenceDate: Date) async throws -> PersonalWatchStats {
         stats
+    }
+}
+
+private actor LibraryMetadataRepairService: MetadataServiceProtocol {
+    private let items: [String: MediaItem]
+    private var requestedMovieIMDbIDs: [String] = []
+
+    init(items: [String: MediaItem]) {
+        self.items = items
+    }
+
+    func search(query: String) async throws -> [MediaItem] {
+        []
+    }
+
+    func movieDetail(imdbID: String) async throws -> Movie {
+        requestedMovieIMDbIDs.append(imdbID)
+        guard let item = items[imdbID], let metadata = item.metadata else {
+            throw CoreMetadataServiceError.unsupported
+        }
+        return Movie(id: item.id, mediaItem: item, metadata: metadata)
+    }
+
+    func movieIMDbIDs() -> [String] {
+        requestedMovieIMDbIDs
     }
 }

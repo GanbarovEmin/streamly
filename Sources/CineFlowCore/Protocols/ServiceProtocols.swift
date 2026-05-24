@@ -421,6 +421,7 @@ public extension SubtitleServiceProtocol {
 public protocol LibraryRepositoryProtocol {
     func items() async throws -> [MediaItem]
     func mediaItem(id: String) async throws -> MediaItem?
+    func refreshMediaItemMetadata(_ item: MediaItem) async throws
     func libraryEntries() async throws -> [LibraryItem]
     func add(_ item: MediaItem) async throws
     func remove(mediaID: String) async throws
@@ -449,6 +450,8 @@ public extension LibraryRepositoryProtocol {
     func mediaItem(id: String) async throws -> MediaItem? {
         try await items().first { $0.id == id }
     }
+
+    func refreshMediaItemMetadata(_ item: MediaItem) async throws {}
 
     func libraryEntries() async throws -> [LibraryItem] {
         []
