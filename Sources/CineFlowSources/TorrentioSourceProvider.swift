@@ -492,12 +492,17 @@ public struct TorrentioStreamMapper: Sendable {
         let directStreamURL = stream.url?.isCineFlowPlayableMediaURL == true ? stream.url : nil
         guard infoHash != nil || directStreamURL != nil else { return nil }
         let fileIndexIdentifier = stream.fileIdx.map(String.init) ?? "auto"
-        let title = stream.behaviorHints?.filename?.trimmedNonEmpty
-            ?? stream.title?.firstLine
-            ?? stream.name?.firstLine
+        let filenameTitle = stream.behaviorHints?.filename?.trimmedNonEmpty
+        let streamTitle = stream.title?.firstLine
+        let streamName = stream.name?.firstLine
+        let directFileName = directStreamURL?.lastPathComponent.trimmedNonEmpty
+        let directHost = directStreamURL?.host
+        let title = filenameTitle
+            ?? streamTitle
+            ?? streamName
             ?? infoHash
-            ?? directStreamURL?.lastPathComponent.trimmedNonEmpty
-            ?? directStreamURL?.host
+            ?? directFileName
+            ?? directHost
             ?? "Torrentio Stream"
         let searchText = [
             stream.name,
