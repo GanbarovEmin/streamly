@@ -1,7 +1,7 @@
 # Streamly Release
 
 This document covers public DMG distribution from a landing page or GitHub Releases.
-Auto-update specific signing and appcast details are also documented in `RELEASE_UPDATES.md`.
+Auto-update specific signing and appcast details are also documented in `release-updates.md`.
 
 ## Build Release App
 

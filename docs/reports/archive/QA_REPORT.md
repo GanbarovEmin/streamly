@@ -94,7 +94,7 @@ Observed results:
 | Releases | Release ranking | Covered by tests | `ReleaseRankingEngineTests`, `SearchViewModelTests`, `SeriesDetailViewModelTests`. |
 | Torrent | Torrent source unavailable | Fixed as release gate | Production packaging now fails without native libtorrent; development override is explicit. See `QA-002`. |
 | Playback | Local AVFoundation playback | Covered by tests | `PlaybackEngineTests` covers AVFoundation local state changes. |
-| Playback | Torrent -> mpv E2E | Fixed as release gate | Production packaging now fails while mpv bridge is placeholder; full E2E remains blocked until the runtime is supplied. See `QA-003` and `KNOWN_ISSUES.md`. |
+| Playback | Torrent -> mpv E2E | Fixed as release gate | Production packaging now fails while mpv bridge is placeholder; full E2E remains blocked until the runtime is supplied. See `QA-003` and `../../known-issues.md`. |
 | Subtitles | Local subtitle load and disable | Covered by tests | `PlayerViewModelTests` covers `.srt` / `.ass` local track handling. |
 | Subtitles | Online subtitle search/download in app | Fixed | Production app now wires `SubtitleService()`. Missing credentials produce the real unavailable-provider path. See `QA-004`. |
 | Audio | Audio track selection | Covered by tests | `PlayerViewModelTests` covers audio selection through mock playback service. |

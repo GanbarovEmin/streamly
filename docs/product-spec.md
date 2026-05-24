@@ -345,4 +345,4 @@ Landing page должен быть публичной точкой входа д
 
 Этот документ является главным продуктовым документом Streamly v1.0.
 
-Все последующие задачи по архитектуре, UI, persistence, torrent engine, playback, metadata, subtitles, diagnostics, release engineering и legal boundaries должны ссылаться на `PRODUCT_SPEC.md` как на источник продуктовых и технических решений v1.0.
+Все последующие задачи по архитектуре, UI, persistence, torrent engine, playback, metadata, subtitles, diagnostics, release engineering и legal boundaries должны ссылаться на `docs/product-spec.md` как на источник продуктовых и технических решений v1.0.

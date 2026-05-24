@@ -49,4 +49,4 @@ shasum -a 256 dist/dmg/Streamly-1.0.0.dmg
 
 ## Known Issues
 
-See `KNOWN_ISSUES.md`.
+See `docs/known-issues.md`.

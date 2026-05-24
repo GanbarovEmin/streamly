@@ -42,3 +42,12 @@ backups/
 *.dump.gz
 backup_status.json
 restore_drill/
+
+# Local backend/admin/analytics layer. Keep it out of the public macOS app
+# repository until it is published as a separate service.
+backend/
+/BACKUP_RESTORE.md
+/DEPLOYMENT.md
+/SCALING_ARCHITECTURE.md
+/SECURITY_BACKEND.md
+FULL_QA_REPORT_*.md

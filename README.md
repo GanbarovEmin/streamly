@@ -138,6 +138,7 @@ bash script/create_dmg.sh
 
 - [Website](https://ganbarovemin.github.io/streamly/)
 - [Latest Release](https://github.com/GanbarovEmin/streamly/releases/latest)
+- [Documentation](docs/README.md)
 - [Changelog](CHANGELOG.md)
 - [Installation](docs/installation.md)
 - [Updates](docs/updates.md)
